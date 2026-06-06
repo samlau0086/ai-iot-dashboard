@@ -181,6 +181,7 @@ export function Overview() {
   const [builderDeviceIds, setBuilderDeviceIds] = useState<string[]>([]);
   const isTemplateEditing = templateEditorMode !== null;
   const dashboardDropRef = useRef<HTMLDivElement | null>(null);
+  const isGridInteractingRef = useRef(false);
 
   const updateSnapGuide = (nextGuide: SnapGuide) => {
     setActiveSnapGuide((currentGuide) => (
@@ -304,9 +305,14 @@ export function Overview() {
   const tooltipColor = isDark ? '#cbd5e1' : '#334155';
 
   const onLayoutChange = (currentLayout: any[]) => {
+    if (isGridInteractingRef.current) return;
     if (layoutsEqual(currentLayout, overviewLayout)) return;
 
     updateOverviewLayout(currentLayout);
+  };
+
+  const handleDragStart = () => {
+    isGridInteractingRef.current = true;
   };
 
   const handleDrag = (_layout: any[], _oldItem: any, newItem: any, _placeholder: any) => {
@@ -373,7 +379,13 @@ export function Overview() {
       updateOverviewLayout(nextLayout);
     }
 
+    isGridInteractingRef.current = false;
     updateSnapGuide({});
+  };
+
+  const handleResizeStart = () => {
+    isGridInteractingRef.current = true;
+    clearSnapGuide();
   };
 
   const handleResizeStop = (layout: any[]) => {
@@ -381,6 +393,7 @@ export function Overview() {
       updateOverviewLayout(layout);
     }
 
+    isGridInteractingRef.current = false;
     updateSnapGuide({});
   };
 
@@ -1372,9 +1385,10 @@ export function Overview() {
           cols={{ lg: 12, md: 12, sm: 12, xs: 12, xxs: 12 }}
           rowHeight={GRID_ROW_HEIGHT}
           onLayoutChange={onLayoutChange}
+          onDragStart={handleDragStart}
           onDrag={handleDrag}
           onDragStop={handleDragStop}
-          onResizeStart={clearSnapGuide}
+          onResizeStart={handleResizeStart}
           onResizeStop={handleResizeStop}
           {...({ draggableHandle: ".draggable-handle" } as any)}
           isResizable={isTemplateEditing}
