@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { mockEnergyTrends, mockDevices, mockAlerts } from '../lib/mockData';
@@ -8,10 +8,65 @@ import { ResponsiveGridLayout } from 'react-grid-layout';
 import { ChartRenderer } from '../components/ChartRenderer';
 import { cn } from '../lib/utils';
 
+const GRID_COLS = 12;
+const GRID_ROW_HEIGHT = 80;
+const GRID_MARGIN: [number, number] = [16, 16];
+const SNAP_THRESHOLD = 1;
+
+type SnapGuide = {
+  x?: number;
+  y?: number;
+};
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
+
+const findNearestGuide = (value: number, guides: number[], min: number, max: number) => {
+  let nearest: number | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  guides.forEach((guide) => {
+    if (guide < min || guide > max) return;
+
+    const distance = Math.abs(value - guide);
+    if (distance > 0 && distance <= SNAP_THRESHOLD && distance < nearestDistance) {
+      nearest = guide;
+      nearestDistance = distance;
+    }
+  });
+
+  return nearest;
+};
+
 export function Overview() {
   const { language, theme, charts, overviewWidgets, overviewLayout, addOverviewWidget, removeOverviewWidget, updateOverviewLayout } = useAppStore();
   const t = translations[language];
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [activeSnapGuide, setActiveSnapGuide] = useState<SnapGuide>({});
+
+  const snapGuides = useMemo(() => {
+    return overviewLayout.reduce<Record<string, { x: number[]; y: number[] }>>((acc, item: any) => {
+      const otherItems = overviewLayout.filter((candidate: any) => candidate.i !== item.i);
+      const xGuides = new Set<number>([0]);
+      const yGuides = new Set<number>([0]);
+
+      otherItems.forEach((candidate: any) => {
+        const candidateRight = candidate.x + candidate.w;
+        const candidateBottom = candidate.y + candidate.h;
+
+        if (Number.isFinite(candidate.x)) xGuides.add(candidate.x);
+        if (Number.isFinite(candidateRight)) xGuides.add(candidateRight);
+        if (Number.isFinite(candidate.y)) yGuides.add(candidate.y);
+        if (Number.isFinite(candidateBottom)) yGuides.add(candidateBottom);
+      });
+
+      acc[item.i] = {
+        x: Array.from(xGuides),
+        y: Array.from(yGuides),
+      };
+
+      return acc;
+    }, {});
+  }, [overviewLayout]);
 
   const stats = [
     { name: t.overview.totalDevices, value: mockDevices.length.toString(), icon: Server },
@@ -28,6 +83,38 @@ export function Overview() {
 
   const onLayoutChange = (currentLayout: any[]) => {
     updateOverviewLayout(currentLayout);
+  };
+
+  const handleDrag = (_layout: any[], _oldItem: any, newItem: any, placeholder: any) => {
+    const guides = snapGuides[newItem.i];
+    if (!guides) {
+      setActiveSnapGuide({});
+      return;
+    }
+
+    const snapX = findNearestGuide(newItem.x, guides.x, 0, GRID_COLS - newItem.w);
+    const snapY = findNearestGuide(newItem.y, guides.y, 0, Number.POSITIVE_INFINITY);
+    const nextGuide: SnapGuide = {};
+
+    if (snapX !== undefined) {
+      const nextX = clamp(snapX, 0, GRID_COLS - newItem.w);
+      newItem.x = nextX;
+      placeholder.x = nextX;
+      nextGuide.x = nextX;
+    }
+
+    if (snapY !== undefined) {
+      const nextY = Math.max(0, snapY);
+      newItem.y = nextY;
+      placeholder.y = nextY;
+      nextGuide.y = nextY;
+    }
+
+    setActiveSnapGuide(nextGuide);
+  };
+
+  const clearSnapGuide = () => {
+    setActiveSnapGuide({});
   };
 
   const handleAddChart = (chart: any) => {
@@ -199,20 +286,38 @@ export function Overview() {
         </div>
       </div>
 
-      <div className="-mx-4 pb-[100px]">
+      <div className="-mx-4 pb-[100px] relative">
+        <div className="pointer-events-none absolute inset-x-4 top-0 z-20">
+          {activeSnapGuide.x !== undefined && (
+            <div
+              className="overview-snap-line overview-snap-line-vertical"
+              style={{ left: `calc(${activeSnapGuide.x} * (100% - ${(GRID_COLS - 1) * GRID_MARGIN[0]}px) / ${GRID_COLS} + ${activeSnapGuide.x * GRID_MARGIN[0]}px)` }}
+            />
+          )}
+          {activeSnapGuide.y !== undefined && (
+            <div
+              className="overview-snap-line overview-snap-line-horizontal"
+              style={{ top: `${activeSnapGuide.y * (GRID_ROW_HEIGHT + GRID_MARGIN[1])}px` }}
+            />
+          )}
+        </div>
         <ResponsiveGridLayout
           className="layout"
           layouts={{ lg: overviewLayout }}
           breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
           cols={{ lg: 12, md: 12, sm: 12, xs: 12, xxs: 12 }}
-          rowHeight={80}
+          rowHeight={GRID_ROW_HEIGHT}
           onLayoutChange={onLayoutChange}
+          onDrag={handleDrag}
+          onDragStop={clearSnapGuide}
+          onResizeStart={clearSnapGuide}
+          onResizeStop={clearSnapGuide}
           {...({ draggableHandle: ".draggable-handle" } as any)}
           isResizable={true}
           resizeHandles={['se']}
           preventCollision={true}
           compactType={null}
-          margin={[16, 16]}
+          margin={GRID_MARGIN}
         >
           {overviewWidgets.map(widget => {
             return (
