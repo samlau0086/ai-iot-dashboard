@@ -346,7 +346,7 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 
 ## 真实设备数据接入
 
-项目已提供前端真实设备数据接入入口，可通过 `.env.local` 配置 HTTP API 或 MQTT WebSocket Bridge。
+项目已提供前端真实设备数据接入入口。HTTP API 可以通过 `.env.local` 提供默认值，也可以在后台 **Settings -> Data Sources** 中按当前用户配置；MQTT WebSocket Bridge 应在后台 **Settings -> Data Sources** 中配置，不再依赖部署变量。
 
 ### HTTP API
 
@@ -386,10 +386,10 @@ VITE_DEVICE_API_POLL_MS=10000
 
 ### MQTT / WebSocket Bridge
 
-浏览器端当前不直接内置 MQTT TCP 客户端，而是通过 WebSocket 接收后端或 MQTT Bridge 转换后的 JSON 遥测消息：
+浏览器端当前不直接内置 MQTT TCP 客户端，也不自带 MQTT Broker，而是通过 WebSocket 接收后端或 MQTT Bridge 转换后的 JSON 遥测消息。请在后台 **Settings -> Data Sources** 中为当前用户配置 MQTT WebSocket URL，例如：
 
-```bash
-VITE_MQTT_WS_URL="wss://your-api.example.com/iot/telemetry"
+```text
+wss://your-api.example.com/iot/telemetry
 ```
 
 WebSocket 消息格式：

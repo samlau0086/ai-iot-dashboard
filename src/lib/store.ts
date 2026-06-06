@@ -28,6 +28,14 @@ export interface NotificationChannel {
   lastTestAt?: string;
 }
 
+export interface DeviceDataConnectionSettings {
+  apiUrl: string;
+  apiToken: string;
+  apiPollMs: number;
+  mqttWsUrl: string;
+  mqttEnabled: boolean;
+}
+
 export interface ChartConfig {
   id: string;
   title: string;
@@ -287,6 +295,8 @@ interface AppState {
   // Devices
   devices: Device[];
   deviceDataSourceStatus: 'mock' | 'api' | 'mqtt' | 'error';
+  deviceDataSettingsByUser: Record<string, DeviceDataConnectionSettings>;
+  updateDeviceDataSettings: (userId: string, settings: Partial<DeviceDataConnectionSettings>) => void;
   addDevice: (device: Device) => void;
   setDevices: (devices: Device[], source?: 'api' | 'mqtt' | 'mock') => void;
   applyTelemetryMessage: (message: DeviceTelemetryMessage, source?: 'mqtt' | 'api') => void;
@@ -377,6 +387,21 @@ export const useAppStore = create<AppState>()(
 
       devices: mockDevices,
       deviceDataSourceStatus: 'mock',
+      deviceDataSettingsByUser: {},
+      updateDeviceDataSettings: (userId, settings) => set((state) => ({
+        deviceDataSettingsByUser: {
+          ...state.deviceDataSettingsByUser,
+          [userId]: {
+            apiUrl: '',
+            apiToken: '',
+            apiPollMs: 10000,
+            mqttWsUrl: '',
+            mqttEnabled: false,
+            ...(state.deviceDataSettingsByUser[userId] || {}),
+            ...settings,
+          },
+        },
+      })),
       addDevice: (device) => set((state) => ({ devices: [...state.devices, device] })),
       setDevices: (devices, source = 'api') => set({ devices, deviceDataSourceStatus: source }),
       applyTelemetryMessage: (message, source = 'mqtt') => set((state) => ({
@@ -589,9 +614,16 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'app-storage',
-      version: 9,
+      version: 10,
       migrate: (persistedState: any, version) => {
         if (!persistedState) return persistedState;
+
+        if (version >= 9 && version < 10) {
+          return {
+            ...persistedState,
+            deviceDataSettingsByUser: persistedState.deviceDataSettingsByUser || {},
+          };
+        }
 
         if (version >= 8 && version < 9) {
           const upgradedUsers = (persistedState.users || []).map((user: User) => ({
@@ -610,10 +642,11 @@ export const useAppStore = create<AppState>()(
             users: upgradedUsers,
             currentUser: null,
             notificationChannels: persistedState.notificationChannels || legacyChannels,
+            deviceDataSettingsByUser: persistedState.deviceDataSettingsByUser || {},
           };
         }
 
-        if (version >= 9) return persistedState;
+        if (version >= 10) return persistedState;
 
         const builtInTemplateIds = new Set(DASHBOARD_TEMPLATES.map((template) => template.id));
         const customTemplates = (persistedState.dashboardTemplates || []).filter((template: DashboardTemplate) => !builtInTemplateIds.has(template.id));
@@ -646,6 +679,7 @@ export const useAppStore = create<AppState>()(
           })),
           currentUser: null,
           notificationChannels: persistedState.notificationChannels || [],
+          deviceDataSettingsByUser: persistedState.deviceDataSettingsByUser || {},
         };
       },
     }

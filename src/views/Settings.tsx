@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Bell, CheckCircle2, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Bell, CheckCircle2, Database, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
 import { useAppStore, type NotificationChannel } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
@@ -24,9 +24,21 @@ export function Settings() {
     approveUser,
     rejectUser,
     currentUser,
+    deviceDataSettingsByUser,
+    updateDeviceDataSettings,
   } = useAppStore();
   const t = translations[language];
-  const [activeTab, setActiveTab] = useState<'general' | 'notifications' | 'users'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'data' | 'notifications' | 'users'>('general');
+  const currentDataSettings = currentUser ? deviceDataSettingsByUser[currentUser.id] : undefined;
+  const [dataDraft, setDataDraft] = useState({
+    apiUrl: '',
+    apiToken: '',
+    apiPollMs: 10000,
+    mqttWsUrl: '',
+    mqttEnabled: false,
+  });
+  const [dataSaveMessage, setDataSaveMessage] = useState('');
+  const [mqttTestMessage, setMqttTestMessage] = useState('');
   const [channelDraft, setChannelDraft] = useState({
     type: 'email' as NotificationChannel['type'],
     name: '',
@@ -42,9 +54,22 @@ export function Settings() {
 
   const tabs = [
     { id: 'general', name: t.settings.tabs.general, icon: SettingsIcon },
+    { id: 'data', name: 'Data Sources', icon: Database },
     { id: 'notifications', name: t.settings.tabs.notifications, icon: Bell },
     { id: 'users', name: t.settings.tabs.users, icon: Users },
   ];
+
+  useEffect(() => {
+    setDataDraft({
+      apiUrl: currentDataSettings?.apiUrl || '',
+      apiToken: currentDataSettings?.apiToken || '',
+      apiPollMs: currentDataSettings?.apiPollMs || 10000,
+      mqttWsUrl: currentDataSettings?.mqttWsUrl || '',
+      mqttEnabled: currentDataSettings?.mqttEnabled || false,
+    });
+    setDataSaveMessage('');
+    setMqttTestMessage('');
+  }, [currentDataSettings, currentUser?.id]);
 
   const handleAddChannel = () => {
     if (!channelDraft.target.trim()) return;
@@ -76,6 +101,46 @@ export function Settings() {
     setUserDraft({ name: '', email: '', password: '', role: 'Operator', siteId: 'factory-a' });
   };
 
+  const handleSaveDataSettings = () => {
+    if (!currentUser) return;
+
+    updateDeviceDataSettings(currentUser.id, {
+      ...dataDraft,
+      apiPollMs: Number.isFinite(Number(dataDraft.apiPollMs)) ? Number(dataDraft.apiPollMs) : 10000,
+    });
+    setDataSaveMessage('Data source settings saved for current user.');
+  };
+
+  const handleTestMqtt = () => {
+    setMqttTestMessage('');
+    if (!dataDraft.mqttWsUrl.trim()) {
+      setMqttTestMessage('MQTT WebSocket URL is required.');
+      return;
+    }
+
+    let socket: WebSocket | null = null;
+    const timeoutId = window.setTimeout(() => {
+      socket?.close();
+      setMqttTestMessage('Connection test timed out.');
+    }, 5000);
+
+    try {
+      socket = new WebSocket(dataDraft.mqttWsUrl.trim());
+      socket.onopen = () => {
+        window.clearTimeout(timeoutId);
+        setMqttTestMessage('MQTT WebSocket bridge is reachable.');
+        socket?.close();
+      };
+      socket.onerror = () => {
+        window.clearTimeout(timeoutId);
+        setMqttTestMessage('Connection failed. Check URL, TLS, firewall, and bridge service.');
+      };
+    } catch (error) {
+      window.clearTimeout(timeoutId);
+      setMqttTestMessage('Invalid WebSocket URL.');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -89,7 +154,7 @@ export function Settings() {
             {tabs.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as 'general' | 'notifications' | 'users')}
+                onClick={() => setActiveTab(tab.id as 'general' | 'data' | 'notifications' | 'users')}
                 className={cn(
                   activeTab === tab.id
                     ? 'border-orange-500 text-orange-600 dark:text-orange-500'
@@ -146,6 +211,111 @@ export function Settings() {
                     <option value="CST">CST (China Standard Time)</option>
                   </select>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'data' && (
+            <div className="space-y-6 max-w-4xl">
+              <div>
+                <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">Device Data Sources</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  These runtime connection settings are saved for the current user and take effect after saving.
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                <div className="flex items-center gap-2">
+                  <Database className="h-5 w-5 text-orange-500" />
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">HTTP Device API</h3>
+                </div>
+                <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.5fr_1fr_160px]">
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">API URL</label>
+                    <input
+                      value={dataDraft.apiUrl}
+                      onChange={(event) => setDataDraft((current) => ({ ...current, apiUrl: event.target.value }))}
+                      placeholder="https://your-api.example.com/devices"
+                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Bearer Token</label>
+                    <input
+                      value={dataDraft.apiToken}
+                      onChange={(event) => setDataDraft((current) => ({ ...current, apiToken: event.target.value }))}
+                      placeholder="Optional"
+                      type="password"
+                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Poll ms</label>
+                    <input
+                      value={dataDraft.apiPollMs}
+                      onChange={(event) => setDataDraft((current) => ({ ...current, apiPollMs: Number(event.target.value) }))}
+                      type="number"
+                      min={1000}
+                      step={1000}
+                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <Wifi className="h-5 w-5 text-sky-500" />
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">MQTT WebSocket Bridge</h3>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={dataDraft.mqttEnabled}
+                      onChange={(event) => setDataDraft((current) => ({ ...current, mqttEnabled: event.target.checked }))}
+                      className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                    />
+                    Enabled
+                  </label>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  This is not an MQTT Broker. It should point to your external MQTT WebSocket bridge that sends JSON telemetry messages to the browser.
+                </p>
+                <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto]">
+                  <input
+                    value={dataDraft.mqttWsUrl}
+                    onChange={(event) => setDataDraft((current) => ({ ...current, mqttWsUrl: event.target.value }))}
+                    placeholder="wss://your-domain.com/iot/telemetry"
+                    className="block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestMqtt}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <Send className="h-4 w-4" />
+                    Test MQTT
+                  </button>
+                </div>
+                {mqttTestMessage && (
+                  <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+                    {mqttTestMessage}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleSaveDataSettings}
+                  className="rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 border border-orange-500"
+                >
+                  Save Data Source Settings
+                </button>
+                {dataSaveMessage && (
+                  <span className="text-sm text-emerald-600 dark:text-emerald-400">{dataSaveMessage}</span>
+                )}
               </div>
             </div>
           )}

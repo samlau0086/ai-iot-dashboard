@@ -6,22 +6,30 @@ import type { DeviceTelemetryMessage } from '../types';
 const API_URL = import.meta.env.VITE_DEVICE_API_URL as string | undefined;
 const API_TOKEN = import.meta.env.VITE_DEVICE_API_TOKEN as string | undefined;
 const API_POLL_MS = Number(import.meta.env.VITE_DEVICE_API_POLL_MS || 10000);
-const MQTT_WS_URL = import.meta.env.VITE_MQTT_WS_URL as string | undefined;
 
 export function useDeviceDataConnection() {
+  const currentUser = useAppStore((state) => state.currentUser);
+  const userSettings = useAppStore((state) => (
+    currentUser ? state.deviceDataSettingsByUser[currentUser.id] : undefined
+  ));
   const setDevices = useAppStore((state) => state.setDevices);
   const applyTelemetryMessage = useAppStore((state) => state.applyTelemetryMessage);
   const setDeviceDataSourceStatus = useAppStore((state) => state.setDeviceDataSourceStatus);
+  const apiUrl = userSettings?.apiUrl.trim() || API_URL;
+  const apiToken = userSettings?.apiToken || API_TOKEN;
+  const apiPollMs = Number(userSettings?.apiPollMs || API_POLL_MS || 10000);
+  const mqttWsUrl = userSettings?.mqttWsUrl.trim();
+  const mqttEnabled = Boolean(userSettings?.mqttEnabled && mqttWsUrl);
 
   useEffect(() => {
-    if (!API_URL) return;
+    if (!apiUrl) return;
 
     let cancelled = false;
 
     const fetchDevices = async () => {
       try {
-        const response = await fetch(API_URL, {
-          headers: API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : undefined,
+        const response = await fetch(apiUrl, {
+          headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined,
         });
 
         if (!response.ok) {
@@ -43,18 +51,18 @@ export function useDeviceDataConnection() {
     };
 
     fetchDevices();
-    const intervalId = window.setInterval(fetchDevices, Number.isFinite(API_POLL_MS) ? API_POLL_MS : 10000);
+    const intervalId = window.setInterval(fetchDevices, Number.isFinite(apiPollMs) ? apiPollMs : 10000);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [setDeviceDataSourceStatus, setDevices]);
+  }, [apiPollMs, apiToken, apiUrl, setDeviceDataSourceStatus, setDevices]);
 
   useEffect(() => {
-    if (!MQTT_WS_URL) return;
+    if (!mqttEnabled || !mqttWsUrl) return;
 
-    let socket: WebSocket | null = new WebSocket(MQTT_WS_URL);
+    let socket: WebSocket | null = new WebSocket(mqttWsUrl);
 
     socket.onmessage = (event) => {
       try {
@@ -77,5 +85,5 @@ export function useDeviceDataConnection() {
       socket?.close();
       socket = null;
     };
-  }, [applyTelemetryMessage, setDeviceDataSourceStatus]);
+  }, [applyTelemetryMessage, mqttEnabled, mqttWsUrl, setDeviceDataSourceStatus]);
 }
