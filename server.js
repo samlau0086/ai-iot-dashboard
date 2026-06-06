@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
@@ -28,7 +29,7 @@ const createDefaultHttpChannels = () => [{
   id: 'http-default',
   name: 'Default HTTP Push',
   enabled: true,
-  token: ingestToken,
+  token: '',
 }];
 const createEnvMqttChannels = () => (process.env.MQTT_BROKER_URL ? [{
   id: 'mqtt-default',
@@ -41,6 +42,7 @@ const createEnvMqttChannels = () => (process.env.MQTT_BROKER_URL ? [{
 }] : []);
 let httpPushChannels = createDefaultHttpChannels();
 let mqttChannels = createEnvMqttChannels();
+let ingestTokens = [];
 const mqttRuntimes = new Map();
 
 try {
@@ -53,6 +55,9 @@ try {
       mqttChannels = Array.isArray(runtimeConfig.dataSources.mqttChannels)
         ? runtimeConfig.dataSources.mqttChannels.map((channel) => ({...channel, topics: splitTopics(channel.topics)}))
         : mqttChannels;
+      ingestTokens = Array.isArray(runtimeConfig.dataSources.ingestTokens)
+        ? runtimeConfig.dataSources.ingestTokens
+        : ingestTokens;
     } else if (runtimeConfig.mqttConfig) {
       mqttChannels = [{
         id: 'mqtt-default',
@@ -68,7 +73,7 @@ try {
 
 const saveRuntimeConfig = () => {
   if (!db) {
-    fs.writeFileSync(runtimeConfigPath, JSON.stringify({dataSources: {httpPushChannels, mqttChannels}}, null, 2));
+    fs.writeFileSync(runtimeConfigPath, JSON.stringify({dataSources: {httpPushChannels, mqttChannels, ingestTokens}}, null, 2));
   }
 };
 
@@ -125,6 +130,27 @@ const initDatabase = async () => {
     mqttChannels = Array.isArray(dataSourceState.mqttChannels)
       ? dataSourceState.mqttChannels.map((channel) => ({...channel, topics: splitTopics(channel.topics)}))
       : mqttChannels;
+    ingestTokens = Array.isArray(dataSourceState.ingestTokens)
+      ? dataSourceState.ingestTokens
+      : ingestTokens;
+  }
+
+  const ingestTokenState = await getAppState('ingest_tokens');
+  if (ingestTokenState) {
+    ingestTokens = Array.isArray(ingestTokenState) ? ingestTokenState : ingestTokens;
+  } else if (ingestToken && ingestTokens.length === 0) {
+    ingestTokens = [{
+      id: 'env-ingest-token',
+      name: 'Environment fallback token',
+      token: ingestToken,
+      ownerUserId: 'system',
+      ownerName: 'System',
+      createdAt: new Date().toISOString(),
+      revokedAt: null,
+    }];
+  }
+
+  if (dataSourceState) {
     return;
   }
 
@@ -244,6 +270,44 @@ const publicMqttChannel = (channel) => ({
   username: channel.username,
   topics: channel.topics,
 });
+
+const createIngestToken = () => `iot_${crypto.randomBytes(24).toString('hex')}`;
+
+const publicIngestToken = (token) => ({
+  id: token.id,
+  name: token.name,
+  token: token.token,
+  ownerUserId: token.ownerUserId,
+  ownerName: token.ownerName,
+  createdAt: token.createdAt,
+  revokedAt: token.revokedAt || null,
+  lastUsedAt: token.lastUsedAt || null,
+  lastUsedSource: token.lastUsedSource || null,
+});
+
+const saveIngestTokens = async () => {
+  if (db) {
+    await setAppState('ingest_tokens', ingestTokens);
+  } else {
+    saveRuntimeConfig();
+  }
+};
+
+const getProvidedIngestToken = (req) => req.get('x-iot-token') || req.get('authorization')?.replace(/^Bearer\s+/i, '');
+
+const validateIngestToken = async (req, source) => {
+  const activeTokens = ingestTokens.filter((token) => !token.revokedAt);
+  if (activeTokens.length === 0) return true;
+
+  const providedToken = getProvidedIngestToken(req);
+  const matchedToken = activeTokens.find((token) => token.token === providedToken);
+  if (!matchedToken) return false;
+
+  matchedToken.lastUsedAt = new Date().toISOString();
+  matchedToken.lastUsedSource = source;
+  await saveIngestTokens();
+  return true;
+};
 
 const mqttStatusFor = (channelId) => mqttRuntimes.get(channelId)?.status || {
   state: 'disabled',
@@ -516,6 +580,52 @@ app.get('/health', (_req, res) => {
   res.status(200).json({status: 'ok'});
 });
 
+app.get('/api/ingest-tokens', (_req, res) => {
+  res.status(200).json({tokens: ingestTokens.map(publicIngestToken)});
+});
+
+app.post('/api/ingest-tokens', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const token = {
+      id: createId('ingest-token'),
+      name: String(payload.name || 'Device ingest token').trim(),
+      token: createIngestToken(),
+      ownerUserId: String(payload.ownerUserId || 'unknown'),
+      ownerName: String(payload.ownerName || 'Unknown user'),
+      createdAt: new Date().toISOString(),
+      revokedAt: null,
+      lastUsedAt: null,
+      lastUsedSource: null,
+    };
+    ingestTokens = [token, ...ingestTokens];
+    await saveIngestTokens();
+    res.status(201).json({token: publicIngestToken(token), tokens: ingestTokens.map(publicIngestToken)});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.post('/api/ingest-tokens/:tokenId/revoke', async (req, res) => {
+  try {
+    const revokedAt = new Date().toISOString();
+    let found = false;
+    ingestTokens = ingestTokens.map((token) => {
+      if (token.id !== req.params.tokenId) return token;
+      found = true;
+      return {...token, revokedAt: token.revokedAt || revokedAt};
+    });
+    if (!found) {
+      res.status(404).json({error: 'ingest token not found'});
+      return;
+    }
+    await saveIngestTokens();
+    res.status(200).json({tokens: ingestTokens.map(publicIngestToken)});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
 app.get('/api/data-sources', (_req, res) => {
   res.status(200).json({
     httpPushChannels: httpPushChannels.map(sanitizeHttpChannel),
@@ -616,12 +726,10 @@ app.post('/api/telemetry/:channelId/:token', async (req, res) => {
 
 app.post('/api/telemetry', async (req, res) => {
   try {
-    if (ingestToken) {
-      const providedToken = req.get('x-iot-token') || req.get('authorization')?.replace(/^Bearer\s+/i, '');
-      if (providedToken !== ingestToken) {
-        res.status(401).json({error: 'invalid telemetry token'});
-        return;
-      }
+    const isAuthorized = await validateIngestToken(req, 'http:legacy');
+    if (!isAuthorized) {
+      res.status(401).json({error: 'invalid telemetry token'});
+      return;
     }
 
     const accepted = await ingestTelemetryPayload(req.body, 'http:legacy');

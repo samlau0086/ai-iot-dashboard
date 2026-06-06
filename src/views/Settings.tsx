@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, CheckCircle2, Database, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
+import { Bell, CheckCircle2, Copy, Database, KeyRound, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
 import { useAppStore, type NotificationChannel } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
@@ -33,6 +33,18 @@ type MqttStatus = {
   lastMessageAt?: string | null;
 };
 
+type IngestToken = {
+  id: string;
+  name: string;
+  token: string;
+  ownerUserId: string;
+  ownerName: string;
+  createdAt: string;
+  revokedAt?: string | null;
+  lastUsedAt?: string | null;
+  lastUsedSource?: string | null;
+};
+
 export function Settings() {
   const {
     language,
@@ -50,11 +62,14 @@ export function Settings() {
     currentUser,
   } = useAppStore();
   const t = translations[language];
-  const [activeTab, setActiveTab] = useState<'general' | 'data' | 'notifications' | 'users'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'data' | 'tokens' | 'notifications' | 'users'>('general');
   const [httpPushChannels, setHttpPushChannels] = useState<HttpPushChannel[]>([]);
   const [mqttChannels, setMqttChannels] = useState<MqttChannel[]>([]);
   const [mqttStatuses, setMqttStatuses] = useState<Record<string, MqttStatus>>({});
   const [dataSourceMessage, setDataSourceMessage] = useState('');
+  const [ingestTokens, setIngestTokens] = useState<IngestToken[]>([]);
+  const [tokenDraftName, setTokenDraftName] = useState('Device Gateway Token');
+  const [tokenMessage, setTokenMessage] = useState('');
   const [channelDraft, setChannelDraft] = useState({
     type: 'email' as NotificationChannel['type'],
     name: '',
@@ -71,6 +86,7 @@ export function Settings() {
   const tabs = [
     { id: 'general', name: t.settings.tabs.general, icon: SettingsIcon },
     { id: 'data', name: 'Data Sources', icon: Database },
+    { id: 'tokens', name: 'Ingest Tokens', icon: KeyRound },
     { id: 'notifications', name: t.settings.tabs.notifications, icon: Bell },
     { id: 'users', name: t.settings.tabs.users, icon: Users },
   ];
@@ -95,7 +111,19 @@ export function Settings() {
       }
     };
 
+    const loadIngestTokens = async () => {
+      try {
+        const response = await fetch('/api/ingest-tokens');
+        if (!response.ok) return;
+        const payload = await response.json();
+        setIngestTokens(Array.isArray(payload.tokens) ? payload.tokens : []);
+      } catch (error) {
+        setTokenMessage('Failed to load ingest tokens.');
+      }
+    };
+
     loadDataSources();
+    loadIngestTokens();
   }, []);
 
   const handleAddChannel = () => {
@@ -198,6 +226,54 @@ export function Settings() {
     }
   };
 
+  const handleGenerateToken = async () => {
+    setTokenMessage('');
+    try {
+      const response = await fetch('/api/ingest-tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: tokenDraftName.trim() || 'Device Gateway Token',
+          ownerUserId: currentUser?.id,
+          ownerName: currentUser?.name,
+        }),
+      });
+      const payload = await response.json();
+      if (response.ok) {
+        setIngestTokens(Array.isArray(payload.tokens) ? payload.tokens : []);
+        setTokenDraftName('Device Gateway Token');
+      }
+      setTokenMessage(response.ok ? 'Token generated. Copy it into your gateway request header.' : 'Failed to generate token.');
+    } catch (error) {
+      setTokenMessage('Failed to generate token.');
+    }
+  };
+
+  const handleRevokeToken = async (tokenId: string) => {
+    setTokenMessage('');
+    try {
+      const response = await fetch(`/api/ingest-tokens/${encodeURIComponent(tokenId)}/revoke`, {
+        method: 'POST',
+      });
+      const payload = await response.json();
+      if (response.ok) {
+        setIngestTokens(Array.isArray(payload.tokens) ? payload.tokens : []);
+      }
+      setTokenMessage(response.ok ? 'Token revoked.' : 'Failed to revoke token.');
+    } catch (error) {
+      setTokenMessage('Failed to revoke token.');
+    }
+  };
+
+  const handleCopyToken = async (token: string) => {
+    try {
+      await navigator.clipboard.writeText(token);
+      setTokenMessage('Token copied.');
+    } catch (error) {
+      setTokenMessage('Copy failed. Select the token text and copy it manually.');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -211,7 +287,7 @@ export function Settings() {
             {tabs.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as 'general' | 'data' | 'notifications' | 'users')}
+                onClick={() => setActiveTab(tab.id as 'general' | 'data' | 'tokens' | 'notifications' | 'users')}
                 className={cn(
                   activeTab === tab.id
                     ? 'border-orange-500 text-orange-600 dark:text-orange-500'
@@ -482,6 +558,127 @@ export function Settings() {
                 {dataSourceMessage && (
                   <span className="text-sm text-slate-600 dark:text-slate-300">{dataSourceMessage}</span>
                 )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'tokens' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">Ingest Token Management</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  Generate user-owned tokens for gateways that POST telemetry to <span className="font-mono">/api/telemetry</span>. Revoked tokens stop working immediately.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[1fr_auto]">
+                <div>
+                  <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Token Name</label>
+                  <input
+                    value={tokenDraftName}
+                    onChange={(event) => setTokenDraftName(event.target.value)}
+                    placeholder="Factory A Gateway Token"
+                    className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    onClick={handleGenerateToken}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Generate Token
+                  </button>
+                </div>
+              </div>
+
+              {tokenMessage && (
+                <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+                  {tokenMessage}
+                </div>
+              )}
+
+              <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Token</th>
+                      <th className="px-4 py-3 font-semibold">Owner</th>
+                      <th className="px-4 py-3 font-semibold">Status</th>
+                      <th className="px-4 py-3 font-semibold">Last Used</th>
+                      <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+                    {ingestTokens.map((token) => {
+                      const revoked = Boolean(token.revokedAt);
+                      return (
+                        <tr key={token.id}>
+                          <td className="px-4 py-3 align-top">
+                            <div className="font-medium text-slate-900 dark:text-white">{token.name}</div>
+                            <code className="mt-1 block max-w-md overflow-x-auto rounded bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-950 dark:text-slate-300">
+                              {token.token}
+                            </code>
+                            <div className="mt-1 text-xs text-slate-500">Created: {new Date(token.createdAt).toLocaleString()}</div>
+                          </td>
+                          <td className="px-4 py-3 align-top">
+                            <div className="text-slate-700 dark:text-slate-200">{token.ownerName}</div>
+                            <div className="mt-1 font-mono text-xs text-slate-500">{token.ownerUserId}</div>
+                          </td>
+                          <td className="px-4 py-3 align-top">
+                            <span className={cn(
+                              'rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset',
+                              revoked
+                                ? 'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300'
+                                : 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300'
+                            )}>
+                              {revoked ? 'Revoked' : 'Active'}
+                            </span>
+                            {token.revokedAt && (
+                              <div className="mt-2 text-xs text-slate-500">{new Date(token.revokedAt).toLocaleString()}</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 align-top text-slate-600 dark:text-slate-300">
+                            {token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleString() : 'Never'}
+                            {token.lastUsedSource && (
+                              <div className="mt-1 font-mono text-xs text-slate-500">{token.lastUsedSource}</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right align-top">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleCopyToken(token.token)}
+                                disabled={revoked}
+                                className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                Copy
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRevokeToken(token.id)}
+                                disabled={revoked}
+                                className="inline-flex items-center gap-2 rounded-md border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-500/10"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Revoke
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {ingestTokens.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                          No ingest tokens yet. Generate one for your device gateway before enabling token-protected telemetry.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

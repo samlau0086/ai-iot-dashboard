@@ -367,12 +367,20 @@ POST https://your-dashboard-domain.com/api/telemetry
 POST https://your-dashboard-domain.com/api/telemetry/{channelId}/{token}
 ```
 
-如果服务端设置了 `IOT_INGEST_TOKEN`，网关需要携带以下任一认证头：
+推荐在后台 **Settings -> Ingest Tokens** 中生成用户级 token，并让网关携带以下任一认证头。Token 可以随时复制或 Revoke，撤销后会立即停止通过 `/api/telemetry` 接收数据：
 
 ```text
 x-iot-token: your-token
 Authorization: Bearer your-token
 ```
+
+Token 管理流程：
+
+1. 登录后台并进入 **Settings -> Ingest Tokens**。
+2. 输入 token 名称，例如 `Factory A Gateway Token`。
+3. 点击 **Generate Token** 生成当前用户名下的 token。
+4. 点击 **Copy** 后配置到网关请求头。
+5. token 泄露或不再使用时点击 **Revoke**，撤销后该 token 不能继续写入遥测数据。
 
 请求体可以是一条遥测消息，也可以是遥测消息数组：
 
@@ -475,14 +483,16 @@ curl -X POST "http://localhost:3006/api/telemetry" \
   ]'
 ```
 
-如果设置了 `IOT_INGEST_TOKEN`，mock 请求需要带认证头：
+如果后台已经生成 Ingest Token，mock 请求需要带认证头：
 
 ```bash
 curl -X POST "http://localhost:3006/api/telemetry" \
   -H "Content-Type: application/json" \
-  -H "x-iot-token: your-token" \
+  -H "x-iot-token: iot_generated_token" \
   -d '{"device_id":"DEV-001","metrics":{"power":4100},"status":"online"}'
 ```
+
+旧版部署中如果仍设置了 `IOT_INGEST_TOKEN`，系统会把它作为兼容 fallback token 加载；新部署建议统一使用后台 **Ingest Tokens** 管理。
 
 Dashboard 前端会自动轮询本机 `/api/telemetry` 缓冲区，并将遥测数据合并到匹配设备。
 
