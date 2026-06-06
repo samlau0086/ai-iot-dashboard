@@ -89,6 +89,26 @@ const mergeDefaultCharts = (charts: ChartConfig[] = []) => {
   ];
 };
 
+const sameOverviewLayout = (first: any[] = [], second: any[] = []) => {
+  if (first.length !== second.length) return false;
+
+  const secondById = new Map(second.map((item) => [item.i, item]));
+
+  return first.every((item) => {
+    const other = secondById.get(item.i);
+    if (!other) return false;
+
+    return (
+      item.x === other.x &&
+      item.y === other.y &&
+      item.w === other.w &&
+      item.h === other.h &&
+      item.minW === other.minW &&
+      item.minH === other.minH
+    );
+  });
+};
+
 const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
     id: 'factory-energy',
@@ -309,7 +329,9 @@ export const useAppStore = create<AppState>()(
         widgets: cloneWidgets(template.widgets),
       })),
       activeDashboardTemplateId: 'factory-energy',
-      updateOverviewLayout: (layout) => set({ overviewLayout: layout }),
+      updateOverviewLayout: (layout) => set((state) => (
+        sameOverviewLayout(state.overviewLayout, layout) ? state : { overviewLayout: layout }
+      )),
       updateOverviewWidgets: (widgets) => set({ overviewWidgets: widgets }),
       applyDashboardTemplate: (id) => set((state) => {
         const template = state.dashboardTemplates.find((item) => item.id === id);
@@ -409,9 +431,9 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'app-storage',
-      version: 3,
+      version: 4,
       migrate: (persistedState: any, version) => {
-        if (version >= 3 || !persistedState) return persistedState;
+        if (version >= 4 || !persistedState) return persistedState;
 
         const builtInTemplateIds = new Set(DASHBOARD_TEMPLATES.map((template) => template.id));
         const customTemplates = (persistedState.dashboardTemplates || []).filter((template: DashboardTemplate) => !builtInTemplateIds.has(template.id));

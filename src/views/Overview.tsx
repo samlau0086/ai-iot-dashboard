@@ -80,6 +80,24 @@ const collidesWithLayout = (item: any, layout: any[]) => {
   return layout.some((candidate) => collides(item, candidate));
 };
 
+const layoutsEqual = (first: any[], second: any[]) => {
+  if (first.length !== second.length) return false;
+
+  const secondById = new Map(second.map((item) => [item.i, item]));
+
+  return first.every((item) => {
+    const other = secondById.get(item.i);
+    if (!other) return false;
+
+    return (
+      item.x === other.x &&
+      item.y === other.y &&
+      item.w === other.w &&
+      item.h === other.h
+    );
+  });
+};
+
 export function Overview() {
   const {
     language,
@@ -104,6 +122,14 @@ export function Overview() {
   const [templateEditorMode, setTemplateEditorMode] = useState<'new' | 'edit' | null>(null);
   const [templateName, setTemplateName] = useState('');
   const [templateDescription, setTemplateDescription] = useState('');
+
+  const updateSnapGuide = (nextGuide: SnapGuide) => {
+    setActiveSnapGuide((currentGuide) => (
+      currentGuide.x === nextGuide.x && currentGuide.y === nextGuide.y
+        ? currentGuide
+        : nextGuide
+    ));
+  };
 
   const snapGuides = useMemo(() => {
     return overviewLayout.reduce<Record<string, { x: number[]; y: number[] }>>((acc, item: any) => {
@@ -151,9 +177,8 @@ export function Overview() {
 
   useEffect(() => {
     const hasLegacyKpis = overviewWidgets.some((widget) => widget.type === 'kpis') || overviewLayout.some((item) => item.i === 'kpis');
-    const hasMissingKpi = KPI_WIDGETS.some((kpi) => !overviewWidgets.some((widget) => widget.id === kpi.id));
 
-    if (!hasLegacyKpis && !hasMissingKpi) return;
+    if (!hasLegacyKpis) return;
 
     const legacyLayout = overviewLayout.find((item) => item.i === 'kpis');
     const kpiY = Number.isFinite(legacyLayout?.y) ? legacyLayout.y : 0;
@@ -181,13 +206,15 @@ export function Overview() {
   const tooltipColor = isDark ? '#cbd5e1' : '#334155';
 
   const onLayoutChange = (currentLayout: any[]) => {
+    if (layoutsEqual(currentLayout, overviewLayout)) return;
+
     updateOverviewLayout(currentLayout);
   };
 
   const handleDrag = (_layout: any[], _oldItem: any, newItem: any, _placeholder: any) => {
     const guides = snapGuides[newItem.i];
     if (!guides) {
-      setActiveSnapGuide({});
+      updateSnapGuide({});
       return;
     }
 
@@ -203,7 +230,7 @@ export function Overview() {
       nextGuide.y = Math.max(0, snapY);
     }
 
-    setActiveSnapGuide(nextGuide);
+    updateSnapGuide(nextGuide);
   };
 
   const snapLayoutItem = (layout: any[], movedItem: any) => {
@@ -242,17 +269,25 @@ export function Overview() {
   };
 
   const handleDragStop = (layout: any[], _oldItem: any, newItem: any) => {
-    updateOverviewLayout(snapLayoutItem(layout, newItem));
-    setActiveSnapGuide({});
+    const nextLayout = snapLayoutItem(layout, newItem);
+
+    if (!layoutsEqual(nextLayout, overviewLayout)) {
+      updateOverviewLayout(nextLayout);
+    }
+
+    updateSnapGuide({});
   };
 
   const handleResizeStop = (layout: any[]) => {
-    updateOverviewLayout(layout);
-    setActiveSnapGuide({});
+    if (!layoutsEqual(layout, overviewLayout)) {
+      updateOverviewLayout(layout);
+    }
+
+    updateSnapGuide({});
   };
 
   const clearSnapGuide = () => {
-    setActiveSnapGuide({});
+    updateSnapGuide({});
   };
 
   const activeTemplate = dashboardTemplates.find((template) => template.id === activeDashboardTemplateId) || dashboardTemplates[0];
