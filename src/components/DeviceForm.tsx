@@ -246,7 +246,13 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
 
         {/* Config / Advanced */}
         <div className="border-t border-slate-200 dark:border-slate-800 pt-6">
-           <h4 className="text-sm font-medium text-slate-900 dark:text-white mb-4">{t.config}</h4>
+           <h4 className="text-sm font-medium text-slate-900 dark:text-white mb-2">{t.config}</h4>
+           <div className="mb-5 rounded border border-orange-200 dark:border-orange-500/30 bg-orange-50/70 dark:bg-orange-500/10 p-3 text-xs text-orange-900 dark:text-orange-100">
+             <p className="font-semibold">Data Binding</p>
+             <p className="mt-1 text-orange-800 dark:text-orange-200">
+               Use these fields to link this platform device with real API or MQTT telemetry. Incoming data is matched by External Device ID first, then by the platform Device ID.
+             </p>
+           </div>
            <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">
              <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">External Device ID</label>
@@ -272,6 +278,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
                 <option value="api">HTTP API</option>
                 <option value="mqtt">MQTT</option>
               </select>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose where live metrics for this device should come from.</p>
              </div>
              <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">API Path</label>
@@ -283,6 +290,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
                 placeholder="/devices/meter-001 or /telemetry/meter-001"
                 className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
               />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional record of the backend endpoint used for this device.</p>
              </div>
              <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">MQTT Topic</label>
@@ -294,6 +302,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
                 placeholder="factory-a/energy/meter-001/telemetry"
                 className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
               />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional telemetry topic used by the MQTT/WebSocket bridge.</p>
              </div>
              {renderConfigFields()}
            </div>
