@@ -66,19 +66,41 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
    npm run dev
    ```
 
+   默认运行端口是 `3006`。如需指定端口，可以使用环境变量：
+
+   Linux/macOS:
+
+   ```bash
+   PORT=4000 npm run dev
+   ```
+
+   Windows PowerShell:
+
+   ```powershell
+   $env:PORT=4000; npm run dev
+   ```
+
+   也可以直接传递 Vite 参数：
+
+   ```bash
+   npm run dev -- --port 4000
+   ```
+
 4. 打开浏览器访问：
 
    ```text
-   http://localhost:3000
+   http://localhost:3006
    ```
+
+   如果你指定了其他端口，请把地址中的 `3006` 替换为对应端口。
 
 ## 常用命令
 
 | 命令 | 说明 |
 | --- | --- |
-| `npm run dev` | 启动本地开发服务。 |
+| `npm run dev` | 启动本地开发服务，默认端口 `3006`。 |
 | `npm run build` | 构建生产版本到 `dist`。 |
-| `npm run preview` | 本地预览生产构建。 |
+| `npm run preview` | 本地预览生产构建，默认端口 `3006`。 |
 | `npm run lint` | 运行 TypeScript 类型检查。 |
 
 ## 使用说明
