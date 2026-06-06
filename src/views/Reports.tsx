@@ -2,34 +2,155 @@ import React, { useState } from 'react';
 import { FileText, Download, Calendar, Mail, FileDown } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
+import { mockAlerts } from '../lib/mockData';
+
+type ReportItem = {
+  id: string;
+  name: string;
+  date: string;
+  type: string;
+  size: string;
+  content: string;
+  rows: string[][];
+};
+
+const csvEscape = (value: unknown) => {
+  const stringValue = String(value ?? '');
+  if (/[",\n\r]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+
+  return stringValue;
+};
+
+const toCsv = (rows: string[][]) => rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+
+const downloadCsv = (report: ReportItem) => {
+  const blob = new Blob([toCsv(report.rows)], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = `${report.name.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase()}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+const getCsvSize = (rows: string[][]) => {
+  const bytes = new Blob([toCsv(rows)]).size;
+  if (bytes < 1024) return `${bytes} B`;
+
+  return `${(bytes / 1024).toFixed(1)} KB`;
+};
 
 export function Reports() {
-  const { language } = useAppStore();
+  const { language, devices } = useAppStore();
   const t = translations[language];
 
   const [showGenerateModal, setShowGenerateModal] = useState(false);
-  const [reports, setReports] = useState([
-    { name: 'Weekly Energy Summary', date: 'Oct 25, 2026', type: 'PDF', size: '2.4 MB' },
-    { name: 'Monthly Equipment Uptime', date: 'Oct 01, 2026', type: 'CSV', size: '1.1 MB' },
-    { name: 'Alerts & Incidents Log', date: 'Sep 30, 2026', type: 'PDF', size: '4.5 MB' },
+  const [reports, setReports] = useState<ReportItem[]>([
+    { id: 'sample-energy', name: 'Weekly Energy Summary', date: 'Oct 25, 2026', type: 'CSV', size: '2.4 KB', content: 'Energy', rows: [['Report', 'Sample report']] },
+    { id: 'sample-uptime', name: 'Monthly Equipment Uptime', date: 'Oct 01, 2026', type: 'CSV', size: '1.1 KB', content: 'Devices', rows: [['Report', 'Sample report']] },
+    { id: 'sample-alerts', name: 'Alerts & Incidents Log', date: 'Sep 30, 2026', type: 'CSV', size: '4.5 KB', content: 'Alerts', rows: [['Report', 'Sample report']] },
   ]);
+
+  const buildReportRows = (content: string, range: string) => {
+    const generatedAt = new Date().toISOString();
+
+    if (content === 'Devices') {
+      return [
+        ['Report', 'Device Health'],
+        ['Range', range],
+        ['Generated At', generatedAt],
+        [],
+        ['Device ID', 'Name', 'Type', 'Status', 'Tags', 'Last Seen', 'Firmware', 'External Device ID', 'Metric', 'Value'],
+        ...devices.flatMap((device) => {
+          const metrics = Object.entries(device.metrics || {});
+          const base = [
+            device.id,
+            device.name,
+            device.type,
+            device.status,
+            (device.tags || []).join('|'),
+            device.lastSeen,
+            device.firmwareVersion,
+            device.config?.externalDeviceId || device.id,
+          ];
+
+          return metrics.length
+            ? metrics.map(([metric, value]) => [...base, metric, String(value)])
+            : [[...base, '', '']];
+        }),
+      ];
+    }
+
+    if (content === 'Alerts') {
+      return [
+        ['Report', 'Alerts & Anomalies'],
+        ['Range', range],
+        ['Generated At', generatedAt],
+        [],
+        ['Alert ID', 'Device ID', 'Device Name', 'Level', 'Status', 'Message', 'Timestamp'],
+        ...mockAlerts.map((alert) => [
+          alert.id,
+          alert.deviceId,
+          alert.deviceName,
+          alert.level,
+          alert.status,
+          alert.message,
+          alert.timestamp,
+        ]),
+      ];
+    }
+
+    const totalEnergy = devices.reduce((sum, device) => sum + (Number(device.metrics.energy_today) || 0), 0);
+    const totalPower = devices.reduce((sum, device) => sum + (Number(device.metrics.power) || 0), 0);
+
+    return [
+      ['Report', 'Energy Usage'],
+      ['Range', range],
+      ['Generated At', generatedAt],
+      [],
+      ['Metric', 'Value'],
+      ['Total Devices', String(devices.length)],
+      ['Online Devices', String(devices.filter((device) => device.status === 'online').length)],
+      ['Active Alerts', String(mockAlerts.filter((alert) => alert.status === 'active').length)],
+      ['Total Energy Today (kWh)', totalEnergy.toFixed(2)],
+      ['Total Power (W)', totalPower.toFixed(2)],
+      [],
+      ['Device ID', 'Name', 'Type', 'Energy Today (kWh)', 'Power (W)', 'Status'],
+      ...devices.map((device) => [
+        device.id,
+        device.name,
+        device.type,
+        String(device.metrics.energy_today || ''),
+        String(device.metrics.power || ''),
+        device.status,
+      ]),
+    ];
+  };
 
   const handleGenerate = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const type = formData.get('type') as string;
+    const range = formData.get('range') as string;
     const content = formData.get('content') as string;
+    const rows = buildReportRows(content, range);
+    const report: ReportItem = {
+      id: `report-${Date.now()}`,
+      name: `Custom ${content} Report`,
+      date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
+      type: 'CSV',
+      size: getCsvSize(rows),
+      content,
+      rows,
+    };
     
-    setReports([
-      {
-        name: `Custom ${content} Report`,
-        date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
-        type,
-        size: '1.2 MB'
-      },
-      ...reports
-    ]);
+    setReports([report, ...reports]);
     setShowGenerateModal(false);
+    downloadCsv(report);
   };
 
   return (
@@ -54,7 +175,7 @@ export function Reports() {
       <div className="mt-8 overflow-hidden bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 rounded-lg shadow-sm">
         <ul role="list" className="divide-y divide-slate-100 dark:divide-slate-800/50">
           {reports.map((report) => (
-            <li key={report.name + report.date} className="flex items-center justify-between gap-x-6 px-4 py-5 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors sm:px-6">
+            <li key={report.id} className="flex items-center justify-between gap-x-6 px-4 py-5 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors sm:px-6">
               <div className="flex gap-x-4">
                 <div className="h-10 w-10 flex-none rounded bg-slate-100 dark:bg-slate-800 flex items-center justify-center border border-slate-200 dark:border-slate-700">
                   <FileText className="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
@@ -72,12 +193,13 @@ export function Reports() {
                 <button type="button" className="hidden sm:inline-flex text-sm font-semibold leading-6 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white items-center gap-2">
                   <Mail className="h-4 w-4" /> {t.reports.email}
                 </button>
-                <a
-                  href="#"
+                <button
+                  type="button"
+                  onClick={() => downloadCsv(report)}
                   className="rounded bg-white dark:bg-slate-800 px-2.5 py-1.5 text-sm font-semibold text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-sm flex items-center gap-2"
                 >
                   <Download className="h-4 w-4" /> {t.reports.download}
-                </a>
+                </button>
               </div>
             </li>
           ))}
@@ -122,16 +244,8 @@ export function Reports() {
                             <option value="Devices">Device Health</option>
                           </select>
                         </div>
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Export Format</label>
-                          <div className="flex gap-4 mt-2">
-                            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                              <input type="radio" name="type" value="PDF" defaultChecked className="text-orange-600 focus:ring-orange-500" /> PDF
-                            </label>
-                            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                              <input type="radio" name="type" value="CSV" className="text-orange-600 focus:ring-orange-500" /> CSV
-                            </label>
-                          </div>
+                        <div className="rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-xs text-slate-500 dark:text-slate-400">
+                          Current basic export format: CSV
                         </div>
                       </div>
                     </div>

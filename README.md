@@ -39,7 +39,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] PM2 + VPS 自动部署
 - [x] 接入真实设备数据 API / MQTT WebSocket Bridge 前端入口
 - [ ] 替换 Mock 告警和能耗数据
-- [ ] 基础报表导出
+- [x] 基础报表 CSV 导出
 
 ### V2: Industry Dashboard Engine
 
