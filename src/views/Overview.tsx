@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal } from 'lucide-react';
+import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal, LayoutGrid } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { mockEnergyTrends, mockAlerts } from '../lib/mockData';
 import { useAppStore } from '../lib/store';
@@ -528,6 +528,62 @@ export function Overview() {
     setDraggingLibraryWidgetId(null);
   };
 
+  const getWidgetLayoutSize = (widget: OverviewWidget) => {
+    if (widget.type === 'kpi') return { w: 3, h: 2, minW: 2, minH: 2 };
+    if (widget.type === 'trend' || widget.type === 'chart' || widget.type === 'ai') return { w: 4, h: 5, minW: 3, minH: 3 };
+    if (widget.type === 'custom') {
+      const mode = widget.displayMode || 'number';
+      if (['line', 'area', 'bar', 'donut'].includes(mode)) return { w: 4, h: 4, minW: 3, minH: 3 };
+      return { w: 3, h: 2, minW: 2, minH: 2 };
+    }
+
+    return { w: 3, h: 2, minW: 2, minH: 2 };
+  };
+
+  const sortWidgetsForAutoLayout = (widgets: OverviewWidget[]) => {
+    const priority = (widget: OverviewWidget) => {
+      if (widget.type === 'kpi') return 0;
+      if (widget.type === 'custom' && ['number', 'gauge', 'status'].includes(widget.displayMode || 'number')) return 1;
+      if (widget.type === 'trend' || widget.type === 'chart') return 2;
+      if (widget.type === 'custom') return 3;
+      if (widget.type === 'ai') return 4;
+      return 5;
+    };
+
+    return [...widgets].sort((first, second) => priority(first) - priority(second));
+  };
+
+  const autoArrangeWidgets = () => {
+    let x = 0;
+    let y = 0;
+    let rowHeight = 0;
+
+    const nextLayout = sortWidgetsForAutoLayout(overviewWidgets).map((widget) => {
+      const size = getWidgetLayoutSize(widget);
+
+      if (x + size.w > GRID_COLS) {
+        x = 0;
+        y += rowHeight;
+        rowHeight = 0;
+      }
+
+      const item = {
+        i: widget.id,
+        x,
+        y,
+        ...size,
+      };
+
+      x += size.w;
+      rowHeight = Math.max(rowHeight, size.h);
+
+      return item;
+    });
+
+    updateOverviewLayout(nextLayout);
+    setActiveSnapGuide({});
+  };
+
   const handleTagSelect = (tag: string) => {
     setSelectedTag(tag);
 
@@ -1017,6 +1073,15 @@ export function Overview() {
           </div>
 
           {isTemplateEditing && (
+            <>
+            <button
+              type="button"
+              onClick={autoArrangeWidgets}
+              className="inline-flex items-center gap-x-2 rounded bg-white dark:bg-[#1c2128] px-3 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 shadow-sm border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-colors"
+            >
+              <LayoutGrid className="-ml-0.5 h-4 w-4" aria-hidden="true" />
+              Auto Layout
+            </button>
             <button
               type="button"
               onClick={() => openWidgetBuilder()}
@@ -1025,6 +1090,7 @@ export function Overview() {
               <Plus className="-ml-0.5 h-4 w-4" aria-hidden="true" />
               Add Widget
             </button>
+            </>
           )}
         </div>
       </div>
