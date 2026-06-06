@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { mockEnergyTrends, mockAlerts } from '../lib/mockData';
@@ -180,6 +180,7 @@ export function Overview() {
   const [builderIconId, setBuilderIconId] = useState('activity');
   const [builderDeviceIds, setBuilderDeviceIds] = useState<string[]>([]);
   const isTemplateEditing = templateEditorMode !== null;
+  const dashboardDropRef = useRef<HTMLDivElement | null>(null);
 
   const updateSnapGuide = (nextGuide: SnapGuide) => {
     setActiveSnapGuide((currentGuide) => (
@@ -484,24 +485,46 @@ export function Overview() {
     resetWidgetBuilder();
   };
 
-  const addLibraryWidgetToDashboard = (libraryWidgetId: string) => {
+  const getDropGridPosition = (event: React.DragEvent<HTMLDivElement>, width: number) => {
+    const dropTarget = dashboardDropRef.current;
+    if (!dropTarget) return { x: 0, y: Infinity };
+
+    const rect = dropTarget.getBoundingClientRect();
+    const colWidth = (rect.width - (GRID_COLS - 1) * GRID_MARGIN[0]) / GRID_COLS;
+    const rawX = (event.clientX - rect.left) / (colWidth + GRID_MARGIN[0]);
+    const rawY = (event.clientY - rect.top) / (GRID_ROW_HEIGHT + GRID_MARGIN[1]);
+
+    return {
+      x: clamp(Math.floor(rawX), 0, GRID_COLS - width),
+      y: Math.max(0, Math.floor(rawY)),
+    };
+  };
+
+  const addLibraryWidgetToDashboard = (libraryWidgetId: string, position?: { x: number; y: number }) => {
     const libraryWidget = overviewWidgetLibrary.find((widget) => widget.id === libraryWidgetId);
     if (!libraryWidget) return;
 
     const id = createWidgetId(libraryWidget.id);
     const isChartLike = ['line', 'area', 'bar', 'donut'].includes(libraryWidget.displayMode || '');
+    const width = isChartLike ? 5 : 3;
+    const height = isChartLike ? 4 : 2;
+    const nextPosition = position || { x: 0, y: Infinity };
 
     addOverviewWidget(
       { ...libraryWidget, id, deviceIds: libraryWidget.deviceIds ? [...libraryWidget.deviceIds] : [] },
-      { i: id, x: 0, y: Infinity, w: isChartLike ? 5 : 3, h: isChartLike ? 4 : 2, minW: isChartLike ? 3 : 2, minH: 2 }
+      { i: id, x: nextPosition.x, y: nextPosition.y, w: width, h: height, minW: isChartLike ? 3 : 2, minH: 2 }
     );
     setConfigWidgetId(id);
   };
 
-  const handleDashboardDrop = () => {
+  const handleDashboardDrop = (event: React.DragEvent<HTMLDivElement>) => {
     if (!draggingLibraryWidgetId) return;
 
-    addLibraryWidgetToDashboard(draggingLibraryWidgetId);
+    const libraryWidget = overviewWidgetLibrary.find((widget) => widget.id === draggingLibraryWidgetId);
+    const width = ['line', 'area', 'bar', 'donut'].includes(libraryWidget?.displayMode || '') ? 5 : 3;
+    const position = getDropGridPosition(event, width);
+
+    addLibraryWidgetToDashboard(draggingLibraryWidgetId, position);
     setDraggingLibraryWidgetId(null);
   };
 
@@ -1252,13 +1275,14 @@ export function Overview() {
       )}
 
       <div
+        ref={dashboardDropRef}
         className="-mx-4 pb-[100px] relative"
         onDragOver={(event) => {
           if (draggingLibraryWidgetId) event.preventDefault();
         }}
         onDrop={(event) => {
           event.preventDefault();
-          handleDashboardDrop();
+          handleDashboardDrop(event);
         }}
       >
         <div className="pointer-events-none absolute inset-x-4 top-0 z-20">
