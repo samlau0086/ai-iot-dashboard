@@ -1,0 +1,61 @@
+export type DeviceType =
+  | 'energy_meter'
+  | 'plc'
+  | 'temperature_sensor'
+  | 'solar_inverter'
+  | 'pump_controller'
+  | 'air_compressor'
+  | 'gateway'
+  | 'dtu'
+  | 'rtu'
+  | 'lora_gateway'
+  | 'sensor';
+
+export interface DeviceConfig {
+  // DTU
+  protocol?: string;
+  serverAddress?: string;
+  port?: number;
+  baudRate?: number;
+  
+  // RTU
+  pollingInterval?: number;
+  slaveId?: number;
+  
+  // Gateway
+  ipAddress?: string;
+  subnet?: string;
+  
+  // LoRa Gateway
+  frequencyPlan?: string;
+  spreadingFactor?: string;
+  
+  // Sensor
+  unit?: string;
+  measurementType?: string;
+}
+
+export interface Device {
+  id: string;
+  name: string;
+  type: DeviceType;
+  tags: string[];
+  metrics: Record<string, number>;
+  status: 'online' | 'offline' | 'warning';
+  lastSeen: string;
+  firmwareVersion: string;
+  icon?: string;
+  config?: DeviceConfig;
+}
+
+export type AlertLevel = 'Info' | 'Warning' | 'Critical' | 'Emergency';
+
+export interface Alert {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  level: AlertLevel;
+  message: string;
+  timestamp: string;
+  status: 'active' | 'acknowledged' | 'resolved';
+}

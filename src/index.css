@@ -1,0 +1,97 @@
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+
+@import "react-grid-layout/css/styles.css";
+@import "react-resizable/css/styles.css";
+
+.react-grid-layout {
+  position: relative;
+  transition: height 200ms ease;
+  min-height: 200px;
+}
+
+.react-grid-layout::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: 
+    linear-gradient(to right, rgba(148, 163, 184, 0.1) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.1) 1px, transparent 1px);
+  background-size: calc(100% / 12) 96px; /* 12 cols, 80px row height + 16px margin */
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+/* Show grid lines when dragging or resizing */
+.react-grid-layout:has(.react-draggable-dragging)::before,
+.react-grid-layout:has(.react-resizable-resizing)::before {
+  opacity: 1;
+}
+
+.dark .react-grid-layout::before {
+  background-image: 
+    linear-gradient(to right, rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+}
+
+.react-grid-item.react-draggable-dragging {
+  opacity: 0.9 !important;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.15);
+  z-index: 50 !important;
+  cursor: grabbing !important;
+}
+
+.react-grid-item.react-grid-placeholder {
+  background: rgba(234, 88, 12, 0.05) !important;
+  border: 2px dashed #ea580c !important;
+  opacity: 1 !important;
+  border-radius: 8px;
+  transition-duration: 100ms;
+  z-index: 10 !important;
+}
+
+.dark .react-grid-item.react-grid-placeholder {
+  background: rgba(234, 88, 12, 0.1) !important;
+}
+
+.react-grid-item > .react-resizable-handle {
+  position: absolute;
+  width: 30px !important;
+  height: 30px !important;
+  bottom: 0;
+  right: 0;
+  cursor: se-resize;
+  z-index: 100 !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  background: transparent;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #94a3b8;
+  border-bottom: 2px solid #94a3b8;
+}
+
+.dark .react-grid-item > .react-resizable-handle::after {
+  border-color: #64748b;
+}
+
+.dark .react-grid-item.react-draggable-dragging {
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+}
+
+.draggable-handle {
+  cursor: grab;
+}
+
+.draggable-handle:active {
+  cursor: grabbing;
+}
