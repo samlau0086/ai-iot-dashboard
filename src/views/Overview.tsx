@@ -216,6 +216,10 @@ export function Overview() {
     }, {});
   }, [overviewLayout]);
 
+  const gridLayouts = useMemo(() => ({
+    lg: overviewLayout.map((item) => ({ ...item })),
+  }), [overviewLayout]);
+
   const availableTags = useMemo(() => {
     return ['All', ...Array.from(new Set(devices.flatMap((device) => device.tags || [])))].filter(Boolean);
   }, [devices]);
@@ -373,7 +377,7 @@ export function Overview() {
   };
 
   const handleDragStop = (layout: any[], _oldItem: any, newItem: any) => {
-    const nextLayout = snapLayoutItem(layout, newItem);
+    const nextLayout = snapLayoutItem(layout.map((item) => ({ ...item })), { ...newItem });
 
     if (!layoutsEqual(nextLayout, overviewLayout)) {
       updateOverviewLayout(nextLayout);
@@ -389,8 +393,10 @@ export function Overview() {
   };
 
   const handleResizeStop = (layout: any[]) => {
-    if (!layoutsEqual(layout, overviewLayout)) {
-      updateOverviewLayout(layout);
+    const nextLayout = layout.map((item) => ({ ...item }));
+
+    if (!layoutsEqual(nextLayout, overviewLayout)) {
+      updateOverviewLayout(nextLayout);
     }
 
     isGridInteractingRef.current = false;
@@ -1380,7 +1386,7 @@ export function Overview() {
         </div>
         <ResponsiveGridLayout
           className="layout"
-          layouts={{ lg: overviewLayout }}
+          layouts={gridLayouts}
           breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
           cols={{ lg: 12, md: 12, sm: 12, xs: 12, xxs: 12 }}
           rowHeight={GRID_ROW_HEIGHT}
@@ -1394,7 +1400,7 @@ export function Overview() {
           isResizable={isTemplateEditing}
           isDraggable={isTemplateEditing}
           resizeHandles={['se']}
-          preventCollision={false}
+          preventCollision={true}
           compactType={null}
           margin={GRID_MARGIN}
         >
