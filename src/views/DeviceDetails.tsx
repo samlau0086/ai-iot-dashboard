@@ -105,6 +105,20 @@ export function DeviceDetails() {
                 <span className="text-slate-500">Firmware</span>
                 <span className="text-slate-900 dark:text-slate-300">{device.firmwareVersion}</span>
               </div>
+              <div className="flex justify-between pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">External ID</span>
+                <span className="text-slate-900 dark:text-slate-300">{device.config?.externalDeviceId || device.id}</span>
+              </div>
+              <div className="flex justify-between pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Data Source</span>
+                <span className="text-slate-900 dark:text-slate-300">{device.config?.dataSource || 'manual'}</span>
+              </div>
+              {(device.config?.mqttTopic || device.config?.apiPath) && (
+                <div className="flex justify-between pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                  <span className="text-slate-500">Binding</span>
+                  <span className="max-w-[180px] truncate text-right text-slate-900 dark:text-slate-300">{device.config?.mqttTopic || device.config?.apiPath}</span>
+                </div>
+              )}
             </div>
           </div>
 

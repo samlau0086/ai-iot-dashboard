@@ -45,7 +45,7 @@ export const mergeTelemetryIntoDevices = (devices: Device[], payload: DeviceTele
   const id = payload.device_id || payload.deviceId || payload.id;
   if (!id) return devices;
 
-  const existingDevice = devices.find((device) => device.id === id);
+  const existingDevice = devices.find((device) => device.id === id || device.config?.externalDeviceId === id);
   const nextDevice = normalizeDevice(payload);
 
   if (!existingDevice) {
@@ -53,7 +53,7 @@ export const mergeTelemetryIntoDevices = (devices: Device[], payload: DeviceTele
   }
 
   return devices.map((device) => (
-    device.id === id
+    device.id === id || device.config?.externalDeviceId === id
       ? {
           ...device,
           ...(nextDevice || {}),

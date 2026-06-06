@@ -12,6 +12,12 @@ export type DeviceType =
   | 'sensor';
 
 export interface DeviceConfig {
+  externalDeviceId?: string;
+  dataSource?: 'api' | 'mqtt' | 'manual';
+  apiPath?: string;
+  mqttTopic?: string;
+  metricMapping?: Record<string, string>;
+
   // DTU
   protocol?: string;
   serverAddress?: string;

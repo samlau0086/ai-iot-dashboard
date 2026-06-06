@@ -410,6 +410,19 @@ WebSocket 消息格式：
 
 接入后，设备列表、总览 Tag 看板、Widget Builder 绑定设备和指标展示都会使用真实设备状态与 metrics。
 
+### 添加设备时的关联配置
+
+在 **Devices -> Add Device** 中，除了设备名称、类型和 Tags，还需要配置数据绑定信息：
+
+| 字段 | 说明 |
+| --- | --- |
+| `External Device ID` | 真实 API / MQTT 消息里的 `device_id`、`deviceId` 或 `id`。平台会用它把遥测数据匹配到当前设备。 |
+| `Data Source` | 选择 `HTTP API`、`MQTT` 或 `Manual / Mock`。 |
+| `API Path` | 可选，用于记录该设备在后端 API 中的路径，例如 `/devices/meter-001`。 |
+| `MQTT Topic` | 可选，用于记录该设备的遥测主题，例如 `factory-a/energy/meter-001/telemetry`。 |
+
+实际遥测更新时，系统会优先用 `External Device ID` 匹配设备；如果没有配置，则使用平台内部设备 ID 匹配。
+
 ## 后续接入建议
 
 - 接入真实设备数据 API 或 MQTT 服务。

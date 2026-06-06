@@ -25,6 +25,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   });
 
   const [configData, setConfigData] = useState<any>({
+    dataSource: 'manual',
     ...existingDevice?.config
   });
   
@@ -62,14 +63,26 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
     }));
   };
 
+  const handleConfigSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setConfigData((prev: any) => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
   const handleSave = () => {
+    const deviceId = existingDevice?.id || `DEV-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
     const newDevice: Device = {
-      id: existingDevice?.id || `DEV-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+      id: deviceId,
       name: formData.name || 'Unnamed Device',
       type: formData.type as DeviceType,
       tags: formData.tags || ['factory-a'],
       icon: formData.icon,
-      config: configData,
+      config: {
+        ...configData,
+        externalDeviceId: configData.externalDeviceId || deviceId,
+      },
       status: existingDevice?.status || 'offline',
       lastSeen: existingDevice?.lastSeen || new Date().toISOString(),
       firmwareVersion: existingDevice?.firmwareVersion || 'v1.0.0',
@@ -91,7 +104,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
           <>
             <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t.protocol}</label>
-              <select name="protocol" value={configData.protocol || 'MQTT'} onChange={handleChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300">
+              <select name="protocol" value={configData.protocol || 'MQTT'} onChange={handleConfigSelectChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300">
                 <option value="MQTT">MQTT</option>
                 <option value="TCP">TCP</option>
                 <option value="UDP">UDP</option>
@@ -126,7 +139,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
           <>
             <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t.frequencyPlan}</label>
-              <select name="frequencyPlan" value={configData.frequencyPlan || 'EU868'} onChange={handleChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300">
+              <select name="frequencyPlan" value={configData.frequencyPlan || 'EU868'} onChange={handleConfigSelectChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300">
                 <option value="EU868">EU868</option>
                 <option value="US915">US915</option>
                 <option value="CN470">CN470</option>
@@ -235,6 +248,53 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
         <div className="border-t border-slate-200 dark:border-slate-800 pt-6">
            <h4 className="text-sm font-medium text-slate-900 dark:text-white mb-4">{t.config}</h4>
            <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">External Device ID</label>
+              <input
+                type="text"
+                name="externalDeviceId"
+                value={configData.externalDeviceId || existingDevice?.id || ''}
+                onChange={handleConfigChange}
+                placeholder="ID from API/MQTT payload, e.g. meter-001"
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Used to match device_id/deviceId/id from real telemetry.</p>
+             </div>
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Data Source</label>
+              <select
+                name="dataSource"
+                value={configData.dataSource || 'manual'}
+                onChange={handleConfigSelectChange}
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              >
+                <option value="manual">Manual / Mock</option>
+                <option value="api">HTTP API</option>
+                <option value="mqtt">MQTT</option>
+              </select>
+             </div>
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">API Path</label>
+              <input
+                type="text"
+                name="apiPath"
+                value={configData.apiPath || ''}
+                onChange={handleConfigChange}
+                placeholder="/devices/meter-001 or /telemetry/meter-001"
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              />
+             </div>
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">MQTT Topic</label>
+              <input
+                type="text"
+                name="mqttTopic"
+                value={configData.mqttTopic || ''}
+                onChange={handleConfigChange}
+                placeholder="factory-a/energy/meter-001/telemetry"
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              />
+             </div>
              {renderConfigFields()}
            </div>
         </div>
