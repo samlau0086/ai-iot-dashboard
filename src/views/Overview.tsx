@@ -237,7 +237,7 @@ export function Overview() {
       : mockAlerts.filter((alert) => taggedDeviceIds.has(alert.deviceId));
   }, [selectedTag, taggedDeviceIds]);
 
-  const metricOptions = useMemo(() => {
+  const tagMetricOptions = useMemo(() => {
     const metrics = new Set<string>();
     taggedDevices.forEach((device) => {
       Object.keys(device.metrics || {}).forEach((metric) => metrics.add(metric));
@@ -245,6 +245,22 @@ export function Overview() {
 
     return Array.from(metrics).sort();
   }, [taggedDevices]);
+
+  const builderDevices = useMemo(() => {
+    if (builderDeviceIds.length === 0) return taggedDevices;
+
+    const selectedDeviceIds = new Set(builderDeviceIds);
+    return devices.filter((device) => selectedDeviceIds.has(device.id));
+  }, [builderDeviceIds, devices, taggedDevices]);
+
+  const builderMetricOptions = useMemo(() => {
+    const metrics = new Set<string>();
+    builderDevices.forEach((device) => {
+      Object.keys(device.metrics || {}).forEach((metric) => metrics.add(metric));
+    });
+
+    return Array.from(metrics).sort();
+  }, [builderDevices]);
 
   const getAlertsForDevices = (targetDevices: any[]) => {
     if (targetDevices === taggedDevices) return taggedAlerts;
@@ -301,6 +317,14 @@ export function Overview() {
     updateOverviewWidgets(nextWidgets);
     updateOverviewLayout(nextLayout);
   }, [overviewLayout, overviewWidgets, updateOverviewLayout, updateOverviewWidgets]);
+
+  useEffect(() => {
+    if (!isTemplateEditing || !showWidgetBuilder) return;
+    if (builderMetricOptions.length === 0) return;
+    if (builderMetricOptions.includes(builderMetricKey)) return;
+
+    setBuilderMetricKey(builderMetricOptions[0]);
+  }, [builderMetricKey, builderMetricOptions, isTemplateEditing, showWidgetBuilder]);
 
   const isDark = theme === 'dark';
   const cartesianGridStroke = isDark ? '#334155' : '#e2e8f0';
@@ -455,7 +479,7 @@ export function Overview() {
     setEditingLibraryWidgetId(null);
     setBuilderTitle('New Widget');
     setBuilderDisplayMode('number');
-    setBuilderMetricKey(metricOptions[0] || 'power');
+    setBuilderMetricKey(builderMetricOptions[0] || tagMetricOptions[0] || 'power');
     setBuilderIconId('activity');
     setBuilderDeviceIds([]);
   };
@@ -465,7 +489,7 @@ export function Overview() {
       setEditingLibraryWidgetId(widget.id);
       setBuilderTitle(widget.title || 'New Widget');
       setBuilderDisplayMode(widget.displayMode || 'number');
-      setBuilderMetricKey(widget.metricKey || metricOptions[0] || 'power');
+      setBuilderMetricKey(widget.metricKey || tagMetricOptions[0] || 'power');
       setBuilderIconId(widget.iconId || 'activity');
       setBuilderDeviceIds(widget.deviceIds ? [...widget.deviceIds] : []);
     } else {
@@ -484,6 +508,8 @@ export function Overview() {
   };
 
   const saveWidgetBuilder = () => {
+    if (!builderMetricKey) return;
+
     const widget: OverviewWidget = {
       id: editingLibraryWidgetId || createWidgetId('library_widget'),
       type: 'custom',
@@ -1182,12 +1208,20 @@ export function Overview() {
               <select
                 value={builderMetricKey}
                 onChange={(event) => setBuilderMetricKey(event.target.value)}
+                disabled={builderMetricOptions.length === 0}
                 className="mt-1 h-10 w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
               >
-                {(metricOptions.length ? metricOptions : ['power']).map((metric) => (
-                  <option key={metric} value={metric}>{metric}</option>
-                ))}
+                {builderMetricOptions.length > 0 ? (
+                  builderMetricOptions.map((metric) => (
+                    <option key={metric} value={metric}>{metric}</option>
+                  ))
+                ) : (
+                  <option value="">No metrics available</option>
+                )}
               </select>
+              <p className="mt-1 truncate text-[10px] text-slate-500 dark:text-slate-400">
+                {builderDeviceIds.length > 0 ? 'Metrics from bound devices' : 'Metrics from current tag devices'}
+              </p>
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Bound devices</label>
@@ -1236,6 +1270,7 @@ export function Overview() {
               <button
                 type="button"
                 onClick={saveWidgetBuilder}
+                disabled={builderMetricOptions.length === 0}
                 className="inline-flex h-10 items-center gap-1.5 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500"
               >
                 <Save className="h-4 w-4" />
