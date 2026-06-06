@@ -27,6 +27,139 @@ export interface OverviewWidget {
   chartId?: string;
 }
 
+export interface DashboardTemplate {
+  id: string;
+  name: string;
+  description: string;
+  layout: any[];
+  widgets: OverviewWidget[];
+}
+
+const DEFAULT_OVERVIEW_LAYOUT = [
+  { i: 'kpi-online-devices', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: 'kpi-total-devices', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: 'kpi-active-alerts', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: 'kpi-energy-today', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: 'trend', x: 0, y: 2, w: 4, h: 5, minW: 4, minH: 3 },
+  { i: 'ai', x: 4, y: 2, w: 4, h: 5, minW: 3, minH: 3 }
+];
+
+const DEFAULT_OVERVIEW_WIDGETS: OverviewWidget[] = [
+  { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
+  { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
+  { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
+  { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
+  { id: 'trend', type: 'trend' },
+  { id: 'ai', type: 'ai' }
+];
+
+const cloneLayout = (layout: any[]) => layout.map((item) => ({ ...item }));
+const cloneWidgets = (widgets: OverviewWidget[]) => widgets.map((widget) => ({ ...widget }));
+
+const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
+  {
+    id: 'factory-energy',
+    name: 'Factory Energy Monitoring',
+    description: 'Energy, alerts, device availability, trend, and AI analysis for factory operations.',
+    layout: DEFAULT_OVERVIEW_LAYOUT,
+    widgets: DEFAULT_OVERVIEW_WIDGETS,
+  },
+  {
+    id: 'solar-monitoring',
+    name: 'Solar Monitoring',
+    description: 'Prioritizes daily energy, online equipment, production trends, and asset distribution.',
+    layout: [
+      { i: 'kpi-energy-today', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-online-devices', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-total-devices', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-active-alerts', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'trend', x: 0, y: 2, w: 6, h: 5, minW: 4, minH: 3 },
+      { i: 'chart_1', x: 6, y: 2, w: 6, h: 5, minW: 3, minH: 3 },
+      { i: 'ai', x: 0, y: 7, w: 4, h: 4, minW: 3, minH: 3 },
+      { i: 'chart_2', x: 4, y: 7, w: 4, h: 4, minW: 3, minH: 3 },
+    ],
+    widgets: [
+      { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
+      { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
+      { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
+      { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
+      { id: 'trend', type: 'trend' },
+      { id: 'chart_1', type: 'chart', chartId: '1' },
+      { id: 'ai', type: 'ai' },
+      { id: 'chart_2', type: 'chart', chartId: '2' },
+    ],
+  },
+  {
+    id: 'cold-storage',
+    name: 'Cold Storage Monitoring',
+    description: 'Focuses on active alerts, device availability, anomaly analysis, and trend review.',
+    layout: [
+      { i: 'kpi-active-alerts', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-online-devices', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-total-devices', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-energy-today', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'ai', x: 0, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
+      { i: 'trend', x: 4, y: 2, w: 4, h: 5, minW: 4, minH: 3 },
+      { i: 'chart_1', x: 8, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
+    ],
+    widgets: [
+      { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
+      { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
+      { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
+      { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
+      { id: 'ai', type: 'ai' },
+      { id: 'trend', type: 'trend' },
+      { id: 'chart_1', type: 'chart', chartId: '1' },
+    ],
+  },
+  {
+    id: 'water-pump',
+    name: 'Water Pump Monitoring',
+    description: 'Balances device health, alerts, runtime trends, and workflow guidance.',
+    layout: [
+      { i: 'kpi-online-devices', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-active-alerts', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-energy-today', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-total-devices', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'trend', x: 0, y: 2, w: 5, h: 5, minW: 4, minH: 3 },
+      { i: 'chart_2', x: 5, y: 2, w: 3, h: 5, minW: 3, minH: 3 },
+      { i: 'ai', x: 8, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
+    ],
+    widgets: [
+      { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
+      { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
+      { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
+      { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
+      { id: 'trend', type: 'trend' },
+      { id: 'chart_2', type: 'chart', chartId: '2' },
+      { id: 'ai', type: 'ai' },
+    ],
+  },
+  {
+    id: 'air-compressor',
+    name: 'Air Compressor Monitoring',
+    description: 'Highlights energy usage, savings opportunities, alerts, and operating trends.',
+    layout: [
+      { i: 'kpi-energy-today', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-active-alerts', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-online-devices', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-total-devices', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'trend', x: 0, y: 2, w: 6, h: 5, minW: 4, minH: 3 },
+      { i: 'ai', x: 6, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
+      { i: 'chart_1', x: 0, y: 7, w: 4, h: 4, minW: 3, minH: 3 },
+    ],
+    widgets: [
+      { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
+      { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
+      { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
+      { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
+      { id: 'trend', type: 'trend' },
+      { id: 'ai', type: 'ai' },
+      { id: 'chart_1', type: 'chart', chartId: '1' },
+    ],
+  },
+];
+
 export interface WorkflowNode {
   id: string;
   type: 'trigger' | 'condition' | 'action';
@@ -73,8 +206,14 @@ interface AppState {
   // Overview Dashboard
   overviewLayout: any[];
   overviewWidgets: OverviewWidget[];
+  dashboardTemplates: DashboardTemplate[];
+  activeDashboardTemplateId: string;
   updateOverviewLayout: (layout: any[]) => void;
   updateOverviewWidgets: (widgets: OverviewWidget[]) => void;
+  applyDashboardTemplate: (id: string) => void;
+  addDashboardTemplate: (template: DashboardTemplate) => void;
+  updateDashboardTemplate: (template: DashboardTemplate) => void;
+  deleteDashboardTemplate: (id: string) => void;
   addOverviewWidget: (widget: OverviewWidget, layoutItem: any) => void;
   removeOverviewWidget: (id: string) => void;
   // Workflows
@@ -132,24 +271,70 @@ export const useAppStore = create<AppState>()(
       addChart: (chart) => set((state) => ({ charts: [...state.charts, chart] })),
       removeChart: (id) => set((state) => ({ charts: state.charts.filter(c => c.id !== id) })),
 
-      overviewLayout: [
-        { i: 'kpi-total-devices', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-        { i: 'kpi-online-devices', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-        { i: 'kpi-energy-today', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-        { i: 'kpi-active-alerts', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-        { i: 'trend', x: 0, y: 2, w: 8, h: 4, minW: 4, minH: 3 },
-        { i: 'ai', x: 8, y: 2, w: 4, h: 4, minW: 3, minH: 3 }
-      ],
-      overviewWidgets: [
-        { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
-        { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
-        { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
-        { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
-        { id: 'trend', type: 'trend' },
-        { id: 'ai', type: 'ai' }
-      ],
+      overviewLayout: cloneLayout(DEFAULT_OVERVIEW_LAYOUT),
+      overviewWidgets: cloneWidgets(DEFAULT_OVERVIEW_WIDGETS),
+      dashboardTemplates: DASHBOARD_TEMPLATES.map((template) => ({
+        ...template,
+        layout: cloneLayout(template.layout),
+        widgets: cloneWidgets(template.widgets),
+      })),
+      activeDashboardTemplateId: 'factory-energy',
       updateOverviewLayout: (layout) => set({ overviewLayout: layout }),
       updateOverviewWidgets: (widgets) => set({ overviewWidgets: widgets }),
+      applyDashboardTemplate: (id) => set((state) => {
+        const template = state.dashboardTemplates.find((item) => item.id === id);
+        if (!template) return {};
+
+        return {
+          activeDashboardTemplateId: id,
+          overviewLayout: cloneLayout(template.layout),
+          overviewWidgets: cloneWidgets(template.widgets),
+        };
+      }),
+      addDashboardTemplate: (template) => set((state) => ({
+        dashboardTemplates: [
+          ...state.dashboardTemplates,
+          {
+            ...template,
+            layout: cloneLayout(template.layout),
+            widgets: cloneWidgets(template.widgets),
+          },
+        ],
+        activeDashboardTemplateId: template.id,
+        overviewLayout: cloneLayout(template.layout),
+        overviewWidgets: cloneWidgets(template.widgets),
+      })),
+      updateDashboardTemplate: (template) => set((state) => ({
+        dashboardTemplates: state.dashboardTemplates.map((item) => (
+          item.id === template.id
+            ? { ...template, layout: cloneLayout(template.layout), widgets: cloneWidgets(template.widgets) }
+            : item
+        )),
+        activeDashboardTemplateId: template.id,
+        overviewLayout: cloneLayout(template.layout),
+        overviewWidgets: cloneWidgets(template.widgets),
+      })),
+      deleteDashboardTemplate: (id) => set((state) => {
+        const remainingTemplates = state.dashboardTemplates.filter((template) => template.id !== id);
+        const fallbackTemplate = remainingTemplates[0];
+
+        if (!fallbackTemplate) {
+          const fallback = DASHBOARD_TEMPLATES[0];
+          return {
+            dashboardTemplates: [{ ...fallback, layout: cloneLayout(fallback.layout), widgets: cloneWidgets(fallback.widgets) }],
+            activeDashboardTemplateId: fallback.id,
+            overviewLayout: cloneLayout(fallback.layout),
+            overviewWidgets: cloneWidgets(fallback.widgets),
+          };
+        }
+
+        return {
+          dashboardTemplates: remainingTemplates,
+          activeDashboardTemplateId: fallbackTemplate.id,
+          overviewLayout: cloneLayout(fallbackTemplate.layout),
+          overviewWidgets: cloneWidgets(fallbackTemplate.widgets),
+        };
+      }),
       addOverviewWidget: (widget, layoutItem) => set((state) => ({
         overviewWidgets: [...state.overviewWidgets, widget],
         overviewLayout: [...state.overviewLayout, layoutItem]

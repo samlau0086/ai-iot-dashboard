@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal } from 'lucide-react';
+import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { mockEnergyTrends, mockDevices, mockAlerts } from '../lib/mockData';
 import { useAppStore } from '../lib/store';
+import type { DashboardTemplate } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { Responsive, WidthProvider } from 'react-grid-layout/legacy';
 import { ChartRenderer } from '../components/ChartRenderer';
@@ -63,10 +64,29 @@ const collidesWithLayout = (item: any, layout: any[]) => {
 };
 
 export function Overview() {
-  const { language, theme, charts, overviewWidgets, overviewLayout, addOverviewWidget, removeOverviewWidget, updateOverviewLayout, updateOverviewWidgets } = useAppStore();
+  const {
+    language,
+    theme,
+    charts,
+    overviewWidgets,
+    overviewLayout,
+    dashboardTemplates,
+    activeDashboardTemplateId,
+    addOverviewWidget,
+    removeOverviewWidget,
+    updateOverviewLayout,
+    updateOverviewWidgets,
+    applyDashboardTemplate,
+    addDashboardTemplate,
+    updateDashboardTemplate,
+    deleteDashboardTemplate,
+  } = useAppStore();
   const t = translations[language];
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [activeSnapGuide, setActiveSnapGuide] = useState<SnapGuide>({});
+  const [templateEditorMode, setTemplateEditorMode] = useState<'new' | 'edit' | null>(null);
+  const [templateName, setTemplateName] = useState('');
+  const [templateDescription, setTemplateDescription] = useState('');
 
   const snapGuides = useMemo(() => {
     return overviewLayout.reduce<Record<string, { x: number[]; y: number[] }>>((acc, item: any) => {
@@ -206,6 +226,63 @@ export function Overview() {
     setActiveSnapGuide({});
   };
 
+  const activeTemplate = dashboardTemplates.find((template) => template.id === activeDashboardTemplateId) || dashboardTemplates[0];
+  const selectedTemplateId = activeTemplate?.id || '';
+
+  const openNewTemplate = () => {
+    setTemplateEditorMode('new');
+    setTemplateName('Custom Monitoring');
+    setTemplateDescription('Custom dashboard template.');
+  };
+
+  const openEditTemplate = () => {
+    if (!activeTemplate) return;
+
+    setTemplateEditorMode('edit');
+    setTemplateName(activeTemplate.name);
+    setTemplateDescription(activeTemplate.description);
+  };
+
+  const closeTemplateEditor = () => {
+    setTemplateEditorMode(null);
+    setTemplateName('');
+    setTemplateDescription('');
+  };
+
+  const buildTemplateFromCurrentDashboard = (id: string, name: string, description: string): DashboardTemplate => ({
+    id,
+    name: name.trim() || 'Untitled Monitoring',
+    description: description.trim(),
+    layout: overviewLayout.map((item) => ({ ...item })),
+    widgets: overviewWidgets.map((widget) => ({ ...widget })),
+  });
+
+  const saveTemplate = () => {
+    if (templateEditorMode === 'new') {
+      addDashboardTemplate(buildTemplateFromCurrentDashboard(`custom-${Date.now()}`, templateName, templateDescription));
+      closeTemplateEditor();
+      return;
+    }
+
+    if (templateEditorMode === 'edit' && activeTemplate) {
+      updateDashboardTemplate(buildTemplateFromCurrentDashboard(activeTemplate.id, templateName, templateDescription));
+      closeTemplateEditor();
+      return;
+    }
+
+    if (activeTemplate) {
+      updateDashboardTemplate(buildTemplateFromCurrentDashboard(activeTemplate.id, activeTemplate.name, activeTemplate.description));
+    }
+  };
+
+  const handleTemplateDelete = () => {
+    if (!activeTemplate) return;
+    if (!window.confirm(`Delete template "${activeTemplate.name}"?`)) return;
+
+    deleteDashboardTemplate(activeTemplate.id);
+    closeTemplateEditor();
+  };
+
   const handleAddChart = (chart: any) => {
     const id = `chart_${chart.id}`;
     if (overviewWidgets.find(w => w.id === id)) return; // already added
@@ -334,15 +411,63 @@ export function Overview() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{t.overview.title}</h1>
           <div className="mt-1 inline-flex bg-slate-200 dark:bg-slate-800 rounded px-2 py-0.5 text-[10px] font-mono text-slate-700 dark:text-slate-400">
             {t.overview.site}
           </div>
         </div>
-        
-        <div className="relative">
+
+        <div className="flex flex-wrap items-start justify-end gap-2">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] p-2 shadow-sm">
+            <select
+              value={selectedTemplateId}
+              onChange={(event) => {
+                applyDashboardTemplate(event.target.value);
+                closeTemplateEditor();
+              }}
+              className="h-9 min-w-[240px] rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-700 dark:text-slate-300 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+            >
+              {dashboardTemplates.map((template) => (
+                <option key={template.id} value={template.id}>{template.name}</option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={openNewTemplate}
+              className="inline-flex h-9 items-center gap-1.5 rounded border border-slate-300 dark:border-slate-700 px-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+            >
+              <Plus className="h-4 w-4" />
+              New
+            </button>
+            <button
+              type="button"
+              onClick={openEditTemplate}
+              className="inline-flex h-9 items-center gap-1.5 rounded border border-slate-300 dark:border-slate-700 px-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+            >
+              <Pencil className="h-4 w-4" />
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={saveTemplate}
+              className="inline-flex h-9 items-center gap-1.5 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500"
+            >
+              <Save className="h-4 w-4" />
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={handleTemplateDelete}
+              className="inline-flex h-9 items-center justify-center rounded border border-slate-300 dark:border-slate-700 px-2.5 text-slate-500 hover:border-red-300 hover:text-red-600 dark:text-slate-400 dark:hover:border-red-500/50 dark:hover:text-red-400"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="relative">
           <button 
             type="button" 
             onClick={() => setShowAddMenu(!showAddMenu)}
@@ -381,8 +506,49 @@ export function Overview() {
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
+
+      {templateEditorMode && (
+        <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] p-4 shadow-sm">
+          <div className="grid gap-3 lg:grid-cols-[minmax(220px,320px)_1fr_auto] lg:items-end">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Template name</label>
+              <input
+                value={templateName}
+                onChange={(event) => setTemplateName(event.target.value)}
+                className="mt-1 h-10 w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Description</label>
+              <input
+                value={templateDescription}
+                onChange={(event) => setTemplateDescription(event.target.value)}
+                className="mt-1 h-10 w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={saveTemplate}
+                className="inline-flex h-10 items-center gap-1.5 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500"
+              >
+                <Save className="h-4 w-4" />
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={closeTemplateEditor}
+                className="inline-flex h-10 items-center justify-center rounded border border-slate-300 dark:border-slate-700 px-3 text-slate-500 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="-mx-4 pb-[100px] relative">
         <div className="pointer-events-none absolute inset-x-4 top-0 z-20">
