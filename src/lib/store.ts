@@ -17,13 +17,31 @@ export interface ChartConfig {
   id: string;
   title: string;
   type: 'bar' | 'pie' | 'line';
-  dataSource: 'energy' | 'devices' | 'alerts';
+  dataSource: 'energy' | 'devices' | 'alerts' | 'solar' | 'coldStorage' | 'waterPump' | 'airCompressor';
 }
+
+export type OverviewKpiKey =
+  | 'totalDevices'
+  | 'onlineDevices'
+  | 'energyToday'
+  | 'activeAlerts'
+  | 'solarGeneration'
+  | 'solarEfficiency'
+  | 'batterySoc'
+  | 'coldRoomTemp'
+  | 'coldRoomHumidity'
+  | 'doorOpenEvents'
+  | 'pumpFlowRate'
+  | 'waterPressure'
+  | 'pumpRuntime'
+  | 'compressorPressure'
+  | 'compressorRuntime'
+  | 'airLeakageRate';
 
 export interface OverviewWidget {
   id: string;
   type: 'kpi' | 'kpis' | 'trend' | 'ai' | 'chart';
-  kpiKey?: 'totalDevices' | 'onlineDevices' | 'energyToday' | 'activeAlerts';
+  kpiKey?: OverviewKpiKey;
   chartId?: string;
 }
 
@@ -55,6 +73,21 @@ const DEFAULT_OVERVIEW_WIDGETS: OverviewWidget[] = [
 
 const cloneLayout = (layout: any[]) => layout.map((item) => ({ ...item }));
 const cloneWidgets = (widgets: OverviewWidget[]) => widgets.map((widget) => ({ ...widget }));
+const DEFAULT_CHARTS: ChartConfig[] = [
+  { id: '1', title: 'Weekly Consumption', type: 'bar', dataSource: 'energy' },
+  { id: '2', title: 'Device Distribution', type: 'pie', dataSource: 'devices' },
+  { id: 'solar-production', title: 'PV Production Curve', type: 'line', dataSource: 'solar' },
+  { id: 'cold-temperature', title: 'Cold Room Temperature', type: 'line', dataSource: 'coldStorage' },
+  { id: 'pump-pressure', title: 'Pump Pressure Trend', type: 'line', dataSource: 'waterPump' },
+  { id: 'compressor-pressure', title: 'Compressor Pressure Trend', type: 'line', dataSource: 'airCompressor' }
+];
+const mergeDefaultCharts = (charts: ChartConfig[] = []) => {
+  const existingIds = new Set(charts.map((chart) => chart.id));
+  return [
+    ...charts,
+    ...DEFAULT_CHARTS.filter((chart) => !existingIds.has(chart.id)),
+  ];
+};
 
 const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
@@ -67,24 +100,24 @@ const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
     id: 'solar-monitoring',
     name: 'Solar Monitoring',
-    description: 'Prioritizes daily energy, online equipment, production trends, and asset distribution.',
+    description: 'Tracks PV generation, inverter availability, battery state, efficiency, and production trends.',
     layout: [
-      { i: 'kpi-energy-today', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-online-devices', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-total-devices', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-active-alerts', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-solar-generation', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-solar-efficiency', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-battery-soc', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-online-devices', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
       { i: 'trend', x: 0, y: 2, w: 6, h: 5, minW: 4, minH: 3 },
-      { i: 'chart_1', x: 6, y: 2, w: 6, h: 5, minW: 3, minH: 3 },
+      { i: 'chart_solar_production', x: 6, y: 2, w: 6, h: 5, minW: 3, minH: 3 },
       { i: 'ai', x: 0, y: 7, w: 4, h: 4, minW: 3, minH: 3 },
       { i: 'chart_2', x: 4, y: 7, w: 4, h: 4, minW: 3, minH: 3 },
     ],
     widgets: [
-      { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
+      { id: 'kpi-solar-generation', type: 'kpi', kpiKey: 'solarGeneration' },
+      { id: 'kpi-solar-efficiency', type: 'kpi', kpiKey: 'solarEfficiency' },
+      { id: 'kpi-battery-soc', type: 'kpi', kpiKey: 'batterySoc' },
       { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
-      { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
-      { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
       { id: 'trend', type: 'trend' },
-      { id: 'chart_1', type: 'chart', chartId: '1' },
+      { id: 'chart_solar_production', type: 'chart', chartId: 'solar-production' },
       { id: 'ai', type: 'ai' },
       { id: 'chart_2', type: 'chart', chartId: '2' },
     ],
@@ -92,70 +125,70 @@ const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
     id: 'cold-storage',
     name: 'Cold Storage Monitoring',
-    description: 'Focuses on active alerts, device availability, anomaly analysis, and trend review.',
+    description: 'Tracks cold room temperature, humidity, door events, alerts, and anomaly analysis.',
     layout: [
-      { i: 'kpi-active-alerts', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-online-devices', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-total-devices', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-energy-today', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-cold-room-temp', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-cold-room-humidity', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-door-open-events', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-active-alerts', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
       { i: 'ai', x: 0, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
       { i: 'trend', x: 4, y: 2, w: 4, h: 5, minW: 4, minH: 3 },
-      { i: 'chart_1', x: 8, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
+      { i: 'chart_cold_temperature', x: 8, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
     ],
     widgets: [
+      { id: 'kpi-cold-room-temp', type: 'kpi', kpiKey: 'coldRoomTemp' },
+      { id: 'kpi-cold-room-humidity', type: 'kpi', kpiKey: 'coldRoomHumidity' },
+      { id: 'kpi-door-open-events', type: 'kpi', kpiKey: 'doorOpenEvents' },
       { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
-      { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
-      { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
-      { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
       { id: 'ai', type: 'ai' },
       { id: 'trend', type: 'trend' },
-      { id: 'chart_1', type: 'chart', chartId: '1' },
+      { id: 'chart_cold_temperature', type: 'chart', chartId: 'cold-temperature' },
     ],
   },
   {
     id: 'water-pump',
     name: 'Water Pump Monitoring',
-    description: 'Balances device health, alerts, runtime trends, and workflow guidance.',
+    description: 'Tracks pump flow, water pressure, runtime, alerts, and system guidance.',
     layout: [
-      { i: 'kpi-online-devices', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-active-alerts', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-energy-today', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-total-devices', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-pump-flow-rate', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-water-pressure', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-pump-runtime', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-active-alerts', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
       { i: 'trend', x: 0, y: 2, w: 5, h: 5, minW: 4, minH: 3 },
-      { i: 'chart_2', x: 5, y: 2, w: 3, h: 5, minW: 3, minH: 3 },
+      { i: 'chart_pump_pressure', x: 5, y: 2, w: 3, h: 5, minW: 3, minH: 3 },
       { i: 'ai', x: 8, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
     ],
     widgets: [
-      { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
+      { id: 'kpi-pump-flow-rate', type: 'kpi', kpiKey: 'pumpFlowRate' },
+      { id: 'kpi-water-pressure', type: 'kpi', kpiKey: 'waterPressure' },
+      { id: 'kpi-pump-runtime', type: 'kpi', kpiKey: 'pumpRuntime' },
       { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
-      { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
-      { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
       { id: 'trend', type: 'trend' },
-      { id: 'chart_2', type: 'chart', chartId: '2' },
+      { id: 'chart_pump_pressure', type: 'chart', chartId: 'pump-pressure' },
       { id: 'ai', type: 'ai' },
     ],
   },
   {
     id: 'air-compressor',
     name: 'Air Compressor Monitoring',
-    description: 'Highlights energy usage, savings opportunities, alerts, and operating trends.',
+    description: 'Tracks compressor pressure, runtime, air leakage, energy usage, and savings opportunities.',
     layout: [
-      { i: 'kpi-energy-today', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-active-alerts', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-online-devices', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-      { i: 'kpi-total-devices', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-compressor-pressure', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-compressor-runtime', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-air-leakage-rate', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+      { i: 'kpi-energy-today', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
       { i: 'trend', x: 0, y: 2, w: 6, h: 5, minW: 4, minH: 3 },
       { i: 'ai', x: 6, y: 2, w: 4, h: 5, minW: 3, minH: 3 },
-      { i: 'chart_1', x: 0, y: 7, w: 4, h: 4, minW: 3, minH: 3 },
+      { i: 'chart_compressor_pressure', x: 0, y: 7, w: 4, h: 4, minW: 3, minH: 3 },
     ],
     widgets: [
+      { id: 'kpi-compressor-pressure', type: 'kpi', kpiKey: 'compressorPressure' },
+      { id: 'kpi-compressor-runtime', type: 'kpi', kpiKey: 'compressorRuntime' },
+      { id: 'kpi-air-leakage-rate', type: 'kpi', kpiKey: 'airLeakageRate' },
       { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
-      { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
-      { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
-      { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
       { id: 'trend', type: 'trend' },
       { id: 'ai', type: 'ai' },
-      { id: 'chart_1', type: 'chart', chartId: '1' },
+      { id: 'chart_compressor_pressure', type: 'chart', chartId: 'compressor-pressure' },
     ],
   },
 ];
@@ -264,10 +297,7 @@ export const useAppStore = create<AppState>()(
         users: state.users.map(u => u.id === state.currentUser.id ? { ...u, ...user } : u)
       })),
 
-      charts: [
-        { id: '1', title: 'Weekly Consumption', type: 'bar', dataSource: 'energy' },
-        { id: '2', title: 'Device Distribution', type: 'pie', dataSource: 'devices' }
-      ],
+      charts: DEFAULT_CHARTS,
       addChart: (chart) => set((state) => ({ charts: [...state.charts, chart] })),
       removeChart: (id) => set((state) => ({ charts: state.charts.filter(c => c.id !== id) })),
 
@@ -379,6 +409,31 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'app-storage',
+      version: 3,
+      migrate: (persistedState: any, version) => {
+        if (version >= 3 || !persistedState) return persistedState;
+
+        const builtInTemplateIds = new Set(DASHBOARD_TEMPLATES.map((template) => template.id));
+        const customTemplates = (persistedState.dashboardTemplates || []).filter((template: DashboardTemplate) => !builtInTemplateIds.has(template.id));
+        const upgradedTemplates = [
+          ...DASHBOARD_TEMPLATES.map((template) => ({
+            ...template,
+            layout: cloneLayout(template.layout),
+            widgets: cloneWidgets(template.widgets),
+          })),
+          ...customTemplates,
+        ];
+        const activeTemplate = upgradedTemplates.find((template) => template.id === persistedState.activeDashboardTemplateId) || upgradedTemplates[0];
+
+        return {
+          ...persistedState,
+          charts: mergeDefaultCharts(persistedState.charts),
+          dashboardTemplates: upgradedTemplates,
+          activeDashboardTemplateId: activeTemplate.id,
+          overviewLayout: cloneLayout(activeTemplate.layout),
+          overviewWidgets: cloneWidgets(activeTemplate.widgets),
+        };
+      },
     }
   )
 );

@@ -79,6 +79,10 @@ export function Analytics() {
                         <option value="energy">Energy Metrics</option>
                         <option value="devices">Device Health</option>
                         <option value="alerts">Alert Frequency</option>
+                        <option value="solar">Solar Production</option>
+                        <option value="coldStorage">Cold Storage Temperature</option>
+                        <option value="waterPump">Water Pump Pressure</option>
+                        <option value="airCompressor">Air Compressor Pressure</option>
                       </select>
                     </div>
                     <div>

@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X } from 'lucide-react';
+import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { mockEnergyTrends, mockDevices, mockAlerts } from '../lib/mockData';
 import { useAppStore } from '../lib/store';
-import type { DashboardTemplate } from '../lib/store';
+import type { DashboardTemplate, OverviewKpiKey } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { Responsive, WidthProvider } from 'react-grid-layout/legacy';
 import { ChartRenderer } from '../components/ChartRenderer';
@@ -20,13 +20,30 @@ type SnapGuide = {
   y?: number;
 };
 
-type KpiKey = 'totalDevices' | 'onlineDevices' | 'energyToday' | 'activeAlerts';
-
-const KPI_WIDGETS: { id: string; key: KpiKey; x: number }[] = [
+const KPI_WIDGETS: { id: string; key: OverviewKpiKey; x: number }[] = [
   { id: 'kpi-total-devices', key: 'totalDevices', x: 0 },
   { id: 'kpi-online-devices', key: 'onlineDevices', x: 3 },
   { id: 'kpi-energy-today', key: 'energyToday', x: 6 },
   { id: 'kpi-active-alerts', key: 'activeAlerts', x: 9 },
+];
+
+const AVAILABLE_KPI_WIDGETS: { id: string; key: OverviewKpiKey; category: string }[] = [
+  { id: 'kpi-total-devices', key: 'totalDevices', category: 'Common' },
+  { id: 'kpi-online-devices', key: 'onlineDevices', category: 'Common' },
+  { id: 'kpi-active-alerts', key: 'activeAlerts', category: 'Common' },
+  { id: 'kpi-energy-today', key: 'energyToday', category: 'Energy' },
+  { id: 'kpi-solar-generation', key: 'solarGeneration', category: 'Solar' },
+  { id: 'kpi-solar-efficiency', key: 'solarEfficiency', category: 'Solar' },
+  { id: 'kpi-battery-soc', key: 'batterySoc', category: 'Solar' },
+  { id: 'kpi-cold-room-temp', key: 'coldRoomTemp', category: 'Cold Storage' },
+  { id: 'kpi-cold-room-humidity', key: 'coldRoomHumidity', category: 'Cold Storage' },
+  { id: 'kpi-door-open-events', key: 'doorOpenEvents', category: 'Cold Storage' },
+  { id: 'kpi-pump-flow-rate', key: 'pumpFlowRate', category: 'Water Pump' },
+  { id: 'kpi-water-pressure', key: 'waterPressure', category: 'Water Pump' },
+  { id: 'kpi-pump-runtime', key: 'pumpRuntime', category: 'Water Pump' },
+  { id: 'kpi-compressor-pressure', key: 'compressorPressure', category: 'Air Compressor' },
+  { id: 'kpi-compressor-runtime', key: 'compressorRuntime', category: 'Air Compressor' },
+  { id: 'kpi-air-leakage-rate', key: 'airLeakageRate', category: 'Air Compressor' },
 ];
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
@@ -113,11 +130,23 @@ export function Overview() {
     }, {});
   }, [overviewLayout]);
 
-  const stats: Record<KpiKey, { name: string; value: string; icon: any }> = {
+  const stats: Record<OverviewKpiKey, { name: string; value: string; icon: any }> = {
     totalDevices: { name: t.overview.totalDevices, value: mockDevices.length.toString(), icon: Server },
     onlineDevices: { name: t.overview.onlineDevices, value: mockDevices.filter(d => d.status === 'online').length.toString(), icon: Activity },
     energyToday: { name: t.overview.energyToday, value: '728.8 kWh', icon: Zap },
     activeAlerts: { name: t.overview.activeAlerts, value: mockAlerts.filter(a => a.status === 'active').length.toString(), icon: AlertTriangle },
+    solarGeneration: { name: 'PV Generation Today', value: '1.84 MWh', icon: Sun },
+    solarEfficiency: { name: 'Inverter Efficiency', value: '96.8%', icon: Activity },
+    batterySoc: { name: 'Battery SOC', value: '78%', icon: BatteryCharging },
+    coldRoomTemp: { name: 'Cold Room Temp', value: '-18.4 deg C', icon: Thermometer },
+    coldRoomHumidity: { name: 'Humidity', value: '62%', icon: Droplets },
+    doorOpenEvents: { name: 'Door Open Events', value: '7', icon: DoorOpen },
+    pumpFlowRate: { name: 'Flow Rate', value: '128 m3/h', icon: Waves },
+    waterPressure: { name: 'Water Pressure', value: '4.6 bar', icon: Gauge },
+    pumpRuntime: { name: 'Pump Runtime', value: '18.2 h', icon: Timer },
+    compressorPressure: { name: 'Air Pressure', value: '7.8 bar', icon: Gauge },
+    compressorRuntime: { name: 'Compressor Runtime', value: '14.6 h', icon: Timer },
+    airLeakageRate: { name: 'Leakage Rate', value: '3.2%', icon: Wind },
   };
 
   useEffect(() => {
@@ -294,7 +323,17 @@ export function Overview() {
     setShowAddMenu(false);
   };
 
-  const renderKPI = (kpiKey?: KpiKey) => {
+  const handleAddKPI = (kpi: { id: string; key: OverviewKpiKey }) => {
+    if (overviewWidgets.some((widget) => widget.id === kpi.id)) return;
+
+    addOverviewWidget(
+      { id: kpi.id, type: 'kpi', kpiKey: kpi.key },
+      { i: kpi.id, x: 0, y: Infinity, w: 3, h: 2, minW: 2, minH: 2 }
+    );
+    setShowAddMenu(false);
+  };
+
+  const renderKPI = (kpiKey?: OverviewKpiKey) => {
     if (!kpiKey) return null;
 
     const stat = stats[kpiKey];
@@ -478,9 +517,31 @@ export function Overview() {
           </button>
           
           {showAddMenu && (
-            <div className="absolute right-0 mt-2 w-56 rounded-md bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50">
+            <div className="absolute right-0 mt-2 max-h-[70vh] w-72 overflow-y-auto rounded-md bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50">
               <div className="py-1">
-                <div className="px-3 py-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider border-b border-slate-100 dark:border-slate-700">Analytics Charts</div>
+                <div className="px-3 py-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider border-b border-slate-100 dark:border-slate-700">Industry KPIs</div>
+                {AVAILABLE_KPI_WIDGETS.map(kpi => {
+                  const stat = stats[kpi.key];
+                  const isAdded = overviewWidgets.some(widget => widget.id === kpi.id);
+                  return (
+                    <button
+                      key={kpi.id}
+                      onClick={() => handleAddKPI(kpi)}
+                      disabled={isAdded}
+                      className={cn(
+                        "w-full text-left px-4 py-2 text-sm transition-colors",
+                        isAdded
+                          ? "text-slate-400 dark:text-slate-500 cursor-not-allowed bg-slate-50 dark:bg-slate-800/50"
+                          : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                      )}
+                    >
+                      <span className="block truncate">{stat.name}</span>
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-400">{kpi.category}</span>
+                    </button>
+                  );
+                })}
+
+                <div className="px-3 py-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider border-y border-slate-100 dark:border-slate-700">Analytics Charts</div>
                 {charts.length === 0 && (
                   <div className="px-4 py-3 text-xs text-slate-500">No charts available. Go to Analytics to create some.</div>
                 )}

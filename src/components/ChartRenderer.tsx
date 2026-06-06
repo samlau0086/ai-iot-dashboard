@@ -22,6 +22,34 @@ const mockDataSources: Record<string, any[]> = {
     { name: 'Week 2', A: 5 },
     { name: 'Week 3', A: 15 },
     { name: 'Week 4', A: 8 },
+  ],
+  solar: [
+    { name: '06:00', A: 120 },
+    { name: '09:00', A: 640 },
+    { name: '12:00', A: 1180 },
+    { name: '15:00', A: 920 },
+    { name: '18:00', A: 180 },
+  ],
+  coldStorage: [
+    { name: '00:00', A: -18.1 },
+    { name: '06:00', A: -18.6 },
+    { name: '12:00', A: -17.9 },
+    { name: '18:00', A: -18.4 },
+    { name: '24:00', A: -18.2 },
+  ],
+  waterPump: [
+    { name: '00:00', A: 4.2 },
+    { name: '06:00', A: 4.8 },
+    { name: '12:00', A: 4.5 },
+    { name: '18:00', A: 4.9 },
+    { name: '24:00', A: 4.6 },
+  ],
+  airCompressor: [
+    { name: '00:00', A: 7.4 },
+    { name: '06:00', A: 7.9 },
+    { name: '12:00', A: 7.6 },
+    { name: '18:00', A: 8.1 },
+    { name: '24:00', A: 7.8 },
   ]
 };
 
