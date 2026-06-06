@@ -358,6 +358,35 @@ type BackendState = Partial<Pick<AppState,
   | 'workflows'
 >>;
 
+const SESSION_USER_ID_KEY = 'ai-iot-dashboard-session-user-id';
+
+const getStoredSessionUserId = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(SESSION_USER_ID_KEY);
+  } catch (error) {
+    return null;
+  }
+};
+
+const setStoredSessionUserId = (userId: string) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SESSION_USER_ID_KEY, userId);
+  } catch (error) {
+    console.warn('Failed to persist login session', error);
+  }
+};
+
+const clearStoredSessionUserId = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(SESSION_USER_ID_KEY);
+  } catch (error) {
+    console.warn('Failed to clear login session', error);
+  }
+};
+
 const pickBackendState = (state: AppState): BackendState => ({
   language: state.language,
   theme: state.theme,
@@ -387,17 +416,33 @@ export const useAppStore = create<AppState>()(
           if (!response.ok) throw new Error(`State load failed: ${response.status}`);
           const payload = await response.json();
           const state = payload.state as BackendState | null;
+          const users = state?.users || useAppStore.getState().users;
+          const sessionUserId = getStoredSessionUserId();
+          const sessionUser = sessionUserId
+            ? users.find((user) => user.id === sessionUserId && user.status === 'approved') || null
+            : null;
+
+          if (sessionUserId && !sessionUser) {
+            clearStoredSessionUserId();
+          }
 
           set({
             ...(state || {}),
             devices: mergeDefaultDevices(state?.devices),
             charts: mergeDefaultCharts(state?.charts),
-            currentUser: null,
+            currentUser: sessionUser,
             backendHydrated: true,
           } as Partial<AppState>);
         } catch (error) {
           console.error(error);
-          set({ backendHydrated: true });
+          const sessionUserId = getStoredSessionUserId();
+          const sessionUser = sessionUserId
+            ? useAppStore.getState().users.find((user) => user.id === sessionUserId && user.status === 'approved') || null
+            : null;
+          if (sessionUserId && !sessionUser) {
+            clearStoredSessionUserId();
+          }
+          set({ currentUser: sessionUser, backendHydrated: true });
         }
       },
       language: 'en',
@@ -478,10 +523,13 @@ export const useAppStore = create<AppState>()(
         users: state.users.map(u => u.id === id ? { ...u, ...user } : u),
         currentUser: state.currentUser && state.currentUser.id === id ? { ...state.currentUser, ...user } : state.currentUser
       })),
-      deleteUser: (id) => set((state) => ({
-        users: state.users.filter(u => u.id !== id),
-        currentUser: state.currentUser && state.currentUser.id === id ? null : state.currentUser
-      })),
+      deleteUser: (id) => {
+        if (useAppStore.getState().currentUser?.id === id) clearStoredSessionUserId();
+        set((state) => ({
+          users: state.users.filter(u => u.id !== id),
+          currentUser: state.currentUser && state.currentUser.id === id ? null : state.currentUser
+        }));
+      },
       approveUser: (id, role, siteId) => set((state) => ({
         users: state.users.map((user) => (
           user.id === id
@@ -489,21 +537,28 @@ export const useAppStore = create<AppState>()(
             : user
         ))
       })),
-      rejectUser: (id) => set((state) => ({
-        users: state.users.map((user) => (
-          user.id === id ? { ...user, status: 'rejected' } : user
-        )),
-        currentUser: state.currentUser && state.currentUser.id === id ? null : state.currentUser
-      })),
+      rejectUser: (id) => {
+        if (useAppStore.getState().currentUser?.id === id) clearStoredSessionUserId();
+        set((state) => ({
+          users: state.users.map((user) => (
+            user.id === id ? { ...user, status: 'rejected' } : user
+          )),
+          currentUser: state.currentUser && state.currentUser.id === id ? null : state.currentUser
+        }));
+      },
       login: (email, password) => {
         const user = useAppStore.getState().users.find((item) => item.email.toLowerCase() === email.trim().toLowerCase());
         if (!user || user.password !== password) return { ok: false, message: 'Invalid email or password.' };
         if (user.status !== 'approved') return { ok: false, message: 'Your account is waiting for approval.' };
 
+        setStoredSessionUserId(user.id);
         set({ currentUser: user });
         return { ok: true, message: 'Signed in.' };
       },
-      logout: () => set({ currentUser: null }),
+      logout: () => {
+        clearStoredSessionUserId();
+        set({ currentUser: null });
+      },
 
       currentUser: null,
       updateCurrentUser: (user) => set((state) => ({
