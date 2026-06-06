@@ -4,11 +4,11 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { mockEnergyTrends, mockDevices, mockAlerts } from '../lib/mockData';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
-import * as ReactGridLayout from 'react-grid-layout';
+import { Responsive, WidthProvider } from 'react-grid-layout/legacy';
 import { ChartRenderer } from '../components/ChartRenderer';
 import { cn } from '../lib/utils';
 
-const ResponsiveGridLayout = ReactGridLayout.WidthProvider(ReactGridLayout.Responsive);
+const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
 const GRID_ROW_HEIGHT = 80;
 const GRID_MARGIN: [number, number] = [16, 16];
