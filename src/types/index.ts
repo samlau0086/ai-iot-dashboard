@@ -48,6 +48,22 @@ export interface Device {
   config?: DeviceConfig;
 }
 
+export interface DeviceTelemetryMessage {
+  device_id?: string;
+  deviceId?: string;
+  id?: string;
+  name?: string;
+  device_type?: DeviceType;
+  type?: DeviceType;
+  site_id?: string;
+  tags?: string[];
+  metrics?: Record<string, number>;
+  status?: 'online' | 'offline' | 'warning';
+  timestamp?: string;
+  lastSeen?: string;
+  firmwareVersion?: string;
+}
+
 export type AlertLevel = 'Info' | 'Warning' | 'Critical' | 'Emergency';
 
 export interface Alert {

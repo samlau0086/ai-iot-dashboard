@@ -1,5 +1,154 @@
 # AI IoT Dashboard
 
+## Roadmap
+
+本 Roadmap 依据系统最初定义整理，用于记录 AI Industrial Operations Platform 的建设进度。项目目标不是只做一个固定 IoT Dashboard，而是逐步演进为：
+
+```text
+设备接入 -> 数据采集 -> 可视化 -> 告警 -> 控制 -> 自动化 -> AI 决策
+```
+
+最终产品定义：
+
+```text
+An AI-powered industrial operations platform that connects machines, meters and sensors, monitors real-time data, controls devices remotely, automates workflows, and helps industrial teams reduce energy costs and equipment downtime.
+```
+
+### 当前进度概览
+
+| 阶段 | 目标 | 当前状态 |
+| --- | --- | --- |
+| V1 Energy Monitoring MVP | 设备、能耗看板、告警、Demo 数据、基础报表 | 进行中 |
+| V2 Industry Dashboard Engine | 行业模板、Tag 方案、可编辑看板、Widget Builder | 进行中 |
+| V3 Device & Data Foundation | 真实设备数据、数据中心、指标查询、导出 | 规划中 |
+| V4 Control Center | 远程控制、参数下发、控制日志、权限校验 | 规划中 |
+| V5 Workflow Automation | Trigger / Condition / Action、通知、Webhook、任务与报告自动化 | 进行中 |
+| V6 AI Copilot | 自然语言查询、异常分析、建议动作、生成报表与工作流 | 规划中 |
+| V7 Partner / White Label | 多租户、客户管理、白标、代理商后台 | 规划中 |
+
+### V1: Energy Monitoring MVP
+
+目标：先完成可演示、可查询、可扩展的工业能耗监控基础版本。
+
+- [x] Overview 总览中心
+- [x] 设备列表与设备详情
+- [x] 设备 Tags 筛选
+- [x] Demo 设备、告警、能耗和工作流数据
+- [x] 告警中心基础页面
+- [x] 报表中心基础页面
+- [x] PM2 + VPS 自动部署
+- [x] 接入真实设备数据 API / MQTT WebSocket Bridge 前端入口
+- [ ] 替换 Mock 告警和能耗数据
+- [ ] 基础报表导出
+
+### V2: Industry Dashboard Engine
+
+目标：形成“Dashboard Engine + Industry Templates”，而不是一个写死的看板。
+
+- [x] Factory Energy Monitoring 模板
+- [x] Solar Monitoring 模板
+- [x] Cold Storage Monitoring 模板
+- [x] Water Pump Monitoring 模板
+- [x] Air Compressor Monitoring 模板
+- [ ] CNC Machine Monitoring 模板
+- [x] Tag 对应方案与看板
+- [x] 模板新增、编辑、删除、保存
+- [x] Drag & Drop 看板布局
+- [x] Widget 磁性对齐与参考线
+- [x] Widget Builder
+- [x] 可用 Widget 拖入看板
+- [x] Widget 标题、图标、绑定设备、显示方式配置
+- [x] Number / Line / Area / Bar / Gauge / Status / Donut 显示方式
+- [x] 一键 Auto Layout 排版
+- [ ] Widget 阈值、单位、精度、颜色规则配置
+- [ ] Widget 模板市场 / 预设库
+
+### V3: Device & Data Foundation
+
+目标：从前端 Demo 走向真实工业 IoT 数据底座。
+
+- [x] 支持多类型设备抽象：energy_meter、plc、temperature_sensor、solar_inverter、pump_controller、air_compressor、gateway
+- [x] 设备 Tags 分组
+- [ ] 站点 Site / Tenant 数据模型
+- [ ] MQTT Broker 接入：EMQX / Mosquitto
+- [ ] 工业协议接入规划：Modbus RTU、Modbus TCP、CAN、LoRa、4G、Ethernet、WiFi
+- [ ] 原始数据查看
+- [ ] 指标筛选
+- [ ] 时间范围查询
+- [ ] 设备对比
+- [ ] 数据导出
+- [ ] SQL-like Query / Metric Builder
+
+### V4: Control Center
+
+目标：从“只能看”升级为“可以安全控制”的工业运营平台。
+
+- [ ] 远程开关
+- [ ] 远程重启
+- [ ] 参数下发
+- [ ] 模式切换
+- [ ] 手动控制
+- [ ] 批量控制
+- [ ] 控制记录
+- [ ] 权限控制
+- [ ] 二次确认
+- [ ] 危险操作审批
+- [ ] 失败回滚
+- [ ] 本地手动优先机制
+
+### V5: Workflow Automation
+
+目标：建设工业版 Zapier / n8n，用规则自动响应设备和运营事件。
+
+- [x] Workflow 页面基础结构
+- [x] Trigger / Condition / Action 概念建模
+- [x] 设备离线、指标阈值、告警、定时、AI、Webhook、MQTT 等触发类型占位
+- [x] 通知、工单、Webhook、报告、AI 分析等动作类型占位
+- [ ] 后端工作流执行器
+- [ ] 真实通知渠道：Email、WhatsApp、Telegram、SMS、Webhook、Slack
+- [ ] Workflow Run 历史
+- [ ] 自动报告
+- [ ] 设备控制动作接入
+
+### V6: AI Copilot
+
+目标：AI 不只是聊天机器人，而要具备分析、解释、建议、执行四类能力。
+
+- [x] AI Insights 页面基础界面
+- [x] Overview AI 运维助手卡片
+- [ ] 自然语言查询设备、告警、能耗和报表
+- [ ] 异常原因分析
+- [ ] 相关设备定位
+- [ ] 建议动作
+- [ ] AI 生成报表
+- [ ] AI 创建工作流
+- [ ] RAG 知识库
+- [ ] pgvector / 向量检索
+- [ ] Tool Calling 执行控制、报告、工作流等动作
+
+### V7: Partner / White Label
+
+目标：支持系统集成商、自动化公司、能源服务商、Solar EPC、Electrical Contractor 面向自己的客户交付平台。
+
+- [ ] 多租户 Tenant / Site
+- [ ] 客户管理
+- [ ] 项目管理
+- [ ] 白标 Logo
+- [ ] 自定义域名
+- [ ] 代理商后台
+- [ ] 客户子账号
+- [ ] 项目报价记录
+- [ ] 角色权限：Owner、Admin、Engineer、Operator、Viewer、Partner、Customer
+
+### 技术演进方向
+
+- 前端：React、TypeScript、Vite、Tailwind CSS、Zustand、Recharts、React Grid Layout
+- 后端：Node.js + NestJS 或 Python FastAPI
+- 数据库：PostgreSQL、TimescaleDB、Redis、pgvector
+- IoT：MQTT Broker、Modbus、CAN、LoRa、HTTP、WebSocket
+- AI：RAG Knowledge Base、AI Agent、Tool Calling、Report Generator
+- 部署：Docker、Cloudflare、PM2、VPS、Object Storage、可选 Grafana
+
 AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用于集中管理设备、查看能耗与告警、配置自动化工作流，并通过 AI Copilot 辅助分析设备状态和运营异常。
 
 系统当前以 Vite + React 构建，内置模拟设备、告警、能耗和工作流数据，适合用于演示、二次开发、部署到自有 VPS 或接入真实 IoT 数据源。
@@ -194,6 +343,72 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 |-- tsconfig.json
 `-- vite.config.ts
 ```
+
+## 真实设备数据接入
+
+项目已提供前端真实设备数据接入入口，可通过 `.env.local` 配置 HTTP API 或 MQTT WebSocket Bridge。
+
+### HTTP API
+
+```bash
+VITE_DEVICE_API_URL="https://your-api.example.com/devices"
+VITE_DEVICE_API_TOKEN="your-api-token"
+VITE_DEVICE_API_POLL_MS=10000
+```
+
+接口响应支持两种格式：
+
+```json
+[
+  {
+    "device_id": "DEV-001",
+    "device_type": "energy_meter",
+    "tags": ["factory-a"],
+    "metrics": {
+      "voltage": 220,
+      "current": 18.5,
+      "power": 4070,
+      "energy_today": 128.6
+    },
+    "status": "online",
+    "timestamp": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+也可以返回：
+
+```json
+{
+  "devices": []
+}
+```
+
+### MQTT / WebSocket Bridge
+
+浏览器端当前不直接内置 MQTT TCP 客户端，而是通过 WebSocket 接收后端或 MQTT Bridge 转换后的 JSON 遥测消息：
+
+```bash
+VITE_MQTT_WS_URL="wss://your-api.example.com/iot/telemetry"
+```
+
+WebSocket 消息格式：
+
+```json
+{
+  "device_id": "DEV-001",
+  "device_type": "energy_meter",
+  "tags": ["factory-a"],
+  "metrics": {
+    "power": 4070,
+    "energy_today": 128.6
+  },
+  "status": "online",
+  "timestamp": "2026-06-05T10:00:00Z"
+}
+```
+
+接入后，设备列表、总览 Tag 看板、Widget Builder 绑定设备和指标展示都会使用真实设备状态与 metrics。
 
 ## 后续接入建议
 

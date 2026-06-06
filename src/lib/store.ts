@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 import { Language } from './i18n';
 import { Device } from '../types';
 import { mockDevices } from './mockData';
+import { mergeTelemetryIntoDevices } from './deviceData';
+import type { DeviceTelemetryMessage } from '../types';
 
 export interface User {
   id: string;
@@ -266,7 +268,11 @@ interface AppState {
   setWebhookUrl: (url: string) => void;
   // Devices
   devices: Device[];
+  deviceDataSourceStatus: 'mock' | 'api' | 'mqtt' | 'error';
   addDevice: (device: Device) => void;
+  setDevices: (devices: Device[], source?: 'api' | 'mqtt' | 'mock') => void;
+  applyTelemetryMessage: (message: DeviceTelemetryMessage, source?: 'mqtt' | 'api') => void;
+  setDeviceDataSourceStatus: (status: 'mock' | 'api' | 'mqtt' | 'error') => void;
   updateDevice: (id: string, device: Partial<Device>) => void;
   deleteDevice: (id: string) => void;
   // Users
@@ -324,7 +330,14 @@ export const useAppStore = create<AppState>()(
       setWebhookUrl: (url) => set({ webhookUrl: url }),
 
       devices: mockDevices,
+      deviceDataSourceStatus: 'mock',
       addDevice: (device) => set((state) => ({ devices: [...state.devices, device] })),
+      setDevices: (devices, source = 'api') => set({ devices, deviceDataSourceStatus: source }),
+      applyTelemetryMessage: (message, source = 'mqtt') => set((state) => ({
+        devices: mergeTelemetryIntoDevices(state.devices, message),
+        deviceDataSourceStatus: source,
+      })),
+      setDeviceDataSourceStatus: (status) => set({ deviceDataSourceStatus: status }),
       updateDevice: (id, device) => set((state) => ({
         devices: state.devices.map(d => d.id === id ? { ...d, ...device } : d)
       })),

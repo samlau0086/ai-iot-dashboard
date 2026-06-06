@@ -11,11 +11,13 @@ import { AIInsights } from './views/AIInsights';
 import { Settings } from './views/Settings';
 import { Profile } from './views/Profile';
 import { useAppStore } from './lib/store';
+import { useDeviceDataConnection } from './hooks/useDeviceDataConnection';
 
 import { DeviceDetails } from './views/DeviceDetails';
 
 export default function App() {
   const { theme } = useAppStore();
+  useDeviceDataConnection();
 
   useEffect(() => {
     if (theme === 'dark') {
