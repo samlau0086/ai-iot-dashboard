@@ -38,7 +38,11 @@ function DeviceDataConnection() {
 }
 
 export default function App() {
-  const { theme } = useAppStore();
+  const { theme, backendHydrated, hydrateBackendState } = useAppStore();
+
+  useEffect(() => {
+    hydrateBackendState();
+  }, [hydrateBackendState]);
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -47,6 +51,14 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
+
+  if (!backendHydrated) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-sm text-slate-300">
+        Loading AI IoT Dashboard...
+      </div>
+    );
+  }
 
   return (
     <BrowserRouter>

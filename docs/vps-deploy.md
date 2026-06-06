@@ -8,11 +8,11 @@ The production app runs as a Node.js process managed by PM2. The Node server ser
 
 - Runs automatically when code is pushed to `main`.
 - Can also be started manually from GitHub Actions with **Run workflow**.
-- Installs dependencies in GitHub Actions with `npm ci`.
+- Installs dependencies in GitHub Actions with `npm install`.
 - Runs `npm run lint`.
 - Builds the Vite app with `npm run build`.
 - Uploads `dist`, `server.js`, `ecosystem.config.cjs`, `package.json`, and `package-lock.json` to your VPS.
-- Runs `npm ci --omit=dev` on the VPS.
+- Runs `npm install --omit=dev` on the VPS.
 - Starts or reloads the app with `pm2 startOrReload ecosystem.config.cjs --update-env`.
 
 ## Required GitHub Secrets
@@ -27,6 +27,7 @@ Add these in your GitHub repository:
 | `VPS_USER` | `deploy` | SSH username. |
 | `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----...` | Private key used to SSH into the VPS. |
 | `VPS_DEPLOY_PATH` | `/var/www/ai-iot-dashboard` | App deployment directory. The workflow creates it automatically with `mkdir -p`, but `VPS_USER` must have permission to create and write to it. |
+| `DATABASE_URL` | `postgresql://user:password@host:5432/ai_iot_dashboard` | PostgreSQL connection string. Use a database with pgvector available. |
 
 ## Optional GitHub Secrets
 
@@ -34,6 +35,7 @@ Add these in your GitHub repository:
 | --- | --- | --- |
 | `VPS_PORT` | `22` | SSH port. Defaults to `22`. |
 | `VPS_APP_PORT` | `3006` | Node app port used by PM2. Defaults to `3006`. |
+| `DATABASE_SSL` | `true` | Enables TLS for managed PostgreSQL providers. |
 | `VPS_KNOWN_HOSTS` | Output of `ssh-keyscan -H your-host` | Pins the server host key. If omitted, the workflow runs `ssh-keyscan`. |
 | `VPS_POST_DEPLOY` | `sudo systemctl reload nginx` | Command to run on the VPS after PM2 reload. |
 | `GEMINI_API_KEY` | `your-api-key` | Passed to the build if the app needs it at build time. |

@@ -30,6 +30,7 @@ jobs:
           test -n "${{ secrets.VPS_USER }}" || (echo "Missing VPS_USER secret." && exit 1)
           test -n "${{ secrets.VPS_SSH_KEY }}" || (echo "Missing VPS_SSH_KEY secret." && exit 1)
           test -n "${{ secrets.VPS_DEPLOY_PATH }}" || (echo "Missing VPS_DEPLOY_PATH secret." && exit 1)
+          test -n "${{ secrets.DATABASE_URL }}" || (echo "Missing DATABASE_URL secret." && exit 1)
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -38,7 +39,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Type check
         run: npm run lint
@@ -74,7 +75,7 @@ jobs:
       - name: Ensure deploy path and deploy on VPS
         run: |
           ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            "DEPLOY_PATH='${{ secrets.VPS_DEPLOY_PATH }}' DEPLOY_ARCHIVE='$DEPLOY_ARCHIVE' APP_PORT='$APP_PORT' VPS_POST_DEPLOY='${{ secrets.VPS_POST_DEPLOY }}' bash -s" <<'EOF'
+            "DEPLOY_PATH='${{ secrets.VPS_DEPLOY_PATH }}' DEPLOY_ARCHIVE='$DEPLOY_ARCHIVE' APP_PORT='$APP_PORT' DATABASE_URL='${{ secrets.DATABASE_URL }}' DATABASE_SSL='${{ secrets.DATABASE_SSL }}' VPS_POST_DEPLOY='${{ secrets.VPS_POST_DEPLOY }}' bash -s" <<'EOF'
           set -euo pipefail
 
           if [ -z "$DEPLOY_PATH" ]; then
@@ -97,14 +98,14 @@ jobs:
           rm -f "/tmp/$DEPLOY_ARCHIVE"
 
           cd "$DEPLOY_PATH"
-          npm ci --omit=dev
+          npm install --omit=dev
 
           if ! command -v pm2 >/dev/null 2>&1; then
             echo "PM2 is not installed on the VPS. Install it with: npm install -g pm2"
             exit 1
           fi
 
-          PORT="$APP_PORT" pm2 startOrReload ecosystem.config.cjs --update-env
+          PORT="$APP_PORT" DATABASE_URL="$DATABASE_URL" DATABASE_SSL="$DATABASE_SSL" pm2 startOrReload ecosystem.config.cjs --update-env
           pm2 save
 
           if [ -n "$VPS_POST_DEPLOY" ]; then

@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import { Language } from './i18n';
 import { Device } from '../types';
 import { mockDevices } from './mockData';
@@ -268,6 +267,8 @@ export interface Workflow {
 }
 
 interface AppState {
+  backendHydrated: boolean;
+  hydrateBackendState: () => Promise<void>;
   language: Language;
   theme: 'light' | 'dark';
   setLanguage: (lang: Language) => void;
@@ -337,9 +338,68 @@ interface AppState {
   deleteWorkflow: (id: string) => void;
 }
 
+type BackendState = Partial<Pick<AppState,
+  | 'language'
+  | 'theme'
+  | 'barkUrl'
+  | 'emailAlerts'
+  | 'webhookUrl'
+  | 'notificationChannels'
+  | 'devices'
+  | 'deviceDataSourceStatus'
+  | 'users'
+  | 'charts'
+  | 'overviewLayout'
+  | 'overviewWidgets'
+  | 'overviewWidgetLibrary'
+  | 'dashboardTemplates'
+  | 'activeDashboardTemplateId'
+  | 'tagDashboardTemplateMap'
+  | 'workflows'
+>>;
+
+const pickBackendState = (state: AppState): BackendState => ({
+  language: state.language,
+  theme: state.theme,
+  barkUrl: state.barkUrl,
+  emailAlerts: state.emailAlerts,
+  webhookUrl: state.webhookUrl,
+  notificationChannels: state.notificationChannels,
+  devices: state.devices,
+  deviceDataSourceStatus: state.deviceDataSourceStatus,
+  users: state.users,
+  charts: state.charts,
+  overviewLayout: state.overviewLayout,
+  overviewWidgets: state.overviewWidgets,
+  overviewWidgetLibrary: state.overviewWidgetLibrary,
+  dashboardTemplates: state.dashboardTemplates,
+  activeDashboardTemplateId: state.activeDashboardTemplateId,
+  tagDashboardTemplateMap: state.tagDashboardTemplateMap,
+  workflows: state.workflows,
+});
+
 export const useAppStore = create<AppState>()(
-  persist(
     (set) => ({
+      backendHydrated: false,
+      hydrateBackendState: async () => {
+        try {
+          const response = await fetch('/api/state');
+          if (!response.ok) throw new Error(`State load failed: ${response.status}`);
+          const payload = await response.json();
+          const state = payload.state as BackendState | null;
+
+          set({
+            ...(state || {}),
+            devices: mergeDefaultDevices(state?.devices),
+            charts: mergeDefaultCharts(state?.charts),
+            currentUser: null,
+            backendHydrated: true,
+          } as Partial<AppState>);
+        } catch (error) {
+          console.error(error);
+          set({ backendHydrated: true });
+        }
+      },
       language: 'en',
       theme: 'dark',
       setLanguage: (lang) => set({ language: lang }),
@@ -586,70 +646,22 @@ export const useAppStore = create<AppState>()(
       deleteWorkflow: (id) => set((state) => ({
         workflows: state.workflows.filter(w => w.id !== id)
       }))
-    }),
-    {
-      name: 'app-storage',
-      version: 10,
-      migrate: (persistedState: any, version) => {
-        if (!persistedState) return persistedState;
-
-        if (version >= 9 && version < 10) return persistedState;
-
-        if (version >= 8 && version < 9) {
-          const upgradedUsers = (persistedState.users || []).map((user: User) => ({
-            ...user,
-            status: user.status || 'approved',
-          }));
-
-          const legacyChannels: NotificationChannel[] = [
-            persistedState.barkUrl ? { id: 'legacy-bark', type: 'bark', name: 'Bark Primary', target: persistedState.barkUrl, enabled: true } : null,
-            persistedState.emailAlerts ? { id: 'legacy-email', type: 'email', name: 'Alert Email', target: persistedState.emailAlerts, enabled: true } : null,
-            persistedState.webhookUrl ? { id: 'legacy-webhook', type: 'webhook', name: 'Webhook Primary', target: persistedState.webhookUrl, enabled: true } : null,
-          ].filter(Boolean) as NotificationChannel[];
-
-          return {
-            ...persistedState,
-            users: upgradedUsers,
-            currentUser: null,
-            notificationChannels: persistedState.notificationChannels || legacyChannels,
-          };
-        }
-
-        if (version >= 10) return persistedState;
-
-        const builtInTemplateIds = new Set(DASHBOARD_TEMPLATES.map((template) => template.id));
-        const customTemplates = (persistedState.dashboardTemplates || []).filter((template: DashboardTemplate) => !builtInTemplateIds.has(template.id));
-        const upgradedTemplates = [
-          ...DASHBOARD_TEMPLATES.map((template) => ({
-            ...template,
-            layout: cloneLayout(template.layout),
-            widgets: cloneWidgets(template.widgets),
-          })),
-          ...customTemplates,
-        ];
-        const activeTemplate = upgradedTemplates.find((template) => template.id === persistedState.activeDashboardTemplateId) || upgradedTemplates[0];
-
-        return {
-          ...persistedState,
-          devices: mergeDefaultDevices(persistedState.devices),
-          charts: mergeDefaultCharts(persistedState.charts),
-          overviewWidgetLibrary: cloneWidgets(persistedState.overviewWidgetLibrary || []),
-          dashboardTemplates: upgradedTemplates,
-          activeDashboardTemplateId: activeTemplate.id,
-          tagDashboardTemplateMap: {
-            ...DEFAULT_TAG_TEMPLATE_MAP,
-            ...(persistedState.tagDashboardTemplateMap || {}),
-          },
-          overviewLayout: cloneLayout(activeTemplate.layout),
-          overviewWidgets: cloneWidgets(activeTemplate.widgets),
-          users: (persistedState.users || []).map((user: User) => ({
-            ...user,
-            status: user.status || 'approved',
-          })),
-          currentUser: null,
-          notificationChannels: persistedState.notificationChannels || [],
-        };
-      },
-    }
-  )
+    })
 );
+
+let backendSaveTimer: number | undefined;
+
+useAppStore.subscribe((state) => {
+  if (!state.backendHydrated) return;
+
+  window.clearTimeout(backendSaveTimer);
+  backendSaveTimer = window.setTimeout(() => {
+    fetch('/api/state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pickBackendState(useAppStore.getState())),
+    }).catch((error) => {
+      console.error('Failed to save dashboard state', error);
+    });
+  }, 400);
+});

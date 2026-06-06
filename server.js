@@ -2,8 +2,11 @@ import express from 'express';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
+import pg from 'pg';
 import tls from 'tls';
 import {fileURLToPath} from 'url';
+
+const {Pool} = pg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,6 +15,9 @@ const port = Number(process.env.PORT || process.env.VITE_PORT || 3006);
 const distDir = path.join(__dirname, 'dist');
 const runtimeConfigPath = path.join(__dirname, 'runtime-config.json');
 const ingestToken = process.env.IOT_INGEST_TOKEN || '';
+const databaseUrl = process.env.DATABASE_URL || '';
+const databaseSsl = process.env.DATABASE_SSL === 'true' ? {rejectUnauthorized: false} : undefined;
+const db = databaseUrl ? new Pool({connectionString: databaseUrl, ssl: databaseSsl}) : null;
 const telemetryMessages = [];
 const maxTelemetryMessages = Number(process.env.IOT_TELEMETRY_BUFFER_SIZE || 500);
 let mqttConfig = {
@@ -44,7 +50,68 @@ try {
 }
 
 const saveRuntimeConfig = () => {
-  fs.writeFileSync(runtimeConfigPath, JSON.stringify({mqttConfig}, null, 2));
+  if (!db) {
+    fs.writeFileSync(runtimeConfigPath, JSON.stringify({mqttConfig}, null, 2));
+  }
+};
+
+const queryDb = async (sql, params = []) => {
+  if (!db) return null;
+  return db.query(sql, params);
+};
+
+const initDatabase = async () => {
+  if (!db) {
+    console.warn('DATABASE_URL is not set. Falling back to in-memory runtime data.');
+    return;
+  }
+
+  await queryDb('CREATE EXTENSION IF NOT EXISTS vector');
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS app_state (
+      key text PRIMARY KEY,
+      value jsonb NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS telemetry_messages (
+      id bigserial PRIMARY KEY,
+      device_id text NOT NULL,
+      topic text,
+      source text NOT NULL DEFAULT 'http',
+      payload jsonb NOT NULL,
+      metrics jsonb NOT NULL,
+      embedding vector(1536),
+      received_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_device_received ON telemetry_messages (device_id, received_at DESC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_received ON telemetry_messages (received_at DESC)');
+
+  const mqttState = await getAppState('mqtt_config');
+  if (mqttState) {
+    mqttConfig = {
+      ...mqttConfig,
+      ...mqttState,
+      topics: Array.isArray(mqttState.topics) ? mqttState.topics : mqttConfig.topics,
+    };
+  }
+};
+
+const getAppState = async (key) => {
+  const result = await queryDb('SELECT value FROM app_state WHERE key = $1', [key]);
+  return result?.rows?.[0]?.value || null;
+};
+
+const setAppState = async (key, value) => {
+  await queryDb(
+    `INSERT INTO app_state (key, value, updated_at)
+     VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (key)
+     DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [key, JSON.stringify(value)]
+  );
 };
 
 const encodeMqttString = (value) => {
@@ -110,7 +177,31 @@ const createMqttSubscribePacket = (topics) => {
   return createMqttPacket(0x82, Buffer.concat([packetIdBuffer, ...subscriptions]));
 };
 
-const ingestTelemetryPayload = (payload) => {
+const persistTelemetryMessages = async (messages, source = 'http') => {
+  if (!db || messages.length === 0) return;
+
+  const values = [];
+  const placeholders = messages.map((message, index) => {
+    const offset = index * 6;
+    values.push(
+      message.device_id || message.deviceId || message.id,
+      message.mqtt_topic || message.topic || null,
+      source,
+      JSON.stringify(message),
+      JSON.stringify(message.metrics || {}),
+      message.received_at
+    );
+    return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}::jsonb, $${offset + 5}::jsonb, $${offset + 6}::timestamptz)`;
+  }).join(', ');
+
+  await queryDb(
+    `INSERT INTO telemetry_messages (device_id, topic, source, payload, metrics, received_at)
+     VALUES ${placeholders}`,
+    values
+  );
+};
+
+const ingestTelemetryPayload = async (payload, source = 'http') => {
   const messages = Array.isArray(payload) ? payload : [payload];
   const accepted = [];
 
@@ -129,6 +220,8 @@ const ingestTelemetryPayload = (payload) => {
   if (telemetryMessages.length > maxTelemetryMessages) {
     telemetryMessages.splice(0, telemetryMessages.length - maxTelemetryMessages);
   }
+
+  await persistTelemetryMessages(accepted, source);
 
   return accepted;
 };
@@ -163,7 +256,7 @@ const createMqttPubackPacket = (packetId) => {
   return createMqttPacket(0x40, packetIdBuffer);
 };
 
-const handleMqttPublish = (packet, flags) => {
+const handleMqttPublish = async (packet, flags) => {
   if (packet.length < 2) return;
   const topicLength = packet.readUInt16BE(0);
   const topicEnd = 2 + topicLength;
@@ -184,10 +277,11 @@ const handleMqttPublish = (packet, flags) => {
 
   try {
     const payload = JSON.parse(payloadText);
-    const accepted = ingestTelemetryPayload(
+    const accepted = await ingestTelemetryPayload(
       Array.isArray(payload)
         ? payload.map((item) => ({...item, mqtt_topic: topic}))
-        : {...payload, mqtt_topic: topic}
+        : {...payload, mqtt_topic: topic},
+      'mqtt'
     );
     if (accepted.length > 0) {
       mqttStatus = {...mqttStatus, lastMessageAt: new Date().toISOString()};
@@ -236,7 +330,9 @@ const handleMqttData = (chunk) => {
     }
 
     if (packetType === 3) {
-      handleMqttPublish(packet, flags);
+      handleMqttPublish(packet, flags).catch((error) => {
+        mqttStatus = {...mqttStatus, message: error.message};
+      });
     }
   }
 };
@@ -326,59 +422,125 @@ app.get('/api/mqtt/config', (_req, res) => {
   });
 });
 
-app.post('/api/mqtt/config', (req, res) => {
-  const nextConfig = req.body || {};
-  mqttConfig = {
-    enabled: Boolean(nextConfig.enabled),
-    brokerUrl: String(nextConfig.brokerUrl || '').trim(),
-    username: String(nextConfig.username || '').trim(),
-    password: String(nextConfig.password || ''),
-    topics: Array.isArray(nextConfig.topics)
-      ? nextConfig.topics.map((topic) => String(topic).trim()).filter(Boolean)
-      : String(nextConfig.topics || '').split(',').map((topic) => topic.trim()).filter(Boolean),
-  };
-  saveRuntimeConfig();
-
-  startMqttSubscriber();
-  res.status(200).json({
-    config: {
-      enabled: mqttConfig.enabled,
-      brokerUrl: mqttConfig.brokerUrl,
-      username: mqttConfig.username,
-      topics: mqttConfig.topics,
-    },
-    status: mqttStatus,
-  });
-});
-
-app.post('/api/telemetry', (req, res) => {
-  if (ingestToken) {
-    const providedToken = req.get('x-iot-token') || req.get('authorization')?.replace(/^Bearer\s+/i, '');
-    if (providedToken !== ingestToken) {
-      res.status(401).json({error: 'invalid telemetry token'});
-      return;
+app.post('/api/mqtt/config', async (req, res) => {
+  try {
+    const nextConfig = req.body || {};
+    mqttConfig = {
+      enabled: Boolean(nextConfig.enabled),
+      brokerUrl: String(nextConfig.brokerUrl || '').trim(),
+      username: String(nextConfig.username || '').trim(),
+      password: String(nextConfig.password || ''),
+      topics: Array.isArray(nextConfig.topics)
+        ? nextConfig.topics.map((topic) => String(topic).trim()).filter(Boolean)
+        : String(nextConfig.topics || '').split(',').map((topic) => topic.trim()).filter(Boolean),
+    };
+    if (db) {
+      await setAppState('mqtt_config', mqttConfig);
+    } else {
+      saveRuntimeConfig();
     }
+
+    startMqttSubscriber();
+    res.status(200).json({
+      config: {
+        enabled: mqttConfig.enabled,
+        brokerUrl: mqttConfig.brokerUrl,
+        username: mqttConfig.username,
+        topics: mqttConfig.topics,
+      },
+      status: mqttStatus,
+    });
+  } catch (error) {
+    res.status(500).json({error: error.message});
   }
-
-  const accepted = ingestTelemetryPayload(req.body);
-
-  res.status(202).json({accepted: accepted.length});
 });
 
-app.get('/api/telemetry', (req, res) => {
-  const since = typeof req.query.since === 'string' ? req.query.since : '';
-  const messages = since
-    ? telemetryMessages.filter((message) => message.received_at > since)
-    : telemetryMessages.slice(-100);
+app.post('/api/telemetry', async (req, res) => {
+  try {
+    if (ingestToken) {
+      const providedToken = req.get('x-iot-token') || req.get('authorization')?.replace(/^Bearer\s+/i, '');
+      if (providedToken !== ingestToken) {
+        res.status(401).json({error: 'invalid telemetry token'});
+        return;
+      }
+    }
 
-  res.status(200).json({messages});
+    const accepted = await ingestTelemetryPayload(req.body, 'http');
+
+    res.status(202).json({accepted: accepted.length});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.get('/api/telemetry', async (req, res) => {
+  try {
+    const since = typeof req.query.since === 'string' ? req.query.since : '';
+    let messages;
+
+    if (db) {
+      const result = since
+        ? await queryDb(
+          `SELECT payload || jsonb_build_object('received_at', received_at, 'mqtt_topic', topic) AS message
+           FROM telemetry_messages
+           WHERE received_at > $1::timestamptz
+           ORDER BY received_at ASC
+           LIMIT 500`,
+          [since]
+        )
+        : await queryDb(
+          `SELECT payload || jsonb_build_object('received_at', received_at, 'mqtt_topic', topic) AS message
+           FROM telemetry_messages
+           ORDER BY received_at DESC
+           LIMIT 100`
+        );
+      messages = result.rows.map((row) => row.message);
+      if (!since) messages.reverse();
+    } else {
+      messages = since
+        ? telemetryMessages.filter((message) => message.received_at > since)
+        : telemetryMessages.slice(-100);
+    }
+
+    res.status(200).json({messages});
+  } catch (error) {
+    res.status(500).json({error: error.message, messages: []});
+  }
+});
+
+app.get('/api/state', async (_req, res) => {
+  try {
+    const state = await getAppState('dashboard_state');
+    res.status(200).json({state});
+  } catch (error) {
+    res.status(500).json({error: error.message, state: null});
+  }
+});
+
+app.put('/api/state', async (req, res) => {
+  try {
+    await setAppState('dashboard_state', req.body || {});
+    res.status(200).json({ok: true});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
 });
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(distDir, 'index.html'));
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`AI IoT Dashboard is running on port ${port}`);
-  startMqttSubscriber();
-});
+const startServer = async () => {
+  try {
+    await initDatabase();
+  } catch (error) {
+    console.error('Database initialization failed:', error);
+  }
+
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`AI IoT Dashboard is running on port ${port}`);
+    startMqttSubscriber();
+  });
+};
+
+startServer();

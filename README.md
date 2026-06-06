@@ -123,7 +123,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [ ] AI 生成报表
 - [ ] AI 创建工作流
 - [ ] RAG 知识库
-- [ ] pgvector / 向量检索
+- [x] PostgreSQL + pgvector 存储入口
 - [ ] Tool Calling 执行控制、报告、工作流等动作
 
 ### V7: Partner / White Label
@@ -167,7 +167,7 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 - **报表管理**：提供工业运营报表入口，用于管理、下载或发送报告。
 - **系统设置**：支持白标名称、时区、通知渠道、Bark、邮件、Webhook 和用户管理。
 - **主题与语言**：内置浅色/深色主题和中英文语言状态。
-- **本地持久化**：使用 Zustand persist 保存设备、用户、图表、工作流和界面配置。
+- **后端持久化**：使用 PostgreSQL + pgvector 保存设备、用户、看板、工作流、通知配置、MQTT 配置和遥测数据。
 - **一键部署到 VPS**：内置 GitHub Actions 自动化部署工作流。
 
 ## 系统模块
@@ -305,10 +305,11 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 | `VPS_USER` | SSH 登录用户。 |
 | `VPS_SSH_KEY` | SSH 私钥。 |
 | `VPS_DEPLOY_PATH` | PM2 应用部署目录，例如 `/var/www/ai-iot-dashboard`。 |
+| `DATABASE_URL` | PostgreSQL / pgvector 连接字符串，例如 `postgresql://user:password@host:5432/ai_iot_dashboard`。 |
 
 `VPS_DEPLOY_PATH` 指向的目录会由工作流自动执行 `mkdir -p` 创建，但 `VPS_USER` 必须有创建和写入权限。
 
-生产环境会通过 `server.js` 启动 Node 服务，并由 PM2 使用 `ecosystem.config.cjs` 托管。默认应用端口是 `3006`，可通过 GitHub Secret `VPS_APP_PORT` 覆盖。VPS 需要提前安装 Node.js、npm 和 PM2。
+生产环境会通过 `server.js` 启动 Node 服务，并由 PM2 使用 `ecosystem.config.cjs` 托管。默认应用端口是 `3006`，可通过 GitHub Secret `VPS_APP_PORT` 覆盖。VPS 需要提前安装 Node.js、npm 和 PM2。数据库需要启用 `pgvector` 扩展，服务启动时会自动执行 `CREATE EXTENSION IF NOT EXISTS vector` 并创建基础表。
 
 更多 VPS、Nginx 和可选 Secret 配置请查看 [docs/vps-deploy.md](docs/vps-deploy.md)。
 
@@ -393,7 +394,7 @@ MQTT_PASSWORD="optional-password"
 MQTT_TOPICS="devices/+/telemetry,factory-a/#"
 ```
 
-后台保存的 MQTT 配置会写入服务器本地 `runtime-config.json`，该文件不会提交到 Git。当前内置订阅客户端支持 `mqtt://` 和 `mqtts://`，收到消息后会写入同一个 `/api/telemetry` 缓冲区。
+后台保存的 MQTT 配置会写入 PostgreSQL 的 `app_state` 表；未配置 `DATABASE_URL` 的本地演示环境才会回退到服务器本地 `runtime-config.json`。当前内置订阅客户端支持 `mqtt://` 和 `mqtts://`，收到消息后会写入同一个 `/api/telemetry` 缓冲区和 `telemetry_messages` 表。
 
 MQTT Payload 格式：
 
