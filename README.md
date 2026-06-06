@@ -390,6 +390,100 @@ Authorization: Bearer your-token
 }
 ```
 
+本地测试时可以先启动项目，然后用 mock `curl` 直接推送一条设备数据：
+
+```bash
+curl -X POST "http://localhost:3006/api/telemetry" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "DEV-001",
+    "device_type": "energy_meter",
+    "tags": ["factory-a"],
+    "metrics": {
+      "power": 4070,
+      "energy_today": 128.6,
+      "voltage": 380,
+      "current": 10.7
+    },
+    "status": "online",
+    "timestamp": "2026-06-05T10:00:00Z"
+  }'
+```
+
+如果后台 **Settings -> Data Sources** 中新增了 HTTP Push Channel，请使用该通道生成的专属 URL：
+
+```bash
+curl -X POST "http://localhost:3006/api/telemetry/{channelId}/{token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "PUMP-001",
+    "device_type": "water_pump",
+    "tags": ["pump-station"],
+    "metrics": {
+      "flow_rate": 68.5,
+      "pressure": 4.2,
+      "motor_temp": 58.3,
+      "runtime_hours": 1260
+    },
+    "status": "online",
+    "timestamp": "2026-06-05T10:05:00Z"
+  }'
+```
+
+也可以一次推送多台设备，适合快速验证总览看板、设备列表和 Widget metrics 选择：
+
+```bash
+curl -X POST "http://localhost:3006/api/telemetry" \
+  -H "Content-Type: application/json" \
+  -d '[
+    {
+      "device_id": "COLD-ROOM-001",
+      "device_type": "cold_storage",
+      "tags": ["cold-storage"],
+      "metrics": {
+        "temperature": -18.4,
+        "humidity": 62,
+        "door_open_count": 3,
+        "compressor_load": 72
+      },
+      "status": "online"
+    },
+    {
+      "device_id": "AIR-COMP-001",
+      "device_type": "air_compressor",
+      "tags": ["compressed-air"],
+      "metrics": {
+        "pressure": 7.8,
+        "air_flow": 520,
+        "oil_temp": 76,
+        "vibration": 1.8
+      },
+      "status": "warning"
+    },
+    {
+      "device_id": "SOLAR-INV-001",
+      "device_type": "solar_inverter",
+      "tags": ["solar-site"],
+      "metrics": {
+        "pv_power": 52.6,
+        "daily_generation": 318.4,
+        "dc_voltage": 720,
+        "inverter_efficiency": 97.2
+      },
+      "status": "online"
+    }
+  ]'
+```
+
+如果设置了 `IOT_INGEST_TOKEN`，mock 请求需要带认证头：
+
+```bash
+curl -X POST "http://localhost:3006/api/telemetry" \
+  -H "Content-Type: application/json" \
+  -H "x-iot-token: your-token" \
+  -d '{"device_id":"DEV-001","metrics":{"power":4100},"status":"online"}'
+```
+
 Dashboard 前端会自动轮询本机 `/api/telemetry` 缓冲区，并将遥测数据合并到匹配设备。
 
 ### Backend MQTT Subscriber
