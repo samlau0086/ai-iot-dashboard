@@ -220,47 +220,65 @@ export function Settings() {
               <div>
                 <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">Device Data Sources</h2>
                 <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                  These runtime connection settings are saved for the current user and take effect after saving.
+                  Gateway HTTP Push is the recommended path. MQTT bridge settings are saved for the current user and take effect after saving.
                 </p>
               </div>
 
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
                 <div className="flex items-center gap-2">
                   <Database className="h-5 w-5 text-orange-500" />
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">HTTP Device API</h3>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Gateway HTTP Push</h3>
                 </div>
-                <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.5fr_1fr_160px]">
-                  <div>
-                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">API URL</label>
-                    <input
-                      value={dataDraft.apiUrl}
-                      onChange={(event) => setDataDraft((current) => ({ ...current, apiUrl: event.target.value }))}
-                      placeholder="https://your-api.example.com/devices"
-                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Bearer Token</label>
-                    <input
-                      value={dataDraft.apiToken}
-                      onChange={(event) => setDataDraft((current) => ({ ...current, apiToken: event.target.value }))}
-                      placeholder="Optional"
-                      type="password"
-                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Poll ms</label>
-                    <input
-                      value={dataDraft.apiPollMs}
-                      onChange={(event) => setDataDraft((current) => ({ ...current, apiPollMs: Number(event.target.value) }))}
-                      type="number"
-                      min={1000}
-                      step={1000}
-                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                    />
-                  </div>
+                <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  Configure your gateway to POST telemetry JSON to this Dashboard endpoint. The frontend polls this local buffer automatically.
+                </p>
+                <div className="mt-4 rounded-md border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                  <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Gateway POST URL</label>
+                  <code className="mt-1 block overflow-x-auto rounded bg-slate-100 px-3 py-2 text-xs text-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                    {`${window.location.origin}/api/telemetry`}
+                  </code>
+                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    Optional server token: set <span className="font-mono">IOT_INGEST_TOKEN</span> and send it as <span className="font-mono">x-iot-token</span> or Bearer token.
+                  </p>
                 </div>
+
+                <details className="mt-4">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">
+                    Optional external HTTP polling fallback
+                  </summary>
+                  <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.5fr_1fr_160px]">
+                    <div>
+                      <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">API URL</label>
+                      <input
+                        value={dataDraft.apiUrl}
+                        onChange={(event) => setDataDraft((current) => ({ ...current, apiUrl: event.target.value }))}
+                        placeholder="https://your-api.example.com/devices"
+                        className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Bearer Token</label>
+                      <input
+                        value={dataDraft.apiToken}
+                        onChange={(event) => setDataDraft((current) => ({ ...current, apiToken: event.target.value }))}
+                        placeholder="Optional"
+                        type="password"
+                        className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Poll ms</label>
+                      <input
+                        value={dataDraft.apiPollMs}
+                        onChange={(event) => setDataDraft((current) => ({ ...current, apiPollMs: Number(event.target.value) }))}
+                        type="number"
+                        min={1000}
+                        step={1000}
+                        className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                      />
+                    </div>
+                  </div>
+                </details>
               </div>
 
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">

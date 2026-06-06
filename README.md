@@ -346,9 +346,42 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 
 ## 真实设备数据接入
 
-项目已提供前端真实设备数据接入入口。HTTP API 可以通过 `.env.local` 提供默认值，也可以在后台 **Settings -> Data Sources** 中按当前用户配置；MQTT WebSocket Bridge 应在后台 **Settings -> Data Sources** 中配置，不再依赖部署变量。
+项目已提供真实设备数据接入入口。推荐方式是网关通过 HTTP 主动 POST 遥测数据到 Dashboard 后端；外部 HTTP API 拉取仅作为兼容模式保留。MQTT WebSocket Bridge 应在后台 **Settings -> Data Sources** 中配置，不依赖部署变量。
 
-### HTTP API
+### Gateway HTTP Push
+
+网关上报地址：
+
+```text
+POST https://your-dashboard-domain.com/api/telemetry
+```
+
+如果服务端设置了 `IOT_INGEST_TOKEN`，网关需要携带以下任一认证头：
+
+```text
+x-iot-token: your-token
+Authorization: Bearer your-token
+```
+
+请求体可以是一条遥测消息，也可以是遥测消息数组：
+
+```json
+{
+  "device_id": "DEV-001",
+  "device_type": "energy_meter",
+  "tags": ["factory-a"],
+  "metrics": {
+    "power": 4070,
+    "energy_today": 128.6
+  },
+  "status": "online",
+  "timestamp": "2026-06-05T10:00:00Z"
+}
+```
+
+Dashboard 前端会自动轮询本机 `/api/telemetry` 缓冲区，并将遥测数据合并到匹配设备。
+
+### Optional HTTP API Polling Fallback
 
 ```bash
 VITE_DEVICE_API_URL="https://your-api.example.com/devices"
