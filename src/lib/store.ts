@@ -43,7 +43,7 @@ export interface OverviewWidget {
   type: 'kpi' | 'kpis' | 'trend' | 'ai' | 'chart' | 'custom';
   title?: string;
   deviceIds?: string[];
-  displayMode?: 'number' | 'line';
+  displayMode?: 'number' | 'line' | 'area' | 'bar' | 'gauge' | 'status' | 'donut';
   metricKey?: string;
   iconId?: string;
   kpiKey?: OverviewKpiKey;
@@ -487,9 +487,9 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'app-storage',
-      version: 7,
+      version: 8,
       migrate: (persistedState: any, version) => {
-        if (version >= 7 || !persistedState) return persistedState;
+        if (version >= 8 || !persistedState) return persistedState;
 
         const builtInTemplateIds = new Set(DASHBOARD_TEMPLATES.map((template) => template.id));
         const customTemplates = (persistedState.dashboardTemplates || []).filter((template: DashboardTemplate) => !builtInTemplateIds.has(template.id));

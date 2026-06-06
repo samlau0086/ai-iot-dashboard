@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { mockEnergyTrends, mockAlerts } from '../lib/mockData';
 import { useAppStore } from '../lib/store';
 import type { DashboardTemplate, OverviewKpiKey, OverviewWidget } from '../lib/store';
@@ -20,6 +20,8 @@ type SnapGuide = {
   x?: number;
   y?: number;
 };
+
+type WidgetDisplayMode = NonNullable<OverviewWidget['displayMode']>;
 
 const KPI_WIDGETS: { id: string; key: OverviewKpiKey; x: number }[] = [
   { id: 'kpi-total-devices', key: 'totalDevices', x: 0 },
@@ -92,6 +94,16 @@ const averageMetric = (devices: any[], metric: string) => {
 };
 
 const createWidgetId = (prefix: string) => `${prefix}_${Date.now()}_${Math.round(Math.random() * 10000)}`;
+const WIDGET_DISPLAY_OPTIONS: { value: WidgetDisplayMode; label: string }[] = [
+  { value: 'number', label: 'Number' },
+  { value: 'line', label: 'Line Trend' },
+  { value: 'area', label: 'Area Trend' },
+  { value: 'bar', label: 'Bar Chart' },
+  { value: 'gauge', label: 'Gauge' },
+  { value: 'status', label: 'Status' },
+  { value: 'donut', label: 'Donut' },
+];
+const getDisplayModeLabel = (mode?: WidgetDisplayMode) => WIDGET_DISPLAY_OPTIONS.find((option) => option.value === mode)?.label || 'Number';
 
 const collides = (a: any, b: any) => {
   if (a.i === b.i) return false;
@@ -163,7 +175,7 @@ export function Overview() {
   const [editingLibraryWidgetId, setEditingLibraryWidgetId] = useState<string | null>(null);
   const [draggingLibraryWidgetId, setDraggingLibraryWidgetId] = useState<string | null>(null);
   const [builderTitle, setBuilderTitle] = useState('New Widget');
-  const [builderDisplayMode, setBuilderDisplayMode] = useState<'number' | 'line'>('number');
+  const [builderDisplayMode, setBuilderDisplayMode] = useState<WidgetDisplayMode>('number');
   const [builderMetricKey, setBuilderMetricKey] = useState('power');
   const [builderIconId, setBuilderIconId] = useState('activity');
   const [builderDeviceIds, setBuilderDeviceIds] = useState<string[]>([]);
@@ -477,11 +489,11 @@ export function Overview() {
     if (!libraryWidget) return;
 
     const id = createWidgetId(libraryWidget.id);
-    const isLine = libraryWidget.displayMode === 'line';
+    const isChartLike = ['line', 'area', 'bar', 'donut'].includes(libraryWidget.displayMode || '');
 
     addOverviewWidget(
       { ...libraryWidget, id, deviceIds: libraryWidget.deviceIds ? [...libraryWidget.deviceIds] : [] },
-      { i: id, x: 0, y: Infinity, w: isLine ? 5 : 3, h: isLine ? 4 : 2, minW: isLine ? 3 : 2, minH: 2 }
+      { i: id, x: 0, y: Infinity, w: isChartLike ? 5 : 3, h: isChartLike ? 4 : 2, minW: isChartLike ? 3 : 2, minH: 2 }
     );
     setConfigWidgetId(id);
   };
@@ -739,15 +751,23 @@ export function Overview() {
     const metricKey = widget.metricKey || 'power';
     const title = getWidgetTitle(widget);
     const Icon = IOT_ICONS[widget.iconId || 'activity'] || Activity;
+    const displayMode = widget.displayMode || 'number';
+    const value = sumMetric(targetDevices, metricKey);
+    const averageValue = averageMetric(targetDevices, metricKey);
+    const baseline = averageValue || value || 1;
+    const trendData = mockEnergyTrends.map((point, index) => ({
+      time: point.time,
+      value: Number((baseline * (0.72 + index * 0.09)).toFixed(1)),
+    }));
+    const deviceMetricData = targetDevices.map((device) => ({
+      name: device.name,
+      value: Number(device.metrics?.[metricKey]) || 0,
+    }));
+    const chartData = deviceMetricData.length ? deviceMetricData : [{ name: metricKey, value }];
+    const statusLevel = averageValue > 80 ? 'Warning' : averageValue > 0 ? 'Normal' : 'No Data';
+    const gaugeValue = Math.max(0, Math.min(100, averageValue || value));
 
-    if (widget.displayMode === 'line') {
-      const averageValue = averageMetric(targetDevices, metricKey);
-      const baseline = averageValue || 1;
-      const data = mockEnergyTrends.map((point, index) => ({
-        time: point.time,
-        value: Number((baseline * (0.72 + index * 0.09)).toFixed(1)),
-      }));
-
+    if (displayMode === 'line' || displayMode === 'area') {
       return (
         <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
           <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] px-4 py-3 shrink-0 flex justify-between items-center cursor-move draggable-handle">
@@ -759,12 +779,12 @@ export function Overview() {
           </div>
           <div className="p-4 flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <AreaChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={cartesianGridStroke} />
                 <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10, fontFamily: 'monospace'}} dy={10} />
                 <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10, fontFamily: 'monospace'}} />
                 <Tooltip contentStyle={{ borderRadius: '8px', border: `1px solid ${tooltipBorder}`, backgroundColor: tooltipBg, color: tooltipColor }} />
-                <Area type="monotone" dataKey="value" stroke="#ea580c" strokeWidth={2} fill="#ea580c" fillOpacity={0.2} name={metricKey} />
+                <Area type="monotone" dataKey="value" stroke="#ea580c" strokeWidth={2} fill="#ea580c" fillOpacity={displayMode === 'area' ? 0.24 : 0} name={metricKey} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -772,7 +792,102 @@ export function Overview() {
       );
     }
 
-    const value = sumMetric(targetDevices, metricKey);
+    if (displayMode === 'bar') {
+      return (
+        <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
+          <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] px-4 py-3 shrink-0 flex justify-between items-center cursor-move draggable-handle">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200 flex items-center gap-2 truncate">
+              <GripHorizontal className="h-4 w-4 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
+              <Icon className="h-4 w-4 text-orange-500 shrink-0" />
+              {title}
+            </h3>
+          </div>
+          <div className="p-4 flex-1 min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={cartesianGridStroke} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10, fontFamily: 'monospace'}} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10, fontFamily: 'monospace'}} />
+                <Tooltip contentStyle={{ borderRadius: '8px', border: `1px solid ${tooltipBorder}`, backgroundColor: tooltipBg, color: tooltipColor }} />
+                <Bar dataKey="value" fill="#ea580c" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      );
+    }
+
+    if (displayMode === 'donut') {
+      return (
+        <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
+          <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] px-4 py-3 shrink-0 flex justify-between items-center cursor-move draggable-handle">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200 flex items-center gap-2 truncate">
+              <GripHorizontal className="h-4 w-4 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
+              <Icon className="h-4 w-4 text-orange-500 shrink-0" />
+              {title}
+            </h3>
+          </div>
+          <div className="p-4 flex-1 min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={chartData} dataKey="value" nameKey="name" innerRadius="58%" outerRadius="82%" paddingAngle={2}>
+                  {chartData.map((entry, index) => (
+                    <Cell key={entry.name} fill={['#ea580c', '#3b82f6', '#10b981', '#64748b'][index % 4]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ borderRadius: '8px', border: `1px solid ${tooltipBorder}`, backgroundColor: tooltipBg, color: tooltipColor }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      );
+    }
+
+    if (displayMode === 'gauge') {
+      return (
+        <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-center relative group">
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity z-10 cursor-move draggable-handle bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 rounded p-1 shadow-lg pointer-events-auto">
+            <GripHorizontal className="h-4 w-4" />
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium uppercase tracking-wider text-slate-500 mb-2">{title}</p>
+              <p className="text-2xl font-mono font-bold text-slate-900 dark:text-white">{gaugeValue.toFixed(1)}%</p>
+              <p className="mt-1 truncate text-[10px] font-mono text-slate-400">{metricKey}</p>
+            </div>
+            <div className="relative h-20 w-20 shrink-0 rounded-full" style={{ background: `conic-gradient(#ea580c ${gaugeValue * 3.6}deg, ${isDark ? '#334155' : '#e2e8f0'} 0deg)` }}>
+              <div className="absolute inset-3 rounded-full bg-white dark:bg-[#1c2128] flex items-center justify-center">
+                <Icon className="h-5 w-5 text-orange-500" />
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (displayMode === 'status') {
+      return (
+        <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-center relative group">
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity z-10 cursor-move draggable-handle bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 rounded p-1 shadow-lg pointer-events-auto">
+            <GripHorizontal className="h-4 w-4" />
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">{title}</p>
+              <p className={cn(
+                "mt-1 text-2xl font-mono font-bold truncate",
+                statusLevel === 'Warning' ? "text-amber-500" : statusLevel === 'Normal' ? "text-emerald-500" : "text-slate-400"
+              )}>{statusLevel}</p>
+              <p className="mt-1 truncate text-[10px] font-mono text-slate-400">{metricKey}: {averageValue.toFixed(1)}</p>
+            </div>
+            <span className={cn(
+              "h-4 w-4 rounded-full shrink-0",
+              statusLevel === 'Warning' ? "bg-amber-500" : statusLevel === 'Normal' ? "bg-emerald-500" : "bg-slate-400"
+            )} />
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-center relative group">
@@ -946,11 +1061,12 @@ export function Overview() {
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Display</label>
               <select
                 value={builderDisplayMode}
-                onChange={(event) => setBuilderDisplayMode(event.target.value as 'number' | 'line')}
+                onChange={(event) => setBuilderDisplayMode(event.target.value as WidgetDisplayMode)}
                 className="mt-1 h-10 w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
               >
-                <option value="number">Number</option>
-                <option value="line">Line Trend</option>
+                {WIDGET_DISPLAY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
             </div>
             <div>
@@ -1053,7 +1169,7 @@ export function Overview() {
                     <Icon className="h-4 w-4 shrink-0 text-orange-500" />
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{widget.title}</div>
-                      <div className="truncate text-[10px] uppercase tracking-wider text-slate-400">{widget.displayMode === 'line' ? 'Line Trend' : 'Number'} / {widget.metricKey}</div>
+                      <div className="truncate text-[10px] uppercase tracking-wider text-slate-400">{getDisplayModeLabel(widget.displayMode)} / {widget.metricKey}</div>
                     </div>
                   </div>
                   <div className="flex shrink-0 gap-1">
