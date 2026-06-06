@@ -35,12 +35,13 @@ export const mockDevices: Device[] = [
     id: 'DEV-003',
     name: 'Air Compressor 1',
     type: 'air_compressor',
-    tags: ['factory-a'],
+    tags: ['factory-a', 'air-compressor'],
     metrics: {
       pressure: 7.8,
       temperature: 85,
       power: 22000,
-      running_hours: 1450
+      running_hours: 1450,
+      leakage_rate: 3.2
     },
     status: 'online',
     lastSeen: new Date().toISOString(),
@@ -50,10 +51,11 @@ export const mockDevices: Device[] = [
     id: 'DEV-004',
     name: 'Cold Storage Ambient',
     type: 'temperature_sensor',
-    tags: ['factory-a'],
+    tags: ['factory-a', 'cold-storage'],
     metrics: {
       temperature: -18.5,
       humidity: 45,
+      door_open_events: 7,
       battery: 85
     },
     status: 'online',
@@ -73,6 +75,36 @@ export const mockDevices: Device[] = [
     status: 'online',
     lastSeen: new Date().toISOString(),
     firmwareVersion: 'v3.5.0'
+  },
+  {
+    id: 'SOL-001',
+    name: 'Rooftop PV Inverter',
+    type: 'solar_inverter',
+    tags: ['solar'],
+    metrics: {
+      power: 18400,
+      energy_today: 1840,
+      efficiency: 96.8,
+      battery_soc: 78
+    },
+    status: 'online',
+    lastSeen: new Date().toISOString(),
+    firmwareVersion: 'v1.8.2'
+  },
+  {
+    id: 'PMP-001',
+    name: 'Water Pump Controller',
+    type: 'pump_controller',
+    tags: ['water-pump'],
+    metrics: {
+      flow_rate: 128,
+      pressure: 4.6,
+      running_hours: 18.2,
+      power: 9600
+    },
+    status: 'online',
+    lastSeen: new Date().toISOString(),
+    firmwareVersion: 'v2.3.1'
   }
 ];
 

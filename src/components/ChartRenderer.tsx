@@ -1,6 +1,7 @@
 import React from 'react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend, BarChart, CartesianGrid, XAxis, YAxis, Bar, LineChart, Line } from 'recharts';
 import { ChartConfig } from '../lib/store';
+import type { Device } from '../types';
 
 const COLORS = ['#ea580c', '#3b82f6', '#10b981', '#64748b'];
 
@@ -53,7 +54,57 @@ const mockDataSources: Record<string, any[]> = {
   ]
 };
 
-export function ChartRenderer({ chartConf, theme }: { chartConf: ChartConfig, theme: string }) {
+const sumMetric = (devices: Device[], metric: string) => devices.reduce((total, device) => total + (Number(device.metrics?.[metric]) || 0), 0);
+const averageMetric = (devices: Device[], metric: string) => {
+  const values = devices.map((device) => Number(device.metrics?.[metric])).filter((value) => Number.isFinite(value));
+  if (values.length === 0) return 0;
+
+  return values.reduce((total, value) => total + value, 0) / values.length;
+};
+
+const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
+  const fallbackData = mockDataSources[chartConf.dataSource] || [];
+  if (!devices || devices.length === 0) return fallbackData;
+
+  if (chartConf.dataSource === 'devices') {
+    return [
+      { name: 'Active', value: devices.filter((device) => device.status === 'online').length },
+      { name: 'Offline', value: devices.filter((device) => device.status === 'offline').length },
+      { name: 'Warning', value: devices.filter((device) => device.status === 'warning').length },
+    ];
+  }
+
+  if (chartConf.dataSource === 'energy') {
+    const factor = Math.max(sumMetric(devices, 'energy_today') / 600, 0.2);
+    return fallbackData.map((item) => ({
+      ...item,
+      A: Math.round(item.A * factor),
+      B: Math.round(item.B * factor),
+    }));
+  }
+
+  const metricBySource: Record<string, string> = {
+    solar: 'energy_today',
+    coldStorage: 'temperature',
+    waterPump: 'pressure',
+    airCompressor: 'pressure',
+  };
+  const metric = metricBySource[chartConf.dataSource];
+  if (!metric) return fallbackData;
+
+  const averageValue = averageMetric(devices, metric);
+  if (!averageValue) return fallbackData;
+
+  const fallbackAverage = averageMetric(fallbackData.map((item) => ({ metrics: { [metric]: item.A } } as Device)), metric) || 1;
+  const factor = averageValue / fallbackAverage;
+
+  return fallbackData.map((item) => ({
+    ...item,
+    A: Number((item.A * factor).toFixed(1)),
+  }));
+};
+
+export function ChartRenderer({ chartConf, theme, devices }: { chartConf: ChartConfig, theme: string, devices?: Device[] }) {
   const isDark = theme === 'dark';
   const cartesianGridStroke = isDark ? '#334155' : '#e2e8f0';
   const tooltipBg = isDark ? '#0f1115' : '#ffffff';
@@ -61,7 +112,7 @@ export function ChartRenderer({ chartConf, theme }: { chartConf: ChartConfig, th
   const tooltipColor = isDark ? '#cbd5e1' : '#334155';
   const cursorFill = isDark ? '#334155' : '#f8fafc';
 
-  const data = mockDataSources[chartConf.dataSource] || [];
+  const data = getDeviceDrivenData(chartConf, devices);
   
   if (chartConf.type === 'pie') {
     return (

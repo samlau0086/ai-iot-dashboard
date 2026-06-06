@@ -136,6 +136,8 @@ export function Devices() {
                   {device.type === 'rtu' && `Mem: ${device.metrics.memory || 0}%`}
                   {device.type === 'lora_gateway' && `RSSI: ${device.metrics.rssi || 0} dBm`}
                   {device.type === 'plc' && `I/O: ${device.metrics.io_rate || 0}/s`}
+                  {device.type === 'solar_inverter' && `${device.metrics.power || 0} W`}
+                  {device.type === 'pump_controller' && `${device.metrics.pressure || 0} bar`}
                 </td>
                 <td className="p-4 text-slate-500 dark:text-slate-400">
                   {new Date(device.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}

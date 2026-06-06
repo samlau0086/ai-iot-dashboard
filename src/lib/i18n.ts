@@ -20,8 +20,8 @@ export const translations = {
     },
     // Overview
     overview: {
-      title: 'Factory Energy Overview',
-      site: 'Site: Factory A',
+      title: 'Overview',
+      site: 'Tags',
       totalDevices: 'Total Devices',
       onlineDevices: 'Online Devices',
       energyToday: 'Energy Today',
@@ -189,8 +189,8 @@ export const translations = {
     },
     // Overview
     overview: {
-      title: '工厂能耗总览',
-      site: '厂区: 深圳 A 厂',
+      title: '总览',
+      site: 'Tags',
       totalDevices: '总设备数',
       onlineDevices: '在线设备',
       energyToday: '今日能耗',

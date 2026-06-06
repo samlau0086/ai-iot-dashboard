@@ -40,7 +40,12 @@ export type OverviewKpiKey =
 
 export interface OverviewWidget {
   id: string;
-  type: 'kpi' | 'kpis' | 'trend' | 'ai' | 'chart';
+  type: 'kpi' | 'kpis' | 'trend' | 'ai' | 'chart' | 'custom';
+  title?: string;
+  deviceIds?: string[];
+  displayMode?: 'number' | 'line';
+  metricKey?: string;
+  iconId?: string;
   kpiKey?: OverviewKpiKey;
   chartId?: string;
 }
@@ -52,6 +57,15 @@ export interface DashboardTemplate {
   layout: any[];
   widgets: OverviewWidget[];
 }
+
+const DEFAULT_TAG_TEMPLATE_MAP: Record<string, string> = {
+  All: 'factory-energy',
+  'factory-a': 'factory-energy',
+  solar: 'solar-monitoring',
+  'cold-storage': 'cold-storage',
+  'water-pump': 'water-pump',
+  'air-compressor': 'air-compressor',
+};
 
 const DEFAULT_OVERVIEW_LAYOUT = [
   { i: 'kpi-online-devices', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
@@ -72,7 +86,10 @@ const DEFAULT_OVERVIEW_WIDGETS: OverviewWidget[] = [
 ];
 
 const cloneLayout = (layout: any[]) => layout.map((item) => ({ ...item }));
-const cloneWidgets = (widgets: OverviewWidget[]) => widgets.map((widget) => ({ ...widget }));
+const cloneWidgets = (widgets: OverviewWidget[]) => widgets.map((widget) => ({
+  ...widget,
+  deviceIds: widget.deviceIds ? [...widget.deviceIds] : undefined,
+}));
 const DEFAULT_CHARTS: ChartConfig[] = [
   { id: '1', title: 'Weekly Consumption', type: 'bar', dataSource: 'energy' },
   { id: '2', title: 'Device Distribution', type: 'pie', dataSource: 'devices' },
@@ -86,6 +103,14 @@ const mergeDefaultCharts = (charts: ChartConfig[] = []) => {
   return [
     ...charts,
     ...DEFAULT_CHARTS.filter((chart) => !existingIds.has(chart.id)),
+  ];
+};
+
+const mergeDefaultDevices = (devices: Device[] = []) => {
+  const existingIds = new Set(devices.map((device) => device.id));
+  return [
+    ...devices,
+    ...mockDevices.filter((device) => !existingIds.has(device.id)),
   ];
 };
 
@@ -259,15 +284,22 @@ interface AppState {
   // Overview Dashboard
   overviewLayout: any[];
   overviewWidgets: OverviewWidget[];
+  overviewWidgetLibrary: OverviewWidget[];
   dashboardTemplates: DashboardTemplate[];
   activeDashboardTemplateId: string;
+  tagDashboardTemplateMap: Record<string, string>;
   updateOverviewLayout: (layout: any[]) => void;
   updateOverviewWidgets: (widgets: OverviewWidget[]) => void;
+  addOverviewWidgetLibraryItem: (widget: OverviewWidget) => void;
+  updateOverviewWidgetLibraryItem: (id: string, widget: Partial<OverviewWidget>) => void;
+  removeOverviewWidgetLibraryItem: (id: string) => void;
   applyDashboardTemplate: (id: string) => void;
+  setTagDashboardTemplate: (tag: string, templateId: string) => void;
   addDashboardTemplate: (template: DashboardTemplate) => void;
   updateDashboardTemplate: (template: DashboardTemplate) => void;
   deleteDashboardTemplate: (id: string) => void;
   addOverviewWidget: (widget: OverviewWidget, layoutItem: any) => void;
+  updateOverviewWidget: (id: string, widget: Partial<OverviewWidget>) => void;
   removeOverviewWidget: (id: string) => void;
   // Workflows
   workflows: Workflow[];
@@ -323,16 +355,29 @@ export const useAppStore = create<AppState>()(
 
       overviewLayout: cloneLayout(DEFAULT_OVERVIEW_LAYOUT),
       overviewWidgets: cloneWidgets(DEFAULT_OVERVIEW_WIDGETS),
+      overviewWidgetLibrary: [],
       dashboardTemplates: DASHBOARD_TEMPLATES.map((template) => ({
         ...template,
         layout: cloneLayout(template.layout),
         widgets: cloneWidgets(template.widgets),
       })),
       activeDashboardTemplateId: 'factory-energy',
+      tagDashboardTemplateMap: DEFAULT_TAG_TEMPLATE_MAP,
       updateOverviewLayout: (layout) => set((state) => (
         sameOverviewLayout(state.overviewLayout, layout) ? state : { overviewLayout: layout }
       )),
       updateOverviewWidgets: (widgets) => set({ overviewWidgets: widgets }),
+      addOverviewWidgetLibraryItem: (widget) => set((state) => ({
+        overviewWidgetLibrary: [...state.overviewWidgetLibrary, widget]
+      })),
+      updateOverviewWidgetLibraryItem: (id, widget) => set((state) => ({
+        overviewWidgetLibrary: state.overviewWidgetLibrary.map((item) => (
+          item.id === id ? { ...item, ...widget } : item
+        ))
+      })),
+      removeOverviewWidgetLibraryItem: (id) => set((state) => ({
+        overviewWidgetLibrary: state.overviewWidgetLibrary.filter((item) => item.id !== id)
+      })),
       applyDashboardTemplate: (id) => set((state) => {
         const template = state.dashboardTemplates.find((item) => item.id === id);
         if (!template) return {};
@@ -343,6 +388,12 @@ export const useAppStore = create<AppState>()(
           overviewWidgets: cloneWidgets(template.widgets),
         };
       }),
+      setTagDashboardTemplate: (tag, templateId) => set((state) => ({
+        tagDashboardTemplateMap: {
+          ...state.tagDashboardTemplateMap,
+          [tag]: templateId,
+        },
+      })),
       addDashboardTemplate: (template) => set((state) => ({
         dashboardTemplates: [
           ...state.dashboardTemplates,
@@ -391,6 +442,11 @@ export const useAppStore = create<AppState>()(
         overviewWidgets: [...state.overviewWidgets, widget],
         overviewLayout: [...state.overviewLayout, layoutItem]
       })),
+      updateOverviewWidget: (id, widget) => set((state) => ({
+        overviewWidgets: state.overviewWidgets.map((item) => (
+          item.id === id ? { ...item, ...widget } : item
+        ))
+      })),
       removeOverviewWidget: (id) => set((state) => ({
         overviewWidgets: state.overviewWidgets.filter(w => w.id !== id),
         overviewLayout: state.overviewLayout.filter(l => l.i !== id)
@@ -431,9 +487,9 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'app-storage',
-      version: 4,
+      version: 7,
       migrate: (persistedState: any, version) => {
-        if (version >= 4 || !persistedState) return persistedState;
+        if (version >= 7 || !persistedState) return persistedState;
 
         const builtInTemplateIds = new Set(DASHBOARD_TEMPLATES.map((template) => template.id));
         const customTemplates = (persistedState.dashboardTemplates || []).filter((template: DashboardTemplate) => !builtInTemplateIds.has(template.id));
@@ -449,9 +505,15 @@ export const useAppStore = create<AppState>()(
 
         return {
           ...persistedState,
+          devices: mergeDefaultDevices(persistedState.devices),
           charts: mergeDefaultCharts(persistedState.charts),
+          overviewWidgetLibrary: cloneWidgets(persistedState.overviewWidgetLibrary || []),
           dashboardTemplates: upgradedTemplates,
           activeDashboardTemplateId: activeTemplate.id,
+          tagDashboardTemplateMap: {
+            ...DEFAULT_TAG_TEMPLATE_MAP,
+            ...(persistedState.tagDashboardTemplateMap || {}),
+          },
           overviewLayout: cloneLayout(activeTemplate.layout),
           overviewWidgets: cloneWidgets(activeTemplate.widgets),
         };
