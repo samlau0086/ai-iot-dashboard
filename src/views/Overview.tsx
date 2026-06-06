@@ -4,10 +4,11 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { mockEnergyTrends, mockDevices, mockAlerts } from '../lib/mockData';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
-import { ResponsiveGridLayout } from 'react-grid-layout';
+import { Responsive, WidthProvider } from 'react-grid-layout';
 import { ChartRenderer } from '../components/ChartRenderer';
 import { cn } from '../lib/utils';
 
+const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
 const GRID_ROW_HEIGHT = 80;
 const GRID_MARGIN: [number, number] = [16, 16];
@@ -20,7 +21,7 @@ type SnapGuide = {
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
 
-const findNearestGuide = (value: number, guides: number[], min: number, max: number) => {
+const findNearestGuide = (value: number, guides: number[], min: number, max: number, threshold?: number) => {
   let nearest: number | undefined;
   let nearestDistance = Number.POSITIVE_INFINITY;
 
@@ -28,13 +29,28 @@ const findNearestGuide = (value: number, guides: number[], min: number, max: num
     if (guide < min || guide > max) return;
 
     const distance = Math.abs(value - guide);
-    if (distance > 0 && distance <= SNAP_THRESHOLD && distance < nearestDistance) {
+    if ((threshold === undefined || distance <= threshold) && distance < nearestDistance) {
       nearest = guide;
       nearestDistance = distance;
     }
   });
 
   return nearest;
+};
+
+const collides = (a: any, b: any) => {
+  if (a.i === b.i) return false;
+
+  return (
+    a.x < b.x + b.w &&
+    a.x + a.w > b.x &&
+    a.y < b.y + b.h &&
+    a.y + a.h > b.y
+  );
+};
+
+const collidesWithLayout = (item: any, layout: any[]) => {
+  return layout.some((candidate) => collides(item, candidate));
 };
 
 export function Overview() {
@@ -85,32 +101,71 @@ export function Overview() {
     updateOverviewLayout(currentLayout);
   };
 
-  const handleDrag = (_layout: any[], _oldItem: any, newItem: any, placeholder: any) => {
+  const handleDrag = (_layout: any[], _oldItem: any, newItem: any, _placeholder: any) => {
     const guides = snapGuides[newItem.i];
     if (!guides) {
       setActiveSnapGuide({});
       return;
     }
 
-    const snapX = findNearestGuide(newItem.x, guides.x, 0, GRID_COLS - newItem.w);
-    const snapY = findNearestGuide(newItem.y, guides.y, 0, Number.POSITIVE_INFINITY);
+    const snapX = findNearestGuide(newItem.x, guides.x, 0, GRID_COLS - newItem.w, SNAP_THRESHOLD);
+    const snapY = findNearestGuide(newItem.y, guides.y, 0, Number.POSITIVE_INFINITY, SNAP_THRESHOLD);
     const nextGuide: SnapGuide = {};
 
     if (snapX !== undefined) {
-      const nextX = clamp(snapX, 0, GRID_COLS - newItem.w);
-      newItem.x = nextX;
-      placeholder.x = nextX;
-      nextGuide.x = nextX;
+      nextGuide.x = clamp(snapX, 0, GRID_COLS - newItem.w);
     }
 
     if (snapY !== undefined) {
-      const nextY = Math.max(0, snapY);
-      newItem.y = nextY;
-      placeholder.y = nextY;
-      nextGuide.y = nextY;
+      nextGuide.y = Math.max(0, snapY);
     }
 
     setActiveSnapGuide(nextGuide);
+  };
+
+  const snapLayoutItem = (layout: any[], movedItem: any) => {
+    const guides = snapGuides[movedItem.i];
+    if (!guides) return layout;
+
+    const snapX = findNearestGuide(movedItem.x, guides.x, 0, GRID_COLS - movedItem.w);
+    const snapY = findNearestGuide(movedItem.y, guides.y, 0, Number.POSITIVE_INFINITY);
+
+    if (snapX === undefined && snapY === undefined) return layout;
+
+    const originalItem = {...movedItem};
+    const snappedItem = {
+      ...movedItem,
+      x: snapX !== undefined ? clamp(snapX, 0, GRID_COLS - movedItem.w) : movedItem.x,
+      y: snapY !== undefined ? Math.max(0, snapY) : movedItem.y,
+    };
+
+    const otherItems = layout.filter((item) => item.i !== movedItem.i);
+    let nextItem = snappedItem;
+
+    if (collidesWithLayout(nextItem, otherItems)) {
+      const xOnlyItem = {...originalItem, x: snappedItem.x};
+      const yOnlyItem = {...originalItem, y: snappedItem.y};
+
+      if (!collidesWithLayout(xOnlyItem, otherItems)) {
+        nextItem = xOnlyItem;
+      } else if (!collidesWithLayout(yOnlyItem, otherItems)) {
+        nextItem = yOnlyItem;
+      } else {
+        nextItem = originalItem;
+      }
+    }
+
+    return layout.map((item) => item.i === movedItem.i ? {...item, ...nextItem} : item);
+  };
+
+  const handleDragStop = (layout: any[], _oldItem: any, newItem: any) => {
+    updateOverviewLayout(snapLayoutItem(layout, newItem));
+    setActiveSnapGuide({});
+  };
+
+  const handleResizeStop = (layout: any[]) => {
+    updateOverviewLayout(layout);
+    setActiveSnapGuide({});
   };
 
   const clearSnapGuide = () => {
@@ -309,13 +364,14 @@ export function Overview() {
           rowHeight={GRID_ROW_HEIGHT}
           onLayoutChange={onLayoutChange}
           onDrag={handleDrag}
-          onDragStop={clearSnapGuide}
+          onDragStop={handleDragStop}
           onResizeStart={clearSnapGuide}
-          onResizeStop={clearSnapGuide}
+          onResizeStop={handleResizeStop}
           {...({ draggableHandle: ".draggable-handle" } as any)}
           isResizable={true}
+          isDraggable={true}
           resizeHandles={['se']}
-          preventCollision={true}
+          preventCollision={false}
           compactType={null}
           margin={GRID_MARGIN}
         >
