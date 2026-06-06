@@ -37,7 +37,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 告警中心基础页面
 - [x] 报表中心基础页面
 - [x] PM2 + VPS 自动部署
-- [x] 接入真实设备数据 API / MQTT WebSocket Bridge 前端入口
+- [x] 接入真实设备数据 API / 后端 MQTT Subscriber 入口
 - [ ] 替换 Mock 告警和能耗数据
 - [x] 基础报表 CSV 导出
 
@@ -70,7 +70,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 支持多类型设备抽象：energy_meter、plc、temperature_sensor、solar_inverter、pump_controller、air_compressor、gateway
 - [x] 设备 Tags 分组
 - [ ] 站点 Site / Tenant 数据模型
-- [ ] MQTT Broker 接入：EMQX / Mosquitto
+- [x] 外部 MQTT Broker 接入：后端订阅 EMQX / Mosquitto 等 Broker
 - [ ] 工业协议接入规划：Modbus RTU、Modbus TCP、CAN、LoRa、4G、Ethernet、WiFi
 - [ ] 原始数据查看
 - [ ] 指标筛选
@@ -346,7 +346,7 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 
 ## 真实设备数据接入
 
-项目已提供真实设备数据接入入口。推荐方式是网关通过 HTTP 主动 POST 遥测数据到 Dashboard 后端；外部 HTTP API 拉取仅作为兼容模式保留。MQTT WebSocket Bridge 应在后台 **Settings -> Data Sources** 中配置，不依赖部署变量。
+项目已提供真实设备数据接入入口。推荐方式是网关通过 HTTP 主动 POST 遥测数据到 Dashboard 后端；也可以让 Dashboard 后端连接外部 MQTT Broker 并订阅 Topic。外部 HTTP API 拉取仅作为兼容模式保留。
 
 ### Gateway HTTP Push
 
@@ -417,15 +417,21 @@ VITE_DEVICE_API_POLL_MS=10000
 }
 ```
 
-### MQTT / WebSocket Bridge
+### Backend MQTT Subscriber
 
-浏览器端当前不直接内置 MQTT TCP 客户端，也不自带 MQTT Broker，而是通过 WebSocket 接收后端或 MQTT Bridge 转换后的 JSON 遥测消息。请在后台 **Settings -> Data Sources** 中为当前用户配置 MQTT WebSocket URL，例如：
+系统不自带 MQTT Broker，但 Dashboard 后端可以连接外部 MQTT Broker 并订阅遥测 Topic。可以在后台 **Settings -> Data Sources** 中配置，也可以通过环境变量提供默认值：
 
-```text
-wss://your-api.example.com/iot/telemetry
+```bash
+MQTT_ENABLED=true
+MQTT_BROKER_URL="mqtt://broker.example.com:1883"
+MQTT_USERNAME="optional-user"
+MQTT_PASSWORD="optional-password"
+MQTT_TOPICS="devices/+/telemetry,factory-a/#"
 ```
 
-WebSocket 消息格式：
+后台保存的 MQTT 配置会写入服务器本地 `runtime-config.json`，该文件不会提交到 Git。当前内置订阅客户端支持 `mqtt://` 和 `mqtts://`，收到消息后会写入同一个 `/api/telemetry` 缓冲区。
+
+MQTT Payload 格式：
 
 ```json
 {

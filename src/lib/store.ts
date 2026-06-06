@@ -32,8 +32,6 @@ export interface DeviceDataConnectionSettings {
   apiUrl: string;
   apiToken: string;
   apiPollMs: number;
-  mqttWsUrl: string;
-  mqttEnabled: boolean;
 }
 
 export interface ChartConfig {
@@ -395,8 +393,6 @@ export const useAppStore = create<AppState>()(
             apiUrl: '',
             apiToken: '',
             apiPollMs: 10000,
-            mqttWsUrl: '',
-            mqttEnabled: false,
             ...(state.deviceDataSettingsByUser[userId] || {}),
             ...settings,
           },

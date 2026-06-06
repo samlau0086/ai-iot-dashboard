@@ -34,9 +34,15 @@ export function Settings() {
     apiUrl: '',
     apiToken: '',
     apiPollMs: 10000,
-    mqttWsUrl: '',
-    mqttEnabled: false,
   });
+  const [mqttDraft, setMqttDraft] = useState({
+    enabled: false,
+    brokerUrl: '',
+    username: '',
+    password: '',
+    topics: 'devices/+/telemetry',
+  });
+  const [mqttStatus, setMqttStatus] = useState<{ state: string; message: string; connectedAt?: string | null; lastMessageAt?: string | null } | null>(null);
   const [dataSaveMessage, setDataSaveMessage] = useState('');
   const [mqttTestMessage, setMqttTestMessage] = useState('');
   const [channelDraft, setChannelDraft] = useState({
@@ -64,12 +70,32 @@ export function Settings() {
       apiUrl: currentDataSettings?.apiUrl || '',
       apiToken: currentDataSettings?.apiToken || '',
       apiPollMs: currentDataSettings?.apiPollMs || 10000,
-      mqttWsUrl: currentDataSettings?.mqttWsUrl || '',
-      mqttEnabled: currentDataSettings?.mqttEnabled || false,
     });
     setDataSaveMessage('');
     setMqttTestMessage('');
   }, [currentDataSettings, currentUser?.id]);
+
+  useEffect(() => {
+    const loadMqttConfig = async () => {
+      try {
+        const response = await fetch('/api/mqtt/config');
+        if (!response.ok) return;
+        const payload = await response.json();
+        setMqttDraft({
+          enabled: Boolean(payload.config?.enabled),
+          brokerUrl: payload.config?.brokerUrl || '',
+          username: payload.config?.username || '',
+          password: '',
+          topics: Array.isArray(payload.config?.topics) ? payload.config.topics.join(', ') : '',
+        });
+        setMqttStatus(payload.status || null);
+      } catch (error) {
+        setMqttStatus({ state: 'error', message: 'Failed to load MQTT subscriber config' });
+      }
+    };
+
+    loadMqttConfig();
+  }, []);
 
   const handleAddChannel = () => {
     if (!channelDraft.target.trim()) return;
@@ -111,33 +137,27 @@ export function Settings() {
     setDataSaveMessage('Data source settings saved for current user.');
   };
 
-  const handleTestMqtt = () => {
+  const handleSaveMqtt = async () => {
     setMqttTestMessage('');
-    if (!dataDraft.mqttWsUrl.trim()) {
-      setMqttTestMessage('MQTT WebSocket URL is required.');
+    if (mqttDraft.enabled && (!mqttDraft.brokerUrl.trim() || !mqttDraft.topics.trim())) {
+      setMqttTestMessage('Broker URL and at least one topic are required.');
       return;
     }
 
-    let socket: WebSocket | null = null;
-    const timeoutId = window.setTimeout(() => {
-      socket?.close();
-      setMqttTestMessage('Connection test timed out.');
-    }, 5000);
-
     try {
-      socket = new WebSocket(dataDraft.mqttWsUrl.trim());
-      socket.onopen = () => {
-        window.clearTimeout(timeoutId);
-        setMqttTestMessage('MQTT WebSocket bridge is reachable.');
-        socket?.close();
-      };
-      socket.onerror = () => {
-        window.clearTimeout(timeoutId);
-        setMqttTestMessage('Connection failed. Check URL, TLS, firewall, and bridge service.');
-      };
+      const response = await fetch('/api/mqtt/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...mqttDraft,
+          topics: mqttDraft.topics.split(',').map((topic) => topic.trim()).filter(Boolean),
+        }),
+      });
+      const payload = await response.json();
+      setMqttStatus(payload.status || null);
+      setMqttTestMessage(response.ok ? 'MQTT subscriber config saved.' : 'Failed to save MQTT subscriber config.');
     } catch (error) {
-      window.clearTimeout(timeoutId);
-      setMqttTestMessage('Invalid WebSocket URL.');
+      setMqttTestMessage('Failed to save MQTT subscriber config.');
     }
   };
 
@@ -220,7 +240,7 @@ export function Settings() {
               <div>
                 <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">Device Data Sources</h2>
                 <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                  Gateway HTTP Push is the recommended path. MQTT bridge settings are saved for the current user and take effect after saving.
+                  Gateway HTTP Push and backend MQTT subscription both write into the same telemetry buffer.
                 </p>
               </div>
 
@@ -285,36 +305,80 @@ export function Settings() {
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-2">
                     <Wifi className="h-5 w-5 text-sky-500" />
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">MQTT WebSocket Bridge</h3>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Backend MQTT Subscriber</h3>
                   </div>
                   <label className="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                     <input
                       type="checkbox"
-                      checked={dataDraft.mqttEnabled}
-                      onChange={(event) => setDataDraft((current) => ({ ...current, mqttEnabled: event.target.checked }))}
+                      checked={mqttDraft.enabled}
+                      onChange={(event) => setMqttDraft((current) => ({ ...current, enabled: event.target.checked }))}
                       className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
                     />
                     Enabled
                   </label>
                 </div>
                 <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                  This is not an MQTT Broker. It should point to your external MQTT WebSocket bridge that sends JSON telemetry messages to the browser.
+                  The Dashboard backend connects to your external MQTT Broker, subscribes to topics, and writes JSON telemetry payloads into /api/telemetry.
                 </p>
-                <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto]">
-                  <input
-                    value={dataDraft.mqttWsUrl}
-                    onChange={(event) => setDataDraft((current) => ({ ...current, mqttWsUrl: event.target.value }))}
-                    placeholder="wss://your-domain.com/iot/telemetry"
-                    className="block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                  />
+                <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr_1fr_1fr]">
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Broker URL</label>
+                    <input
+                      value={mqttDraft.brokerUrl}
+                      onChange={(event) => setMqttDraft((current) => ({ ...current, brokerUrl: event.target.value }))}
+                      placeholder="mqtt://broker.example.com:1883"
+                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Username</label>
+                    <input
+                      value={mqttDraft.username}
+                      onChange={(event) => setMqttDraft((current) => ({ ...current, username: event.target.value }))}
+                      placeholder="Optional"
+                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Password</label>
+                    <input
+                      type="password"
+                      value={mqttDraft.password}
+                      onChange={(event) => setMqttDraft((current) => ({ ...current, password: event.target.value }))}
+                      placeholder="Optional"
+                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                    />
+                  </div>
+                  <div className="lg:col-span-3">
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Subscribe Topics</label>
+                    <input
+                      value={mqttDraft.topics}
+                      onChange={(event) => setMqttDraft((current) => ({ ...current, topics: event.target.value }))}
+                      placeholder="devices/+/telemetry, factory-a/#"
+                      className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                    />
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Comma separated. Payload must be JSON with device_id/deviceId/id and metrics.</p>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
-                    onClick={handleTestMqtt}
+                    onClick={handleSaveMqtt}
                     className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                   >
                     <Send className="h-4 w-4" />
-                    Test MQTT
+                    Save & Connect MQTT
                   </button>
+                  {mqttStatus && (
+                    <span className={cn(
+                      'rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset',
+                      mqttStatus.state === 'connected' && 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
+                      mqttStatus.state !== 'connected' && mqttStatus.state !== 'disabled' && 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300',
+                      mqttStatus.state === 'disabled' && 'bg-slate-100 text-slate-600 ring-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'
+                    )}>
+                      {mqttStatus.state}: {mqttStatus.message}
+                    </span>
+                  )}
                 </div>
                 {mqttTestMessage && (
                   <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">

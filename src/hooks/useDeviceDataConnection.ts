@@ -19,8 +19,6 @@ export function useDeviceDataConnection() {
   const apiUrl = userSettings?.apiUrl.trim() || API_URL;
   const apiToken = userSettings?.apiToken || API_TOKEN;
   const apiPollMs = Number(userSettings?.apiPollMs || API_POLL_MS || 10000);
-  const mqttWsUrl = userSettings?.mqttWsUrl.trim();
-  const mqttEnabled = Boolean(userSettings?.mqttEnabled && mqttWsUrl);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,31 +95,4 @@ export function useDeviceDataConnection() {
     };
   }, [apiPollMs, apiToken, apiUrl, setDeviceDataSourceStatus, setDevices]);
 
-  useEffect(() => {
-    if (!mqttEnabled || !mqttWsUrl) return;
-
-    let socket: WebSocket | null = new WebSocket(mqttWsUrl);
-
-    socket.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data) as DeviceTelemetryMessage;
-        applyTelemetryMessage(payload, 'mqtt');
-      } catch (error) {
-        console.error('Failed to parse MQTT bridge payload', error);
-      }
-    };
-
-    socket.onerror = () => {
-      setDeviceDataSourceStatus('error');
-    };
-
-    socket.onclose = () => {
-      socket = null;
-    };
-
-    return () => {
-      socket?.close();
-      socket = null;
-    };
-  }, [applyTelemetryMessage, mqttEnabled, mqttWsUrl, setDeviceDataSourceStatus]);
 }
