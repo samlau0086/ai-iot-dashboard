@@ -1,0 +1,101 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+
+    env:
+      DEPLOY_ARCHIVE: ai-iot-dashboard-dist.tar.gz
+      VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check deployment secrets
+        run: |
+          test -n "${{ secrets.VPS_HOST }}" || (echo "Missing VPS_HOST secret." && exit 1)
+          test -n "${{ secrets.VPS_USER }}" || (echo "Missing VPS_USER secret." && exit 1)
+          test -n "${{ secrets.VPS_SSH_KEY }}" || (echo "Missing VPS_SSH_KEY secret." && exit 1)
+          test -n "${{ secrets.VPS_DEPLOY_PATH }}" || (echo "Missing VPS_DEPLOY_PATH secret." && exit 1)
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: Pack build artifact
+        run: tar -czf "$DEPLOY_ARCHIVE" -C dist .
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          install -m 600 /dev/null ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$VPS_PORT" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+          fi
+
+      - name: Upload build artifact
+        run: |
+          scp -i ~/.ssh/deploy_key -P "$VPS_PORT" "$DEPLOY_ARCHIVE" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/$DEPLOY_ARCHIVE"
+
+      - name: Ensure deploy path and deploy on VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "DEPLOY_PATH='${{ secrets.VPS_DEPLOY_PATH }}' DEPLOY_ARCHIVE='$DEPLOY_ARCHIVE' VPS_POST_DEPLOY='${{ secrets.VPS_POST_DEPLOY }}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          if [ -z "$DEPLOY_PATH" ]; then
+            echo "VPS_DEPLOY_PATH is not set."
+            exit 1
+          fi
+
+          if [ "$DEPLOY_PATH" = "/" ]; then
+            echo "Refusing to deploy to /."
+            exit 1
+          fi
+
+          echo "Ensuring deploy directory exists: $DEPLOY_PATH"
+          mkdir -p "$DEPLOY_PATH"
+          test -d "$DEPLOY_PATH"
+
+          echo "Replacing files in deploy directory"
+          find "$DEPLOY_PATH" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          tar -xzf "/tmp/$DEPLOY_ARCHIVE" -C "$DEPLOY_PATH"
+          rm -f "/tmp/$DEPLOY_ARCHIVE"
+
+          if [ -n "$VPS_POST_DEPLOY" ]; then
+            bash -lc "$VPS_POST_DEPLOY"
+          fi
+          EOF
