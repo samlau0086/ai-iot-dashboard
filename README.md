@@ -101,6 +101,9 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 | `npm run dev` | 启动本地开发服务，默认端口 `3006`。 |
 | `npm run build` | 构建生产版本到 `dist`。 |
 | `npm run preview` | 本地预览生产构建，默认端口 `3006`。 |
+| `npm start` | 使用 `server.js` 启动生产 Node 服务。 |
+| `npm run pm2:start` | 使用 PM2 启动生产服务。 |
+| `npm run pm2:reload` | 使用 PM2 重载生产服务。 |
 | `npm run lint` | 运行 TypeScript 类型检查。 |
 
 ## 使用说明
@@ -152,9 +155,11 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 | `VPS_HOST` | VPS IP 或域名。 |
 | `VPS_USER` | SSH 登录用户。 |
 | `VPS_SSH_KEY` | SSH 私钥。 |
-| `VPS_DEPLOY_PATH` | 静态文件部署目录，例如 `/var/www/ai-iot-dashboard`。 |
+| `VPS_DEPLOY_PATH` | PM2 应用部署目录，例如 `/var/www/ai-iot-dashboard`。 |
 
 `VPS_DEPLOY_PATH` 指向的目录会由工作流自动执行 `mkdir -p` 创建，但 `VPS_USER` 必须有创建和写入权限。
+
+生产环境会通过 `server.js` 启动 Node 服务，并由 PM2 使用 `ecosystem.config.cjs` 托管。默认应用端口是 `3006`，可通过 GitHub Secret `VPS_APP_PORT` 覆盖。VPS 需要提前安装 Node.js、npm 和 PM2。
 
 更多 VPS、Nginx 和可选 Secret 配置请查看 [docs/vps-deploy.md](docs/vps-deploy.md)。
 

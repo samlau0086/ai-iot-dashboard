@@ -16,8 +16,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      DEPLOY_ARCHIVE: ai-iot-dashboard-dist.tar.gz
+      DEPLOY_ARCHIVE: ai-iot-dashboard-release.tar.gz
       VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+      APP_PORT: ${{ secrets.VPS_APP_PORT || '3006' }}
 
     steps:
       - name: Checkout
@@ -48,7 +49,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - name: Pack build artifact
-        run: tar -czf "$DEPLOY_ARCHIVE" -C dist .
+        run: tar -czf "$DEPLOY_ARCHIVE" dist server.js ecosystem.config.cjs package.json package-lock.json
 
       - name: Configure SSH
         env:
@@ -73,7 +74,7 @@ jobs:
       - name: Ensure deploy path and deploy on VPS
         run: |
           ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            "DEPLOY_PATH='${{ secrets.VPS_DEPLOY_PATH }}' DEPLOY_ARCHIVE='$DEPLOY_ARCHIVE' VPS_POST_DEPLOY='${{ secrets.VPS_POST_DEPLOY }}' bash -s" <<'EOF'
+            "DEPLOY_PATH='${{ secrets.VPS_DEPLOY_PATH }}' DEPLOY_ARCHIVE='$DEPLOY_ARCHIVE' APP_PORT='$APP_PORT' VPS_POST_DEPLOY='${{ secrets.VPS_POST_DEPLOY }}' bash -s" <<'EOF'
           set -euo pipefail
 
           if [ -z "$DEPLOY_PATH" ]; then
@@ -94,6 +95,17 @@ jobs:
           find "$DEPLOY_PATH" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
           tar -xzf "/tmp/$DEPLOY_ARCHIVE" -C "$DEPLOY_PATH"
           rm -f "/tmp/$DEPLOY_ARCHIVE"
+
+          cd "$DEPLOY_PATH"
+          npm ci --omit=dev
+
+          if ! command -v pm2 >/dev/null 2>&1; then
+            echo "PM2 is not installed on the VPS. Install it with: npm install -g pm2"
+            exit 1
+          fi
+
+          PORT="$APP_PORT" pm2 startOrReload ecosystem.config.cjs --update-env
+          pm2 save
 
           if [ -n "$VPS_POST_DEPLOY" ]; then
             bash -lc "$VPS_POST_DEPLOY"
