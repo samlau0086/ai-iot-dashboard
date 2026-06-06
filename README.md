@@ -273,6 +273,8 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 
 进入 **Workflows** 页面，点击 **Create Workflow** 创建流程。工作流由触发器、条件和动作组成，可用于自动响应设备离线、指标超限、告警产生、计划任务、MQTT 消息或 AI 异常检测。
 
+当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
+
 ### 处理告警
 
 进入 **Alerts** 页面查看当前告警列表。活跃告警可以执行确认操作，也可以通过创建工单入口进入后续处理流程。

@@ -86,8 +86,19 @@ const initDatabase = async () => {
       received_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS workflow_webhook_events (
+      id bigserial PRIMARY KEY,
+      workflow_id text NOT NULL,
+      token text NOT NULL,
+      payload jsonb NOT NULL,
+      headers jsonb NOT NULL,
+      received_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_device_received ON telemetry_messages (device_id, received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_received ON telemetry_messages (received_at DESC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_webhook_events_received ON workflow_webhook_events (workflow_id, received_at DESC)');
 
   const mqttState = await getAppState('mqtt_config');
   if (mqttState) {
@@ -521,6 +532,25 @@ app.put('/api/state', async (req, res) => {
   try {
     await setAppState('dashboard_state', req.body || {});
     res.status(200).json({ok: true});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.post('/api/workflow-webhooks/:workflowId/:token', async (req, res) => {
+  try {
+    const {workflowId, token} = req.params;
+    const payload = req.body || {};
+
+    if (db) {
+      await queryDb(
+        `INSERT INTO workflow_webhook_events (workflow_id, token, payload, headers)
+         VALUES ($1, $2, $3::jsonb, $4::jsonb)`,
+        [workflowId, token, JSON.stringify(payload), JSON.stringify(req.headers)]
+      );
+    }
+
+    res.status(202).json({accepted: true, workflowId});
   } catch (error) {
     res.status(500).json({error: error.message});
   }

@@ -65,6 +65,14 @@ const defaultConfigs: Record<string, any> = {
   time_window: { start: '22:00', end: '06:00' },
 };
 
+const createWebhookEndpoint = (workflowId: string) => {
+  const bytes = new Uint8Array(16);
+  window.crypto.getRandomValues(bytes);
+  const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+  return `${window.location.origin}/api/workflow-webhooks/${workflowId}/${token}`;
+};
+
 function DeviceSelect({ value, onChange, devices }: { value: string, onChange: (val: string) => void, devices: any[] }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -210,7 +218,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     let nodeConfig = { ...defaultConfigs[type] };
     if (type === 'webhook') {
       if (isTrigger) {
-        nodeConfig = { endpoint: `https://api.factory-os.com/webhooks/${draft.id}/${Date.now().toString(36)}`, expectedContent: '{"status": "error"}' };
+        nodeConfig = { endpoint: createWebhookEndpoint(draft.id), expectedContent: '{"status": "error"}' };
       } else {
         nodeConfig = { endpoint: '/api/v1/webhook/' };
       }
