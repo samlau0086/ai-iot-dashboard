@@ -1,4 +1,4 @@
-import { Device, Alert } from '../types';
+import type { Device } from '../types';
 
 export const mockDevices: Device[] = [
   {
@@ -10,11 +10,11 @@ export const mockDevices: Device[] = [
       voltage: 220,
       current: 18.5,
       power: 4070,
-      energy_today: 128.6
+      energy_today: 128.6,
     },
     status: 'online',
     lastSeen: new Date().toISOString(),
-    firmwareVersion: 'v1.2.0'
+    firmwareVersion: 'v1.2.0',
   },
   {
     id: 'DEV-002',
@@ -25,11 +25,11 @@ export const mockDevices: Device[] = [
       voltage: 380,
       current: 45.2,
       power: 17176,
-      energy_today: 450.2
+      energy_today: 450.2,
     },
     status: 'warning',
     lastSeen: new Date(Date.now() - 5 * 60000).toISOString(),
-    firmwareVersion: 'v1.1.8'
+    firmwareVersion: 'v1.1.8',
   },
   {
     id: 'DEV-003',
@@ -41,11 +41,11 @@ export const mockDevices: Device[] = [
       temperature: 85,
       power: 22000,
       running_hours: 1450,
-      leakage_rate: 3.2
+      leakage_rate: 3.2,
     },
     status: 'online',
     lastSeen: new Date().toISOString(),
-    firmwareVersion: 'v2.0.1'
+    firmwareVersion: 'v2.0.1',
   },
   {
     id: 'DEV-004',
@@ -56,11 +56,11 @@ export const mockDevices: Device[] = [
       temperature: -18.5,
       humidity: 45,
       door_open_events: 7,
-      battery: 85
+      battery: 85,
     },
     status: 'online',
     lastSeen: new Date().toISOString(),
-    firmwareVersion: 'v1.0.5'
+    firmwareVersion: 'v1.0.5',
   },
   {
     id: 'GW-001',
@@ -70,11 +70,11 @@ export const mockDevices: Device[] = [
     metrics: {
       cpu: 45,
       ram: 60,
-      uptime: 720
+      uptime: 720,
     },
     status: 'online',
     lastSeen: new Date().toISOString(),
-    firmwareVersion: 'v3.5.0'
+    firmwareVersion: 'v3.5.0',
   },
   {
     id: 'SOL-001',
@@ -85,11 +85,11 @@ export const mockDevices: Device[] = [
       power: 18400,
       energy_today: 1840,
       efficiency: 96.8,
-      battery_soc: 78
+      battery_soc: 78,
     },
     status: 'online',
     lastSeen: new Date().toISOString(),
-    firmwareVersion: 'v1.8.2'
+    firmwareVersion: 'v1.8.2',
   },
   {
     id: 'PMP-001',
@@ -100,49 +100,10 @@ export const mockDevices: Device[] = [
       flow_rate: 128,
       pressure: 4.6,
       running_hours: 18.2,
-      power: 9600
+      power: 9600,
     },
     status: 'online',
     lastSeen: new Date().toISOString(),
-    firmwareVersion: 'v2.3.1'
-  }
-];
-
-export const mockAlerts: Alert[] = [
-  {
-    id: 'ALT-1001',
-    deviceId: 'DEV-002',
-    deviceName: 'CNC Machine 1 Power',
-    level: 'Warning',
-    message: 'Abnormal power spike detected: Exceeded baseline by 25%.',
-    timestamp: new Date(Date.now() - 15 * 60000).toISOString(),
-    status: 'active'
+    firmwareVersion: 'v2.3.1',
   },
-  {
-    id: 'ALT-1002',
-    deviceId: 'DEV-003',
-    deviceName: 'Air Compressor 1',
-    level: 'Info',
-    message: 'Routine maintenance recommended: 1450 hours reached.',
-    timestamp: new Date(Date.now() - 2 * 3600000).toISOString(),
-    status: 'active'
-  },
-  {
-    id: 'ALT-1003',
-    deviceId: 'DEV-004',
-    deviceName: 'Cold Storage Ambient',
-    level: 'Critical',
-    message: 'Temperature exceeds -15Â°C threshold.',
-    timestamp: new Date(Date.now() - 10 * 60000).toISOString(),
-    status: 'acknowledged'
-  }
-];
-
-export const mockEnergyTrends = [
-  { time: '00:00', value: 450, baseline: 420 },
-  { time: '04:00', value: 420, baseline: 410 },
-  { time: '08:00', value: 1250, baseline: 1100 },
-  { time: '12:00', value: 1800, baseline: 1750 },
-  { time: '16:00', value: 1650, baseline: 1600 },
-  { time: '20:00', value: 900, baseline: 850 },
 ];

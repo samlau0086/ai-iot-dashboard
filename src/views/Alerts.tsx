@@ -1,13 +1,14 @@
 import React from 'react';
-import { mockAlerts } from '../lib/mockData';
 import { AlertCircle, AlertTriangle, Info, CheckCircle2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
+import { deriveAlertsFromDevices } from '../lib/derivedData';
 
 export function Alerts() {
-  const { language } = useAppStore();
+  const { language, devices } = useAppStore();
   const t = translations[language];
+  const alerts = deriveAlertsFromDevices(devices);
 
   const getIcon = (level: string) => {
     switch (level) {
@@ -31,7 +32,7 @@ export function Alerts() {
       </div>
       
       <div className="flex flex-col gap-4">
-        {mockAlerts.map((alert) => (
+        {alerts.map((alert) => (
           <div key={alert.id} className="bg-white dark:bg-[#1c2128] p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm">
             <div className="flex items-start gap-4">
               <div className="flex-shrink-0 mt-0.5">
@@ -71,6 +72,11 @@ export function Alerts() {
             </div>
           </div>
         ))}
+        {alerts.length === 0 && (
+          <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm dark:border-slate-800 dark:bg-[#1c2128] dark:text-slate-400">
+            No active device alerts generated from current telemetry.
+          </div>
+        )}
       </div>
     </div>
   );

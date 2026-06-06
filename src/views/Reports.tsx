@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { FileText, Download, Calendar, Mail, FileDown } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
-import { mockAlerts } from '../lib/mockData';
+import { deriveAlertsFromDevices } from '../lib/derivedData';
 
 type ReportItem = {
   id: string;
@@ -48,6 +48,7 @@ const getCsvSize = (rows: string[][]) => {
 export function Reports() {
   const { language, devices } = useAppStore();
   const t = translations[language];
+  const alerts = deriveAlertsFromDevices(devices);
 
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [reports, setReports] = useState<ReportItem[]>([
@@ -93,7 +94,7 @@ export function Reports() {
         ['Generated At', generatedAt],
         [],
         ['Alert ID', 'Device ID', 'Device Name', 'Level', 'Status', 'Message', 'Timestamp'],
-        ...mockAlerts.map((alert) => [
+        ...alerts.map((alert) => [
           alert.id,
           alert.deviceId,
           alert.deviceName,
@@ -116,7 +117,7 @@ export function Reports() {
       ['Metric', 'Value'],
       ['Total Devices', String(devices.length)],
       ['Online Devices', String(devices.filter((device) => device.status === 'online').length)],
-      ['Active Alerts', String(mockAlerts.filter((alert) => alert.status === 'active').length)],
+      ['Active Alerts', String(alerts.filter((alert) => alert.status === 'active').length)],
       ['Total Energy Today (kWh)', totalEnergy.toFixed(2)],
       ['Total Power (W)', totalPower.toFixed(2)],
       [],

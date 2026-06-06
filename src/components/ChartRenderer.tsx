@@ -5,7 +5,7 @@ import type { Device } from '../types';
 
 const COLORS = ['#ea580c', '#3b82f6', '#10b981', '#64748b'];
 
-const mockDataSources: Record<string, any[]> = {
+const chartProfiles: Record<string, any[]> = {
   energy: [
     { name: 'Mon', A: 4000, B: 2400 },
     { name: 'Tue', A: 3000, B: 1398 },
@@ -63,7 +63,7 @@ const averageMetric = (devices: Device[], metric: string) => {
 };
 
 const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
-  const fallbackData = mockDataSources[chartConf.dataSource] || [];
+  const fallbackData = chartProfiles[chartConf.dataSource] || [];
   if (!devices || devices.length === 0) return fallbackData;
 
   if (chartConf.dataSource === 'devices') {

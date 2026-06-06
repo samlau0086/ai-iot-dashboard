@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal, LayoutGrid } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
-import { mockEnergyTrends, mockAlerts } from '../lib/mockData';
 import { useAppStore } from '../lib/store';
 import type { DashboardTemplate, OverviewKpiKey, OverviewWidget } from '../lib/store';
 import { translations } from '../lib/i18n';
@@ -9,6 +8,7 @@ import { Responsive, WidthProvider } from 'react-grid-layout/legacy';
 import { ChartRenderer } from '../components/ChartRenderer';
 import { cn } from '../lib/utils';
 import { IOT_ICONS } from '../lib/icons';
+import { deriveAlertsFromDevices, deriveEnergyTrendData } from '../lib/derivedData';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
@@ -232,10 +232,11 @@ export function Overview() {
 
   const taggedDeviceIds = useMemo(() => new Set(taggedDevices.map((device) => device.id)), [taggedDevices]);
   const taggedAlerts = useMemo(() => {
+    const alerts = deriveAlertsFromDevices(devices);
     return selectedTag === 'All'
-      ? mockAlerts
-      : mockAlerts.filter((alert) => taggedDeviceIds.has(alert.deviceId));
-  }, [selectedTag, taggedDeviceIds]);
+      ? alerts
+      : alerts.filter((alert) => taggedDeviceIds.has(alert.deviceId));
+  }, [devices, selectedTag, taggedDeviceIds]);
 
   const tagMetricOptions = useMemo(() => {
     const metrics = new Set<string>();
@@ -266,7 +267,7 @@ export function Overview() {
     if (targetDevices === taggedDevices) return taggedAlerts;
 
     const targetIds = new Set(targetDevices.map((device) => device.id));
-    return mockAlerts.filter((alert) => targetIds.has(alert.deviceId));
+    return deriveAlertsFromDevices(devices).filter((alert) => targetIds.has(alert.deviceId));
   };
 
   const getStatsForDevices = (targetDevices: any[]): Record<OverviewKpiKey, { name: string; value: string; icon: any }> => {
@@ -771,13 +772,7 @@ export function Overview() {
 
   const renderTrend = (widget: OverviewWidget) => {
     const targetDevices = getWidgetDevices(widget);
-    const totalPower = sumMetric(targetDevices, 'power');
-    const factor = totalPower > 0 ? Math.max(totalPower / 45000, 0.25) : 0.25;
-    const widgetTrendData = mockEnergyTrends.map((point) => ({
-      ...point,
-      value: Math.round(point.value * factor),
-      baseline: Math.round(point.baseline * factor),
-    }));
+    const widgetTrendData = deriveEnergyTrendData(targetDevices, 'power');
 
     return (
     <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
@@ -812,7 +807,16 @@ export function Overview() {
     );
   };
 
-  const renderAI = (widget: OverviewWidget) => (
+  const renderAI = (widget: OverviewWidget) => {
+    const targetDevices = getWidgetDevices(widget);
+    const targetAlerts = getAlertsForDevices(targetDevices);
+    const primaryAlert = targetAlerts.find((alert) => alert.status === 'active') || targetAlerts[0];
+    const highPowerDevice = [...targetDevices].sort((first, second) => (Number(second.metrics?.power) || 0) - (Number(first.metrics?.power) || 0))[0];
+    const suggestion = highPowerDevice
+      ? `${highPowerDevice.name} is currently drawing ${Number(highPowerDevice.metrics?.power || 0).toFixed(0)} W. Review schedule or load profile before peak tariff hours.`
+      : 'No energy optimization suggestion is available until telemetry reports power or energy metrics.';
+
+    return (
     <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 border-l-4 border-l-orange-500 shadow-sm flex flex-col group relative">
       <div className="p-3 shrink-0 flex items-center justify-between border-b border-slate-100 dark:border-slate-800/50 cursor-move draggable-handle">
         <div className="flex items-center gap-2">
@@ -827,7 +831,7 @@ export function Overview() {
         <div className="rounded bg-slate-50 dark:bg-slate-900/50 p-3 border border-slate-200 dark:border-slate-800/50">
           <div className="flex flex-col">
             <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-1">{t.overview.anomaly}</p>
-            <p className="text-xs text-slate-700 dark:text-slate-300 line-clamp-2">CNC Machine 1 power exceeded the baseline by 25% over the last 15 mins. This may indicate tool wear.</p>
+            <p className="text-xs text-slate-700 dark:text-slate-300 line-clamp-2">{primaryAlert ? primaryAlert.message : 'No telemetry anomalies detected for the selected dashboard scope.'}</p>
             <button type="button" className="mt-2 text-left text-[10px] font-bold text-orange-600 dark:text-orange-500 hover:text-orange-700 dark:hover:text-orange-400 uppercase tracking-tight truncate">{t.overview.viewDetails} &rarr;</button>
           </div>
         </div>
@@ -835,13 +839,14 @@ export function Overview() {
         <div className="rounded bg-slate-50 dark:bg-slate-900/50 p-3 border border-slate-200 dark:border-slate-800/50">
           <div className="flex flex-col">
             <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-1">{t.overview.savings}</p>
-            <p className="text-xs text-slate-700 dark:text-slate-300 line-clamp-2">Shifting Air Compressor maintenance to off-peak (02:00) could save ~$320/mth.</p>
+            <p className="text-xs text-slate-700 dark:text-slate-300 line-clamp-2">{suggestion}</p>
             <button type="button" className="mt-2 text-[10px] text-left font-bold text-emerald-600 dark:text-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-400 uppercase tracking-tight truncate">{t.overview.applyWorkflow} &rarr;</button>
           </div>
         </div>
       </div>
     </div>
-  );
+    );
+  };
 
   const renderAnalyticChart = (widgetConfig: OverviewWidget) => {
     const chartConf = charts.find(c => c.id === widgetConfig.chartId);
@@ -879,9 +884,9 @@ export function Overview() {
     const value = sumMetric(targetDevices, metricKey);
     const averageValue = averageMetric(targetDevices, metricKey);
     const baseline = averageValue || value || 1;
-    const trendData = mockEnergyTrends.map((point, index) => ({
+    const trendData = deriveEnergyTrendData(targetDevices, metricKey).map((point, index) => ({
       time: point.time,
-      value: Number((baseline * (0.72 + index * 0.09)).toFixed(1)),
+      value: point.value || Number((baseline * (0.72 + index * 0.09)).toFixed(1)),
     }));
     const deviceMetricData = targetDevices.map((device) => ({
       name: device.name,

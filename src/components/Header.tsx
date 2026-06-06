@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { Bell, Search, Sun, Moon, Languages } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
-import { mockAlerts } from '../lib/mockData';
+import { deriveAlertsFromDevices } from '../lib/derivedData';
 
 export function Header() {
-  const { language, setLanguage, theme, toggleTheme } = useAppStore();
+  const { language, setLanguage, theme, toggleTheme, devices } = useAppStore();
   const t = translations[language];
   const [showNotifications, setShowNotifications] = useState(false);
+  const alerts = deriveAlertsFromDevices(devices);
 
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white/50 dark:border-slate-800 dark:bg-[#16191f]/50 backdrop-blur-md px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8 relative z-[40]">
@@ -55,7 +56,7 @@ export function Header() {
             >
               <span className="sr-only">View notifications</span>
               <Bell className="h-5 w-5" aria-hidden="true" />
-              {mockAlerts.some(a => a.status === 'active') && (
+              {alerts.some(a => a.status === 'active') && (
                 <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-[#16191f]" />
               )}
             </button>
@@ -68,7 +69,7 @@ export function Header() {
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Recent Notifications</h3>
                   </div>
                   <div className="max-h-64 overflow-y-auto">
-                    {mockAlerts.slice(0, 5).map(alert => (
+                    {alerts.slice(0, 5).map(alert => (
                       <div key={alert.id} className="px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors border-b border-slate-50 dark:border-slate-800/30 last:border-0">
                         <p className="text-sm font-medium text-slate-900 dark:text-slate-300">{alert.deviceName}</p>
                         <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">{alert.message}</p>
@@ -77,6 +78,11 @@ export function Header() {
                         </p>
                       </div>
                     ))}
+                    {alerts.length === 0 && (
+                      <div className="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                        No telemetry alerts
+                      </div>
+                    )}
                   </div>
                 </div>
               </>
