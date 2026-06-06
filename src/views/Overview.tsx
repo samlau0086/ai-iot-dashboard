@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { mockEnergyTrends, mockDevices, mockAlerts } from '../lib/mockData';
@@ -18,6 +18,15 @@ type SnapGuide = {
   x?: number;
   y?: number;
 };
+
+type KpiKey = 'totalDevices' | 'onlineDevices' | 'energyToday' | 'activeAlerts';
+
+const KPI_WIDGETS: { id: string; key: KpiKey; x: number }[] = [
+  { id: 'kpi-total-devices', key: 'totalDevices', x: 0 },
+  { id: 'kpi-online-devices', key: 'onlineDevices', x: 3 },
+  { id: 'kpi-energy-today', key: 'energyToday', x: 6 },
+  { id: 'kpi-active-alerts', key: 'activeAlerts', x: 9 },
+];
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
 
@@ -54,7 +63,7 @@ const collidesWithLayout = (item: any, layout: any[]) => {
 };
 
 export function Overview() {
-  const { language, theme, charts, overviewWidgets, overviewLayout, addOverviewWidget, removeOverviewWidget, updateOverviewLayout } = useAppStore();
+  const { language, theme, charts, overviewWidgets, overviewLayout, addOverviewWidget, removeOverviewWidget, updateOverviewLayout, updateOverviewWidgets } = useAppStore();
   const t = translations[language];
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [activeSnapGuide, setActiveSnapGuide] = useState<SnapGuide>({});
@@ -84,12 +93,37 @@ export function Overview() {
     }, {});
   }, [overviewLayout]);
 
-  const stats = [
-    { name: t.overview.totalDevices, value: mockDevices.length.toString(), icon: Server },
-    { name: t.overview.onlineDevices, value: mockDevices.filter(d => d.status === 'online').length.toString(), icon: Activity },
-    { name: t.overview.energyToday, value: '728.8 kWh', icon: Zap },
-    { name: t.overview.activeAlerts, value: mockAlerts.filter(a => a.status === 'active').length.toString(), icon: AlertTriangle },
-  ];
+  const stats: Record<KpiKey, { name: string; value: string; icon: any }> = {
+    totalDevices: { name: t.overview.totalDevices, value: mockDevices.length.toString(), icon: Server },
+    onlineDevices: { name: t.overview.onlineDevices, value: mockDevices.filter(d => d.status === 'online').length.toString(), icon: Activity },
+    energyToday: { name: t.overview.energyToday, value: '728.8 kWh', icon: Zap },
+    activeAlerts: { name: t.overview.activeAlerts, value: mockAlerts.filter(a => a.status === 'active').length.toString(), icon: AlertTriangle },
+  };
+
+  useEffect(() => {
+    const hasLegacyKpis = overviewWidgets.some((widget) => widget.type === 'kpis') || overviewLayout.some((item) => item.i === 'kpis');
+    const hasMissingKpi = KPI_WIDGETS.some((kpi) => !overviewWidgets.some((widget) => widget.id === kpi.id));
+
+    if (!hasLegacyKpis && !hasMissingKpi) return;
+
+    const legacyLayout = overviewLayout.find((item) => item.i === 'kpis');
+    const kpiY = Number.isFinite(legacyLayout?.y) ? legacyLayout.y : 0;
+    const kpiHeight = Number.isFinite(legacyLayout?.h) ? legacyLayout.h : 2;
+    const nextWidgets = [
+      ...KPI_WIDGETS.map((kpi) => ({ id: kpi.id, type: 'kpi' as const, kpiKey: kpi.key })),
+      ...overviewWidgets.filter((widget) => widget.type !== 'kpis' && !KPI_WIDGETS.some((kpi) => kpi.id === widget.id)),
+    ];
+    const nextLayout = [
+      ...KPI_WIDGETS.map((kpi) => {
+        const existing = overviewLayout.find((item) => item.i === kpi.id);
+        return existing || { i: kpi.id, x: kpi.x, y: kpiY, w: 3, h: kpiHeight, minW: 2, minH: 2 };
+      }),
+      ...overviewLayout.filter((item) => item.i !== 'kpis' && !KPI_WIDGETS.some((kpi) => kpi.id === item.i)),
+    ];
+
+    updateOverviewWidgets(nextWidgets);
+    updateOverviewLayout(nextLayout);
+  }, [overviewLayout, overviewWidgets, updateOverviewLayout, updateOverviewWidgets]);
 
   const isDark = theme === 'dark';
   const cartesianGridStroke = isDark ? '#334155' : '#e2e8f0';
@@ -183,23 +217,32 @@ export function Overview() {
     setShowAddMenu(false);
   };
 
-  const renderKPIs = () => (
-    <div className="flex h-full w-full gap-4">
-      {stats.map((stat) => (
-        <div key={stat.name} className="flex-1 overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-center relative group">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="truncate text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">{stat.name}</p>
-              <p className="mt-1 text-2xl xl:text-3xl font-mono font-bold text-slate-900 dark:text-white">{stat.value}</p>
-            </div>
-            <div className="rounded p-2 text-orange-600 dark:text-orange-500">
-              <stat.icon className="h-5 w-5 xl:h-6 xl:w-6" aria-hidden="true" />
-            </div>
+  const renderKPI = (kpiKey?: KpiKey) => {
+    if (!kpiKey) return null;
+
+    const stat = stats[kpiKey];
+    const Icon = stat.icon;
+
+    return (
+      <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-center relative group">
+        <div className="absolute right-3 bottom-3 opacity-0 group-hover:opacity-100 transition-opacity z-10 cursor-se-resize pointer-events-none text-slate-400">
+          <span className="block h-2 w-2 border-r-2 border-b-2 border-current" />
+        </div>
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity z-10 cursor-move draggable-handle bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 rounded p-1 shadow-lg pointer-events-auto">
+          <GripHorizontal className="h-4 w-4" />
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">{stat.name}</p>
+            <p className="mt-1 text-2xl xl:text-3xl font-mono font-bold text-slate-900 dark:text-white truncate">{stat.value}</p>
+          </div>
+          <div className="rounded p-2 text-orange-600 dark:text-orange-500 shrink-0">
+            <Icon className="h-5 w-5 xl:h-6 xl:w-6" aria-hidden="true" />
           </div>
         </div>
-      ))}
-    </div>
-  );
+      </div>
+    );
+  };
 
   const renderTrend = () => (
     <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
@@ -378,14 +421,7 @@ export function Overview() {
           {overviewWidgets.map(widget => {
             return (
               <div key={widget.id}>
-                {widget.type === 'kpis' && (
-                  <div className="h-full w-full group relative">
-                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity z-10 cursor-move draggable-handle bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 rounded p-1 shadow-lg pointer-events-auto">
-                      <GripHorizontal className="h-4 w-4" />
-                    </div>
-                    {renderKPIs()}
-                  </div>
-                )}
+                {widget.type === 'kpi' && renderKPI(widget.kpiKey)}
                 {widget.type === 'trend' && renderTrend()}
                 {widget.type === 'ai' && renderAI()}
                 {widget.type === 'chart' && renderAnalyticChart(widget)}

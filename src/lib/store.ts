@@ -22,7 +22,8 @@ export interface ChartConfig {
 
 export interface OverviewWidget {
   id: string;
-  type: 'kpis' | 'trend' | 'ai' | 'chart';
+  type: 'kpi' | 'kpis' | 'trend' | 'ai' | 'chart';
+  kpiKey?: 'totalDevices' | 'onlineDevices' | 'energyToday' | 'activeAlerts';
   chartId?: string;
 }
 
@@ -73,6 +74,7 @@ interface AppState {
   overviewLayout: any[];
   overviewWidgets: OverviewWidget[];
   updateOverviewLayout: (layout: any[]) => void;
+  updateOverviewWidgets: (widgets: OverviewWidget[]) => void;
   addOverviewWidget: (widget: OverviewWidget, layoutItem: any) => void;
   removeOverviewWidget: (id: string) => void;
   // Workflows
@@ -131,16 +133,23 @@ export const useAppStore = create<AppState>()(
       removeChart: (id) => set((state) => ({ charts: state.charts.filter(c => c.id !== id) })),
 
       overviewLayout: [
-        { i: 'kpis', x: 0, y: 0, w: 12, h: 2, minW: 4, minH: 2 },
+        { i: 'kpi-total-devices', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+        { i: 'kpi-online-devices', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+        { i: 'kpi-energy-today', x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+        { i: 'kpi-active-alerts', x: 9, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
         { i: 'trend', x: 0, y: 2, w: 8, h: 4, minW: 4, minH: 3 },
         { i: 'ai', x: 8, y: 2, w: 4, h: 4, minW: 3, minH: 3 }
       ],
       overviewWidgets: [
-        { id: 'kpis', type: 'kpis' },
+        { id: 'kpi-total-devices', type: 'kpi', kpiKey: 'totalDevices' },
+        { id: 'kpi-online-devices', type: 'kpi', kpiKey: 'onlineDevices' },
+        { id: 'kpi-energy-today', type: 'kpi', kpiKey: 'energyToday' },
+        { id: 'kpi-active-alerts', type: 'kpi', kpiKey: 'activeAlerts' },
         { id: 'trend', type: 'trend' },
         { id: 'ai', type: 'ai' }
       ],
       updateOverviewLayout: (layout) => set({ overviewLayout: layout }),
+      updateOverviewWidgets: (widgets) => set({ overviewWidgets: widgets }),
       addOverviewWidget: (widget, layoutItem) => set((state) => ({
         overviewWidgets: [...state.overviewWidgets, widget],
         overviewLayout: [...state.overviewLayout, layoutItem]
