@@ -351,12 +351,20 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 
 项目已提供真实设备数据接入入口。推荐方式是网关通过 HTTP 主动 POST 遥测数据到 Dashboard 后端；也可以让 Dashboard 后端连接外部 MQTT Broker 并订阅 Topic。前端统一只读取 Dashboard 后端的 `/api/telemetry` 缓冲区。
 
+同一种数据源类型支持配置多条通道。可以在后台 **Settings -> Data Sources** 中新增多个 HTTP Push endpoint 或多个 MQTT Subscriber，例如不同厂区、不同网关、不同客户站点各用独立通道。配置会保存到 PostgreSQL 的 `app_state` 表；未配置 `DATABASE_URL` 的本地演示环境才会回退到服务器本地 `runtime-config.json`。
+
 ### Gateway HTTP Push
 
 网关上报地址：
 
 ```text
 POST https://your-dashboard-domain.com/api/telemetry
+```
+
+后台新增 HTTP Push 通道后，会生成带通道 ID 和 token 的专属地址：
+
+```text
+POST https://your-dashboard-domain.com/api/telemetry/{channelId}/{token}
 ```
 
 如果服务端设置了 `IOT_INGEST_TOKEN`，网关需要携带以下任一认证头：
@@ -386,7 +394,7 @@ Dashboard 前端会自动轮询本机 `/api/telemetry` 缓冲区，并将遥测�
 
 ### Backend MQTT Subscriber
 
-系统不自带 MQTT Broker，但 Dashboard 后端可以连接外部 MQTT Broker 并订阅遥测 Topic。可以在后台 **Settings -> Data Sources** 中配置，也可以通过环境变量提供默认值：
+系统不自带 MQTT Broker，但 Dashboard 后端可以连接外部 MQTT Broker 并订阅遥测 Topic。可以在后台 **Settings -> Data Sources** 中配置多条 MQTT Subscriber，每条 Subscriber 独立保存 Broker URL、账号、Topic、启用状态和连接状态。也可以通过环境变量提供一条默认 MQTT 通道：
 
 ```bash
 MQTT_ENABLED=true
@@ -396,7 +404,7 @@ MQTT_PASSWORD="optional-password"
 MQTT_TOPICS="devices/+/telemetry,factory-a/#"
 ```
 
-后台保存的 MQTT 配置会写入 PostgreSQL 的 `app_state` 表；未配置 `DATABASE_URL` 的本地演示环境才会回退到服务器本地 `runtime-config.json`。当前内置订阅客户端支持 `mqtt://` 和 `mqtts://`，收到消息后会写入同一个 `/api/telemetry` 缓冲区和 `telemetry_messages` 表。
+当前内置订阅客户端支持 `mqtt://` 和 `mqtts://`，收到消息后会写入同一个 `/api/telemetry` 缓冲区和 `telemetry_messages` 表。多条 MQTT Subscriber 可以同时连接，不需要把所有 Topic 挤进同一个 Broker 配置里。
 
 MQTT Payload 格式：
 

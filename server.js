@@ -20,29 +20,46 @@ const databaseSsl = process.env.DATABASE_SSL === 'true' ? {rejectUnauthorized: f
 const db = databaseUrl ? new Pool({connectionString: databaseUrl, ssl: databaseSsl}) : null;
 const telemetryMessages = [];
 const maxTelemetryMessages = Number(process.env.IOT_TELEMETRY_BUFFER_SIZE || 500);
-let mqttConfig = {
+const splitTopics = (value) => Array.isArray(value)
+  ? value.map((topic) => String(topic).trim()).filter(Boolean)
+  : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
+const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const createDefaultHttpChannels = () => [{
+  id: 'http-default',
+  name: 'Default HTTP Push',
+  enabled: true,
+  token: ingestToken,
+}];
+const createEnvMqttChannels = () => (process.env.MQTT_BROKER_URL ? [{
+  id: 'mqtt-default',
+  name: 'Default MQTT Broker',
   enabled: process.env.MQTT_ENABLED === 'true',
   brokerUrl: process.env.MQTT_BROKER_URL || '',
   username: process.env.MQTT_USERNAME || '',
   password: process.env.MQTT_PASSWORD || '',
-  topics: (process.env.MQTT_TOPICS || '').split(',').map((topic) => topic.trim()).filter(Boolean),
-};
-let mqttStatus = {state: 'disabled', message: 'MQTT subscriber is disabled', connectedAt: null, lastMessageAt: null};
-let mqttSocket = null;
-let mqttReconnectTimer = null;
-let mqttPingTimer = null;
-let mqttPacketId = 1;
-let mqttBuffer = Buffer.alloc(0);
+  topics: splitTopics(process.env.MQTT_TOPICS || 'devices/+/telemetry'),
+}] : []);
+let httpPushChannels = createDefaultHttpChannels();
+let mqttChannels = createEnvMqttChannels();
+const mqttRuntimes = new Map();
 
 try {
   if (fs.existsSync(runtimeConfigPath)) {
     const runtimeConfig = JSON.parse(fs.readFileSync(runtimeConfigPath, 'utf8'));
-    if (runtimeConfig.mqttConfig) {
-      mqttConfig = {
-        ...mqttConfig,
+    if (runtimeConfig.dataSources) {
+      httpPushChannels = Array.isArray(runtimeConfig.dataSources.httpPushChannels)
+        ? runtimeConfig.dataSources.httpPushChannels
+        : httpPushChannels;
+      mqttChannels = Array.isArray(runtimeConfig.dataSources.mqttChannels)
+        ? runtimeConfig.dataSources.mqttChannels.map((channel) => ({...channel, topics: splitTopics(channel.topics)}))
+        : mqttChannels;
+    } else if (runtimeConfig.mqttConfig) {
+      mqttChannels = [{
+        id: 'mqtt-default',
+        name: 'Default MQTT Broker',
         ...runtimeConfig.mqttConfig,
-        topics: Array.isArray(runtimeConfig.mqttConfig.topics) ? runtimeConfig.mqttConfig.topics : mqttConfig.topics,
-      };
+        topics: splitTopics(runtimeConfig.mqttConfig.topics),
+      }];
     }
   }
 } catch (error) {
@@ -51,7 +68,7 @@ try {
 
 const saveRuntimeConfig = () => {
   if (!db) {
-    fs.writeFileSync(runtimeConfigPath, JSON.stringify({mqttConfig}, null, 2));
+    fs.writeFileSync(runtimeConfigPath, JSON.stringify({dataSources: {httpPushChannels, mqttChannels}}, null, 2));
   }
 };
 
@@ -100,13 +117,25 @@ const initDatabase = async () => {
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_received ON telemetry_messages (received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_webhook_events_received ON workflow_webhook_events (workflow_id, received_at DESC)');
 
+  const dataSourceState = await getAppState('data_source_channels');
+  if (dataSourceState) {
+    httpPushChannels = Array.isArray(dataSourceState.httpPushChannels)
+      ? dataSourceState.httpPushChannels
+      : httpPushChannels;
+    mqttChannels = Array.isArray(dataSourceState.mqttChannels)
+      ? dataSourceState.mqttChannels.map((channel) => ({...channel, topics: splitTopics(channel.topics)}))
+      : mqttChannels;
+    return;
+  }
+
   const mqttState = await getAppState('mqtt_config');
   if (mqttState) {
-    mqttConfig = {
-      ...mqttConfig,
+    mqttChannels = [{
+      id: 'mqtt-default',
+      name: 'Default MQTT Broker',
       ...mqttState,
-      topics: Array.isArray(mqttState.topics) ? mqttState.topics : mqttConfig.topics,
-    };
+      topics: splitTopics(mqttState.topics),
+    }];
   }
 };
 
@@ -179,14 +208,51 @@ const createMqttConnectPacket = (config) => {
   return createMqttPacket(0x10, Buffer.concat([variableHeader, ...payload]));
 };
 
-const createMqttSubscribePacket = (topics) => {
-  const packetId = mqttPacketId++;
+const createMqttSubscribePacket = (runtime, topics) => {
+  const packetId = runtime.packetId++;
   const packetIdBuffer = Buffer.alloc(2);
   packetIdBuffer.writeUInt16BE(packetId, 0);
   const subscriptions = topics.map((topic) => Buffer.concat([encodeMqttString(topic), Buffer.from([0])]));
 
   return createMqttPacket(0x82, Buffer.concat([packetIdBuffer, ...subscriptions]));
 };
+
+const sanitizeHttpChannel = (channel) => ({
+  id: String(channel.id || createId('http')),
+  name: String(channel.name || 'HTTP Push'),
+  enabled: channel.enabled !== false,
+  token: String(channel.token || ''),
+});
+
+const sanitizeMqttChannel = (channel, existing = null) => ({
+  id: String(channel.id || createId('mqtt')),
+  name: String(channel.name || 'MQTT Broker'),
+  enabled: Boolean(channel.enabled),
+  brokerUrl: String(channel.brokerUrl || '').trim(),
+  username: String(channel.username || '').trim(),
+  password: channel.password === undefined || channel.password === ''
+    ? String(existing?.password || '')
+    : String(channel.password),
+  topics: splitTopics(channel.topics),
+});
+
+const publicMqttChannel = (channel) => ({
+  id: channel.id,
+  name: channel.name,
+  enabled: channel.enabled,
+  brokerUrl: channel.brokerUrl,
+  username: channel.username,
+  topics: channel.topics,
+});
+
+const mqttStatusFor = (channelId) => mqttRuntimes.get(channelId)?.status || {
+  state: 'disabled',
+  message: 'MQTT subscriber is disabled',
+  connectedAt: null,
+  lastMessageAt: null,
+};
+
+const mqttStatuses = () => Object.fromEntries(mqttChannels.map((channel) => [channel.id, mqttStatusFor(channel.id)]));
 
 const persistTelemetryMessages = async (messages, source = 'http') => {
   if (!db || messages.length === 0) return;
@@ -237,27 +303,29 @@ const ingestTelemetryPayload = async (payload, source = 'http') => {
   return accepted;
 };
 
-const stopMqttSubscriber = () => {
-  if (mqttReconnectTimer) {
-    clearTimeout(mqttReconnectTimer);
-    mqttReconnectTimer = null;
+const stopMqttRuntime = (runtime) => {
+  runtime.stopped = true;
+  if (runtime.reconnectTimer) {
+    clearTimeout(runtime.reconnectTimer);
+    runtime.reconnectTimer = null;
   }
-  if (mqttPingTimer) {
-    clearInterval(mqttPingTimer);
-    mqttPingTimer = null;
+  if (runtime.pingTimer) {
+    clearInterval(runtime.pingTimer);
+    runtime.pingTimer = null;
   }
-  if (mqttSocket) {
-    mqttSocket.destroy();
-    mqttSocket = null;
+  if (runtime.socket) {
+    const socket = runtime.socket;
+    runtime.socket = null;
+    socket.destroy();
   }
-  mqttBuffer = Buffer.alloc(0);
+  runtime.buffer = Buffer.alloc(0);
 };
 
-const scheduleMqttReconnect = () => {
-  if (!mqttConfig.enabled || mqttReconnectTimer) return;
-  mqttReconnectTimer = setTimeout(() => {
-    mqttReconnectTimer = null;
-    startMqttSubscriber();
+const scheduleMqttReconnect = (runtime) => {
+  if (!runtime.config.enabled || runtime.reconnectTimer) return;
+  runtime.reconnectTimer = setTimeout(() => {
+    runtime.reconnectTimer = null;
+    startMqttRuntime(runtime.config);
   }, 5000);
 };
 
@@ -267,7 +335,7 @@ const createMqttPubackPacket = (packetId) => {
   return createMqttPacket(0x40, packetIdBuffer);
 };
 
-const handleMqttPublish = async (packet, flags) => {
+const handleMqttPublish = async (runtime, packet, flags) => {
   if (packet.length < 2) return;
   const topicLength = packet.readUInt16BE(0);
   const topicEnd = 2 + topicLength;
@@ -281,7 +349,7 @@ const handleMqttPublish = async (packet, flags) => {
     if (packet.length < topicEnd + 2) return;
     const packetId = packet.readUInt16BE(topicEnd);
     payloadStart += 2;
-    mqttSocket?.write(createMqttPubackPacket(packetId));
+    runtime.socket?.write(createMqttPubackPacket(packetId));
   }
 
   const payloadText = packet.slice(payloadStart).toString();
@@ -292,122 +360,149 @@ const handleMqttPublish = async (packet, flags) => {
       Array.isArray(payload)
         ? payload.map((item) => ({...item, mqtt_topic: topic}))
         : {...payload, mqtt_topic: topic},
-      'mqtt'
+      `mqtt:${runtime.config.id}`
     );
     if (accepted.length > 0) {
-      mqttStatus = {...mqttStatus, lastMessageAt: new Date().toISOString()};
+      runtime.status = {...runtime.status, lastMessageAt: new Date().toISOString()};
     }
   } catch (error) {
-    mqttStatus = {...mqttStatus, message: `MQTT payload JSON parse failed on ${topic}`};
+    runtime.status = {...runtime.status, message: `MQTT payload JSON parse failed on ${topic}`};
   }
 };
 
-const handleMqttData = (chunk) => {
-  mqttBuffer = Buffer.concat([mqttBuffer, chunk]);
+const handleMqttData = (runtime, chunk) => {
+  runtime.buffer = Buffer.concat([runtime.buffer, chunk]);
 
-  while (mqttBuffer.length >= 2) {
+  while (runtime.buffer.length >= 2) {
     let multiplier = 1;
     let remainingLength = 0;
     let offset = 1;
     let encodedByte = 0;
 
     do {
-      if (offset >= mqttBuffer.length) return;
-      encodedByte = mqttBuffer[offset++];
+      if (offset >= runtime.buffer.length) return;
+      encodedByte = runtime.buffer[offset++];
       remainingLength += (encodedByte & 127) * multiplier;
       multiplier *= 128;
     } while ((encodedByte & 128) !== 0);
 
     const packetEnd = offset + remainingLength;
-    if (mqttBuffer.length < packetEnd) return;
+    if (runtime.buffer.length < packetEnd) return;
 
-    const fixedHeader = mqttBuffer[0];
+    const fixedHeader = runtime.buffer[0];
     const packetType = fixedHeader >> 4;
     const flags = fixedHeader & 0x0f;
-    const packet = mqttBuffer.slice(offset, packetEnd);
-    mqttBuffer = mqttBuffer.slice(packetEnd);
+    const packet = runtime.buffer.slice(offset, packetEnd);
+    runtime.buffer = runtime.buffer.slice(packetEnd);
 
     if (packetType === 2) {
       const returnCode = packet[1];
       if (returnCode === 0) {
-        mqttStatus = {state: 'connected', message: 'Connected to MQTT broker', connectedAt: new Date().toISOString(), lastMessageAt: mqttStatus.lastMessageAt};
-        if (mqttConfig.topics.length > 0) {
-          mqttSocket?.write(createMqttSubscribePacket(mqttConfig.topics));
+        runtime.status = {state: 'connected', message: 'Connected to MQTT broker', connectedAt: new Date().toISOString(), lastMessageAt: runtime.status.lastMessageAt};
+        if (runtime.config.topics.length > 0) {
+          runtime.socket?.write(createMqttSubscribePacket(runtime, runtime.config.topics));
         }
       } else {
-        mqttStatus = {state: 'error', message: `MQTT CONNACK rejected with code ${returnCode}`, connectedAt: null, lastMessageAt: mqttStatus.lastMessageAt};
-        mqttSocket?.destroy();
+        runtime.status = {state: 'error', message: `MQTT CONNACK rejected with code ${returnCode}`, connectedAt: null, lastMessageAt: runtime.status.lastMessageAt};
+        runtime.socket?.destroy();
       }
     }
 
     if (packetType === 3) {
-      handleMqttPublish(packet, flags).catch((error) => {
-        mqttStatus = {...mqttStatus, message: error.message};
+      handleMqttPublish(runtime, packet, flags).catch((error) => {
+        runtime.status = {...runtime.status, message: error.message};
       });
     }
   }
 };
 
-const startMqttSubscriber = () => {
-  stopMqttSubscriber();
+const startMqttRuntime = (config) => {
+  const previous = mqttRuntimes.get(config.id);
+  if (previous) stopMqttRuntime(previous);
 
-  if (!mqttConfig.enabled) {
-    mqttStatus = {state: 'disabled', message: 'MQTT subscriber is disabled', connectedAt: null, lastMessageAt: mqttStatus.lastMessageAt};
+  const runtime = previous || {
+    config,
+    socket: null,
+    reconnectTimer: null,
+    pingTimer: null,
+    packetId: 1,
+    buffer: Buffer.alloc(0),
+    status: {state: 'disabled', message: 'MQTT subscriber is disabled', connectedAt: null, lastMessageAt: null},
+  };
+  runtime.config = config;
+  runtime.stopped = false;
+  mqttRuntimes.set(config.id, runtime);
+
+  if (!config.enabled) {
+    runtime.status = {state: 'disabled', message: 'MQTT subscriber is disabled', connectedAt: null, lastMessageAt: runtime.status.lastMessageAt};
     return;
   }
 
-  if (!mqttConfig.brokerUrl || mqttConfig.topics.length === 0) {
-    mqttStatus = {state: 'error', message: 'MQTT broker URL and at least one topic are required', connectedAt: null, lastMessageAt: mqttStatus.lastMessageAt};
+  if (!config.brokerUrl || config.topics.length === 0) {
+    runtime.status = {state: 'error', message: 'MQTT broker URL and at least one topic are required', connectedAt: null, lastMessageAt: runtime.status.lastMessageAt};
     return;
   }
 
   let parsedUrl;
   try {
-    parsedUrl = new URL(mqttConfig.brokerUrl);
-    mqttConfig = {
-      ...mqttConfig,
-      username: mqttConfig.username || decodeURIComponent(parsedUrl.username || ''),
-      password: mqttConfig.password || decodeURIComponent(parsedUrl.password || ''),
+    parsedUrl = new URL(config.brokerUrl);
+    runtime.config = {
+      ...config,
+      username: config.username || decodeURIComponent(parsedUrl.username || ''),
+      password: config.password || decodeURIComponent(parsedUrl.password || ''),
     };
   } catch (error) {
-    mqttStatus = {state: 'error', message: 'Invalid MQTT broker URL', connectedAt: null, lastMessageAt: mqttStatus.lastMessageAt};
+    runtime.status = {state: 'error', message: 'Invalid MQTT broker URL', connectedAt: null, lastMessageAt: runtime.status.lastMessageAt};
     return;
   }
 
   const isTls = parsedUrl.protocol === 'mqtts:';
   if (!isTls && parsedUrl.protocol !== 'mqtt:') {
-    mqttStatus = {state: 'error', message: 'Only mqtt:// and mqtts:// broker URLs are supported by the backend subscriber', connectedAt: null, lastMessageAt: mqttStatus.lastMessageAt};
+    runtime.status = {state: 'error', message: 'Only mqtt:// and mqtts:// broker URLs are supported by the backend subscriber', connectedAt: null, lastMessageAt: runtime.status.lastMessageAt};
     return;
   }
 
-  mqttStatus = {state: 'connecting', message: 'Connecting to MQTT broker', connectedAt: null, lastMessageAt: mqttStatus.lastMessageAt};
+  runtime.status = {state: 'connecting', message: 'Connecting to MQTT broker', connectedAt: null, lastMessageAt: runtime.status.lastMessageAt};
   const portNumber = Number(parsedUrl.port || (isTls ? 8883 : 1883));
   const connectionOptions = {host: parsedUrl.hostname, port: portNumber};
 
-  mqttSocket = isTls ? tls.connect(connectionOptions) : net.connect(connectionOptions);
+  const socket = isTls ? tls.connect(connectionOptions) : net.connect(connectionOptions);
+  runtime.socket = socket;
 
-  mqttSocket.on('connect', () => {
-    mqttSocket?.write(createMqttConnectPacket(mqttConfig));
-    mqttPingTimer = setInterval(() => {
-      mqttSocket?.write(Buffer.from([0xc0, 0x00]));
+  socket.on('connect', () => {
+    socket.write(createMqttConnectPacket(runtime.config));
+    runtime.pingTimer = setInterval(() => {
+      socket.write(Buffer.from([0xc0, 0x00]));
     }, 25000);
   });
 
-  mqttSocket.on('data', handleMqttData);
-  mqttSocket.on('error', (error) => {
-    mqttStatus = {state: 'error', message: error.message, connectedAt: null, lastMessageAt: mqttStatus.lastMessageAt};
+  socket.on('data', (chunk) => handleMqttData(runtime, chunk));
+  socket.on('error', (error) => {
+    runtime.status = {state: 'error', message: error.message, connectedAt: null, lastMessageAt: runtime.status.lastMessageAt};
   });
-  mqttSocket.on('close', () => {
-    if (mqttPingTimer) {
-      clearInterval(mqttPingTimer);
-      mqttPingTimer = null;
+  socket.on('close', () => {
+    if (runtime.pingTimer) {
+      clearInterval(runtime.pingTimer);
+      runtime.pingTimer = null;
     }
-    mqttSocket = null;
-    if (mqttConfig.enabled) {
-      mqttStatus = {state: 'reconnecting', message: 'MQTT connection closed, reconnecting', connectedAt: null, lastMessageAt: mqttStatus.lastMessageAt};
-      scheduleMqttReconnect();
+    if (runtime.socket !== socket) return;
+    runtime.socket = null;
+    if (runtime.config.enabled && !runtime.stopped) {
+      runtime.status = {state: 'reconnecting', message: 'MQTT connection closed, reconnecting', connectedAt: null, lastMessageAt: runtime.status.lastMessageAt};
+      scheduleMqttReconnect(runtime);
     }
   });
+};
+
+const startMqttSubscribers = () => {
+  const activeIds = new Set(mqttChannels.map((channel) => channel.id));
+  for (const [channelId, runtime] of mqttRuntimes.entries()) {
+    if (!activeIds.has(channelId)) {
+      stopMqttRuntime(runtime);
+      mqttRuntimes.delete(channelId);
+    }
+  }
+  mqttChannels.forEach((channel) => startMqttRuntime(channel));
 };
 
 app.disable('x-powered-by');
@@ -421,46 +516,99 @@ app.get('/health', (_req, res) => {
   res.status(200).json({status: 'ok'});
 });
 
+app.get('/api/data-sources', (_req, res) => {
+  res.status(200).json({
+    httpPushChannels: httpPushChannels.map(sanitizeHttpChannel),
+    mqttChannels: mqttChannels.map(publicMqttChannel),
+    mqttStatuses: mqttStatuses(),
+  });
+});
+
+app.post('/api/data-sources', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const previousMqttById = new Map(mqttChannels.map((channel) => [channel.id, channel]));
+    httpPushChannels = Array.isArray(payload.httpPushChannels)
+      ? payload.httpPushChannels.map(sanitizeHttpChannel)
+      : httpPushChannels;
+    mqttChannels = Array.isArray(payload.mqttChannels)
+      ? payload.mqttChannels.map((channel) => sanitizeMqttChannel(channel, previousMqttById.get(channel.id)))
+      : mqttChannels;
+
+    if (db) {
+      await setAppState('data_source_channels', {httpPushChannels, mqttChannels});
+    } else {
+      saveRuntimeConfig();
+    }
+
+    startMqttSubscribers();
+    res.status(200).json({
+      httpPushChannels: httpPushChannels.map(sanitizeHttpChannel),
+      mqttChannels: mqttChannels.map(publicMqttChannel),
+      mqttStatuses: mqttStatuses(),
+    });
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
 app.get('/api/mqtt/config', (_req, res) => {
+  const channel = mqttChannels[0] || sanitizeMqttChannel({});
   res.status(200).json({
     config: {
-      enabled: mqttConfig.enabled,
-      brokerUrl: mqttConfig.brokerUrl,
-      username: mqttConfig.username,
-      topics: mqttConfig.topics,
+      enabled: channel.enabled,
+      brokerUrl: channel.brokerUrl,
+      username: channel.username,
+      topics: channel.topics,
     },
-    status: mqttStatus,
+    status: mqttStatusFor(channel.id),
   });
 });
 
 app.post('/api/mqtt/config', async (req, res) => {
   try {
     const nextConfig = req.body || {};
-    mqttConfig = {
-      enabled: Boolean(nextConfig.enabled),
-      brokerUrl: String(nextConfig.brokerUrl || '').trim(),
-      username: String(nextConfig.username || '').trim(),
-      password: String(nextConfig.password || ''),
-      topics: Array.isArray(nextConfig.topics)
-        ? nextConfig.topics.map((topic) => String(topic).trim()).filter(Boolean)
-        : String(nextConfig.topics || '').split(',').map((topic) => topic.trim()).filter(Boolean),
-    };
+    mqttChannels = [sanitizeMqttChannel({
+      id: mqttChannels[0]?.id || 'mqtt-default',
+      name: mqttChannels[0]?.name || 'Default MQTT Broker',
+      ...nextConfig,
+    }, mqttChannels[0])];
     if (db) {
-      await setAppState('mqtt_config', mqttConfig);
+      await setAppState('data_source_channels', {httpPushChannels, mqttChannels});
     } else {
       saveRuntimeConfig();
     }
 
-    startMqttSubscriber();
+    startMqttSubscribers();
+    const channel = mqttChannels[0];
     res.status(200).json({
       config: {
-        enabled: mqttConfig.enabled,
-        brokerUrl: mqttConfig.brokerUrl,
-        username: mqttConfig.username,
-        topics: mqttConfig.topics,
+        enabled: channel.enabled,
+        brokerUrl: channel.brokerUrl,
+        username: channel.username,
+        topics: channel.topics,
       },
-      status: mqttStatus,
+      status: mqttStatusFor(channel.id),
     });
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.post('/api/telemetry/:channelId/:token', async (req, res) => {
+  try {
+    const channel = httpPushChannels.find((item) => item.id === req.params.channelId);
+    if (!channel || !channel.enabled) {
+      res.status(404).json({error: 'telemetry channel not found'});
+      return;
+    }
+    if (channel.token && req.params.token !== channel.token) {
+      res.status(401).json({error: 'invalid telemetry token'});
+      return;
+    }
+
+    const accepted = await ingestTelemetryPayload(req.body, `http:${channel.id}`);
+    res.status(202).json({accepted: accepted.length});
   } catch (error) {
     res.status(500).json({error: error.message});
   }
@@ -476,7 +624,7 @@ app.post('/api/telemetry', async (req, res) => {
       }
     }
 
-    const accepted = await ingestTelemetryPayload(req.body, 'http');
+    const accepted = await ingestTelemetryPayload(req.body, 'http:legacy');
 
     res.status(202).json({accepted: accepted.length});
   } catch (error) {
@@ -569,7 +717,7 @@ const startServer = async () => {
 
   app.listen(port, '0.0.0.0', () => {
     console.log(`AI IoT Dashboard is running on port ${port}`);
-    startMqttSubscriber();
+    startMqttSubscribers();
   });
 };
 
