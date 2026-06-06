@@ -1,5 +1,5 @@
 {
-  "name": "AI Industrial Operations Platform",
+  "name": "AI IoT Dashboard",
   "description": "An AI-powered industrial operations platform that connects machines, meters and sensors, monitors real-time data, controls devices remotely, automates workflows, and helps industrial teams reduce energy costs and equipment downtime.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

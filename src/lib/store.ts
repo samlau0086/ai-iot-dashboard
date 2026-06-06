@@ -13,6 +13,19 @@ export interface User {
   password?: string;
   role: string;
   siteId: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt?: string;
+  approvedAt?: string;
+}
+
+export interface NotificationChannel {
+  id: string;
+  type: 'bark' | 'email' | 'webhook' | 'sms' | 'telegram' | 'slack';
+  name: string;
+  target: string;
+  enabled: boolean;
+  lastTestStatus?: 'success' | 'failed';
+  lastTestAt?: string;
 }
 
 export interface ChartConfig {
@@ -266,6 +279,11 @@ interface AppState {
   setEmailAlerts: (email: string) => void;
   webhookUrl: string;
   setWebhookUrl: (url: string) => void;
+  notificationChannels: NotificationChannel[];
+  addNotificationChannel: (channel: NotificationChannel) => void;
+  updateNotificationChannel: (id: string, channel: Partial<NotificationChannel>) => void;
+  deleteNotificationChannel: (id: string) => void;
+  testNotificationChannel: (id: string) => void;
   // Devices
   devices: Device[];
   deviceDataSourceStatus: 'mock' | 'api' | 'mqtt' | 'error';
@@ -278,10 +296,15 @@ interface AppState {
   // Users
   users: User[];
   addUser: (user: User) => void;
+  registerUser: (user: Omit<User, 'id' | 'role' | 'siteId' | 'status' | 'createdAt'> & { siteId?: string }) => { ok: boolean; message: string };
   updateUser: (id: string, user: Partial<User>) => void;
   deleteUser: (id: string) => void;
+  approveUser: (id: string, role: string, siteId: string) => void;
+  rejectUser: (id: string) => void;
+  login: (email: string, password: string) => { ok: boolean; message: string };
+  logout: () => void;
   // Profile
-  currentUser: User;
+  currentUser: User | null;
   updateCurrentUser: (user: Partial<User>) => void;
   // Charts
   charts: ChartConfig[];
@@ -328,6 +351,29 @@ export const useAppStore = create<AppState>()(
       setEmailAlerts: (email) => set({ emailAlerts: email }),
       webhookUrl: '',
       setWebhookUrl: (url) => set({ webhookUrl: url }),
+      notificationChannels: [],
+      addNotificationChannel: (channel) => set((state) => ({
+        notificationChannels: [...state.notificationChannels, channel]
+      })),
+      updateNotificationChannel: (id, channel) => set((state) => ({
+        notificationChannels: state.notificationChannels.map((item) => (
+          item.id === id ? { ...item, ...channel } : item
+        ))
+      })),
+      deleteNotificationChannel: (id) => set((state) => ({
+        notificationChannels: state.notificationChannels.filter((item) => item.id !== id)
+      })),
+      testNotificationChannel: (id) => set((state) => ({
+        notificationChannels: state.notificationChannels.map((item) => (
+          item.id === id
+            ? {
+                ...item,
+                lastTestStatus: item.enabled && item.target.trim() ? 'success' : 'failed',
+                lastTestAt: new Date().toISOString(),
+              }
+            : item
+        ))
+      })),
 
       devices: mockDevices,
       deviceDataSourceStatus: 'mock',
@@ -346,20 +392,63 @@ export const useAppStore = create<AppState>()(
       })),
 
       users: [
-        { id: '1', name: 'Admin User', email: 'admin@factory.com', role: 'Administrator', siteId: 'factory-a', password: 'password123' }
+        { id: '1', name: 'Admin User', email: 'admin@factory.com', role: 'Admin', siteId: 'factory-a', password: 'password123', status: 'approved', approvedAt: new Date().toISOString() }
       ],
       addUser: (user) => set((state) => ({ users: [...state.users, user] })),
+      registerUser: (user) => {
+        const email = user.email.trim().toLowerCase();
+        const exists = useAppStore.getState().users.some((item) => item.email.toLowerCase() === email);
+        if (exists) return { ok: false, message: 'This email is already registered.' };
+
+        const pendingUser: User = {
+          id: `user-${Date.now()}`,
+          name: user.name.trim(),
+          email,
+          password: user.password,
+          role: 'Viewer',
+          siteId: user.siteId?.trim() || 'factory-a',
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        };
+
+        set((state) => ({ users: [...state.users, pendingUser] }));
+        return { ok: true, message: 'Registration submitted. Please wait for administrator approval.' };
+      },
       updateUser: (id, user) => set((state) => ({
-        users: state.users.map(u => u.id === id ? { ...u, ...user } : u)
+        users: state.users.map(u => u.id === id ? { ...u, ...user } : u),
+        currentUser: state.currentUser && state.currentUser.id === id ? { ...state.currentUser, ...user } : state.currentUser
       })),
       deleteUser: (id) => set((state) => ({
-        users: state.users.filter(u => u.id !== id)
+        users: state.users.filter(u => u.id !== id),
+        currentUser: state.currentUser && state.currentUser.id === id ? null : state.currentUser
       })),
+      approveUser: (id, role, siteId) => set((state) => ({
+        users: state.users.map((user) => (
+          user.id === id
+            ? { ...user, role, siteId, status: 'approved', approvedAt: new Date().toISOString() }
+            : user
+        ))
+      })),
+      rejectUser: (id) => set((state) => ({
+        users: state.users.map((user) => (
+          user.id === id ? { ...user, status: 'rejected' } : user
+        )),
+        currentUser: state.currentUser && state.currentUser.id === id ? null : state.currentUser
+      })),
+      login: (email, password) => {
+        const user = useAppStore.getState().users.find((item) => item.email.toLowerCase() === email.trim().toLowerCase());
+        if (!user || user.password !== password) return { ok: false, message: 'Invalid email or password.' };
+        if (user.status !== 'approved') return { ok: false, message: 'Your account is waiting for approval.' };
 
-      currentUser: { id: '1', name: 'Admin User', email: 'admin@factory.com', role: 'Administrator', siteId: 'factory-a', password: 'password123' },
+        set({ currentUser: user });
+        return { ok: true, message: 'Signed in.' };
+      },
+      logout: () => set({ currentUser: null }),
+
+      currentUser: null,
       updateCurrentUser: (user) => set((state) => ({
-        currentUser: { ...state.currentUser, ...user },
-        users: state.users.map(u => u.id === state.currentUser.id ? { ...u, ...user } : u)
+        currentUser: state.currentUser ? { ...state.currentUser, ...user } : state.currentUser,
+        users: state.currentUser ? state.users.map(u => u.id === state.currentUser?.id ? { ...u, ...user } : u) : state.users
       })),
 
       charts: DEFAULT_CHARTS,
@@ -500,9 +589,31 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'app-storage',
-      version: 8,
+      version: 9,
       migrate: (persistedState: any, version) => {
-        if (version >= 8 || !persistedState) return persistedState;
+        if (!persistedState) return persistedState;
+
+        if (version >= 8 && version < 9) {
+          const upgradedUsers = (persistedState.users || []).map((user: User) => ({
+            ...user,
+            status: user.status || 'approved',
+          }));
+
+          const legacyChannels: NotificationChannel[] = [
+            persistedState.barkUrl ? { id: 'legacy-bark', type: 'bark', name: 'Bark Primary', target: persistedState.barkUrl, enabled: true } : null,
+            persistedState.emailAlerts ? { id: 'legacy-email', type: 'email', name: 'Alert Email', target: persistedState.emailAlerts, enabled: true } : null,
+            persistedState.webhookUrl ? { id: 'legacy-webhook', type: 'webhook', name: 'Webhook Primary', target: persistedState.webhookUrl, enabled: true } : null,
+          ].filter(Boolean) as NotificationChannel[];
+
+          return {
+            ...persistedState,
+            users: upgradedUsers,
+            currentUser: null,
+            notificationChannels: persistedState.notificationChannels || legacyChannels,
+          };
+        }
+
+        if (version >= 9) return persistedState;
 
         const builtInTemplateIds = new Set(DASHBOARD_TEMPLATES.map((template) => template.id));
         const customTemplates = (persistedState.dashboardTemplates || []).filter((template: DashboardTemplate) => !builtInTemplateIds.has(template.id));
@@ -529,6 +640,12 @@ export const useAppStore = create<AppState>()(
           },
           overviewLayout: cloneLayout(activeTemplate.layout),
           overviewWidgets: cloneWidgets(activeTemplate.widgets),
+          users: (persistedState.users || []).map((user: User) => ({
+            ...user,
+            status: user.status || 'approved',
+          })),
+          currentUser: null,
+          notificationChannels: persistedState.notificationChannels || [],
         };
       },
     }

@@ -1,13 +1,44 @@
 import React, { useState } from 'react';
-import { useAppStore } from '../lib/store';
+import { Bell, CheckCircle2, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users } from 'lucide-react';
+import { useAppStore, type NotificationChannel } from '../lib/store';
 import { translations } from '../lib/i18n';
-import { Settings as SettingsIcon, Bell, Users } from 'lucide-react';
 import { cn } from '../lib/utils';
 
+const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
+const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'];
+
+const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 export function Settings() {
-  const { language, barkUrl, setBarkUrl, emailAlerts, setEmailAlerts, webhookUrl, setWebhookUrl } = useAppStore();
+  const {
+    language,
+    notificationChannels,
+    addNotificationChannel,
+    updateNotificationChannel,
+    deleteNotificationChannel,
+    testNotificationChannel,
+    users,
+    addUser,
+    updateUser,
+    deleteUser,
+    approveUser,
+    rejectUser,
+    currentUser,
+  } = useAppStore();
   const t = translations[language];
   const [activeTab, setActiveTab] = useState<'general' | 'notifications' | 'users'>('general');
+  const [channelDraft, setChannelDraft] = useState({
+    type: 'email' as NotificationChannel['type'],
+    name: '',
+    target: '',
+  });
+  const [userDraft, setUserDraft] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'Operator',
+    siteId: 'factory-a',
+  });
 
   const tabs = [
     { id: 'general', name: t.settings.tabs.general, icon: SettingsIcon },
@@ -15,13 +46,41 @@ export function Settings() {
     { id: 'users', name: t.settings.tabs.users, icon: Users },
   ];
 
+  const handleAddChannel = () => {
+    if (!channelDraft.target.trim()) return;
+
+    addNotificationChannel({
+      id: newId('channel'),
+      type: channelDraft.type,
+      name: channelDraft.name.trim() || `${channelDraft.type.toUpperCase()} Channel`,
+      target: channelDraft.target.trim(),
+      enabled: true,
+    });
+    setChannelDraft({ type: 'email', name: '', target: '' });
+  };
+
+  const handleAddUser = () => {
+    if (!userDraft.name.trim() || !userDraft.email.trim() || !userDraft.password.trim()) return;
+
+    addUser({
+      id: newId('user'),
+      name: userDraft.name.trim(),
+      email: userDraft.email.trim().toLowerCase(),
+      password: userDraft.password,
+      role: userDraft.role,
+      siteId: userDraft.siteId.trim() || 'factory-a',
+      status: 'approved',
+      createdAt: new Date().toISOString(),
+      approvedAt: new Date().toISOString(),
+    });
+    setUserDraft({ name: '', email: '', password: '', role: 'Operator', siteId: 'factory-a' });
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{t.settings.title}</h1>
-        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-          {t.settings.desc}
-        </p>
+        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{t.settings.desc}</p>
       </div>
 
       <div className="bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 rounded-lg shadow-sm">
@@ -52,177 +111,323 @@ export function Settings() {
         </div>
 
         <div className="px-4 py-6 sm:p-8 min-h-[400px]">
-          <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
-            
-            {activeTab === 'general' && (
-              <>
-                <div className="sm:col-span-4">
-                  <label htmlFor="company-name" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
-                    {t.settings.whiteLabel}
-                  </label>
-                  <div className="mt-2">
-                    <div className="flex rounded shadow-sm ring-1 ring-inset ring-slate-300 dark:ring-slate-700 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500 sm:max-w-md bg-transparent dark:bg-slate-900/50">
-                      <input
-                        type="text"
-                        name="company-name"
-                        id="company-name"
-                        className="block flex-1 border-0 bg-transparent py-1.5 pl-3 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-0 sm:text-sm sm:leading-6 font-mono"
-                        placeholder="Acme Industrial Solutions"
-                        defaultValue="Factory A Operations"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="sm:col-span-full">
-                  <label htmlFor="timezone" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
-                    {t.settings.timezone}
-                  </label>
-                  <div className="mt-2">
-                    <select
-                      id="timezone"
-                      name="timezone"
-                      className="block w-full rounded border-0 py-1.5 text-slate-900 dark:text-slate-300 bg-transparent dark:bg-slate-900/50 shadow-sm ring-1 ring-inset ring-slate-300 dark:ring-slate-700 focus:ring-2 focus:ring-inset focus:ring-orange-500 sm:max-w-xs sm:text-sm sm:leading-6 outline-none"
-                      defaultValue="CST"
-                    >
-                      <option value="UTC">UTC (Coordinated Universal Time)</option>
-                      <option value="EST">EST (Eastern Standard Time)</option>
-                      <option value="PST">PST (Pacific Standard Time)</option>
-                      <option value="CST">CST (China Standard Time)</option>
-                    </select>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {activeTab === 'notifications' && (
-              <>
-                <div className="sm:col-span-full">
-                  <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">{t.settings.notifications}</h2>
-                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{t.settings.notificationsDesc}</p>
-                </div>
-
-                <div className="sm:col-span-4">
-                  <label htmlFor="bark-url" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
-                    {t.settings.barkConfig}
-                  </label>
-                  <div className="mt-2">
-                    <div className="flex rounded shadow-sm ring-1 ring-inset ring-slate-300 dark:ring-slate-700 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500 sm:max-w-md bg-transparent dark:bg-slate-900/50">
-                      <input
-                        type="url"
-                        id="bark-url"
-                        value={barkUrl}
-                        onChange={(e) => setBarkUrl(e.target.value)}
-                        className="block flex-1 border-0 bg-transparent py-1.5 pl-3 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-0 sm:text-sm sm:leading-6 font-mono"
-                        placeholder="https://api.day.app/your_key/"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="sm:col-span-4">
-                  <label htmlFor="email-alerts" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
-                    {t.settings.emailConfig}
-                  </label>
-                  <div className="mt-2">
-                    <div className="flex rounded shadow-sm ring-1 ring-inset ring-slate-300 dark:ring-slate-700 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500 sm:max-w-md bg-transparent dark:bg-slate-900/50">
-                      <input
-                        type="email"
-                        id="email-alerts"
-                        value={emailAlerts}
-                        onChange={(e) => setEmailAlerts(e.target.value)}
-                        className="block flex-1 border-0 bg-transparent py-1.5 pl-3 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-0 sm:text-sm sm:leading-6 font-mono"
-                        placeholder="admin@factory.com"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="sm:col-span-4">
-                  <label htmlFor="webhook-url" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
-                    {t.settings.webhookConfig}
-                  </label>
-                  <div className="mt-2">
-                    <div className="flex rounded shadow-sm ring-1 ring-inset ring-slate-300 dark:ring-slate-700 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500 sm:max-w-md bg-transparent dark:bg-slate-900/50">
-                      <input
-                        type="url"
-                        id="webhook-url"
-                        value={webhookUrl}
-                        onChange={(e) => setWebhookUrl(e.target.value)}
-                        className="block flex-1 border-0 bg-transparent py-1.5 pl-3 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-0 sm:text-sm sm:leading-6 font-mono"
-                        placeholder="https://your-domain.com/webhook"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {activeTab === 'users' && (
-              <div className="col-span-full space-y-4">
-                <div className="flex justify-between items-center mb-6">
-                  <div>
-                    <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">User Management</h2>
-                    <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">View and manage platform access.</p>
-                  </div>
-                  <button 
-                    type="button" 
-                    className="rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 border border-orange-500"
-                    onClick={() => {
-                        const newName = prompt('Enter new user name:');
-                        if (newName) {
-                           useAppStore.getState().addUser({
-                               id: Math.random().toString(36).substring(7),
-                               name: newName,
-                               email: newName.toLowerCase().replace(' ', '') + '@factory.com',
-                               role: 'Operator',
-                               siteId: 'factory-a'
-                           })
-                        }
-                    }}
-                  >
-                    + Add User
-                  </button>
-                </div>
-                
-                <div className="overflow-x-auto min-h-[300px]">
-                  <table className="min-w-full text-left text-sm whitespace-nowrap">
-                    <thead className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
-                      <tr>
-                        <th className="px-4 py-3 font-semibold text-slate-900 dark:text-slate-300">User Details</th>
-                        <th className="px-4 py-3 font-semibold text-slate-900 dark:text-slate-300">Role</th>
-                        <th className="px-4 py-3 font-semibold text-slate-900 dark:text-slate-300">Site Access</th>
-                        <th className="px-4 py-3 font-semibold text-slate-900 dark:text-slate-300 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-[#1c2128]">
-                      {useAppStore.getState().users.map((user) => (
-                        <tr key={user.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                          <td className="px-4 py-3">
-                            <div className="font-medium text-slate-900 dark:text-white">{user.name}</div>
-                            <div className="text-slate-500">{user.email}</div>
-                          </td>
-                          <td className="px-4 py-3 text-slate-500 dark:text-slate-400"><span className="inline-flex items-center rounded-md bg-blue-50 dark:bg-blue-500/10 px-2 py-1 text-xs font-medium text-blue-700 dark:text-blue-400 ring-1 ring-inset ring-blue-700/10">{user.role}</span></td>
-                          <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{user.siteId}</td>
-                          <td className="px-4 py-3 text-right">
-                             <button onClick={() => {
-                                 const change = prompt('Edit User Name:', user.name);
-                                 if (change) useAppStore.getState().updateUser(user.id, { name: change });
-                             }} className="text-orange-600 hover:text-orange-800 mr-3">Edit</button>
-                             <button onClick={() => {
-                                 if (confirm('Delete this user?')) useAppStore.getState().deleteUser(user.id);
-                             }} className="text-red-600 hover:text-red-800">Delete</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+          {activeTab === 'general' && (
+            <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
+              <div className="sm:col-span-4">
+                <label htmlFor="company-name" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
+                  {t.settings.whiteLabel}
+                </label>
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    name="company-name"
+                    id="company-name"
+                    className="block w-full rounded-md border-0 bg-transparent py-2 px-3 text-slate-900 dark:text-white shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-orange-500 dark:bg-slate-900/50 dark:ring-slate-700 sm:text-sm"
+                    placeholder="AI IoT Dashboard"
+                    defaultValue="AI IoT Dashboard"
+                  />
                 </div>
               </div>
-            )}
 
-          </div>
+              <div className="sm:col-span-full">
+                <label htmlFor="timezone" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
+                  {t.settings.timezone}
+                </label>
+                <div className="mt-2">
+                  <select
+                    id="timezone"
+                    name="timezone"
+                    className="block w-full rounded-md border-0 py-2 px-3 text-slate-900 dark:text-slate-300 bg-transparent dark:bg-slate-900/50 shadow-sm ring-1 ring-inset ring-slate-300 dark:ring-slate-700 focus:ring-2 focus:ring-inset focus:ring-orange-500 sm:max-w-xs sm:text-sm outline-none"
+                    defaultValue="CST"
+                  >
+                    <option value="UTC">UTC</option>
+                    <option value="EST">EST</option>
+                    <option value="PST">PST</option>
+                    <option value="CST">CST (China Standard Time)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'notifications' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">{t.settings.notifications}</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  Same channel type can be added multiple times, for example several emails, webhooks, or Bark endpoints.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[150px_1fr_1.5fr_auto]">
+                <select
+                  value={channelDraft.type}
+                  onChange={(event) => setChannelDraft((current) => ({ ...current, type: event.target.value as NotificationChannel['type'] }))}
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                >
+                  {CHANNEL_TYPES.map((type) => (
+                    <option key={type} value={type}>{type.toUpperCase()}</option>
+                  ))}
+                </select>
+                <input
+                  value={channelDraft.name}
+                  onChange={(event) => setChannelDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Channel name"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <input
+                  value={channelDraft.target}
+                  onChange={(event) => setChannelDraft((current) => ({ ...current, target: event.target.value }))}
+                  placeholder="Email, webhook URL, Bark URL, phone, bot target..."
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddChannel}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add
+                </button>
+              </div>
+
+              <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Channel</th>
+                      <th className="px-4 py-3 font-semibold">Target</th>
+                      <th className="px-4 py-3 font-semibold">Enabled</th>
+                      <th className="px-4 py-3 font-semibold">Test</th>
+                      <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+                    {notificationChannels.map((channel) => (
+                      <tr key={channel.id}>
+                        <td className="px-4 py-3 align-top">
+                          <input
+                            value={channel.name}
+                            onChange={(event) => updateNotificationChannel(channel.id, { name: event.target.value })}
+                            className="w-full rounded-md border-0 bg-transparent px-2 py-1 text-sm font-medium text-slate-900 ring-1 ring-transparent focus:ring-orange-500 dark:text-white"
+                          />
+                          <div className="mt-1 text-xs uppercase text-slate-500">{channel.type}</div>
+                        </td>
+                        <td className="px-4 py-3 align-top">
+                          <input
+                            value={channel.target}
+                            onChange={(event) => updateNotificationChannel(channel.id, { target: event.target.value })}
+                            className="w-full min-w-64 rounded-md border-0 bg-transparent px-2 py-1 font-mono text-xs text-slate-600 ring-1 ring-transparent focus:ring-orange-500 dark:text-slate-300"
+                          />
+                        </td>
+                        <td className="px-4 py-3 align-top">
+                          <label className="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                            <input
+                              type="checkbox"
+                              checked={channel.enabled}
+                              onChange={(event) => updateNotificationChannel(channel.id, { enabled: event.target.checked })}
+                              className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                            />
+                            Active
+                          </label>
+                        </td>
+                        <td className="px-4 py-3 align-top">
+                          <button
+                            type="button"
+                            onClick={() => testNotificationChannel(channel.id)}
+                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                            Test
+                          </button>
+                          {channel.lastTestStatus && (
+                            <div className={cn(
+                              'mt-2 flex items-center gap-1 text-xs',
+                              channel.lastTestStatus === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+                            )}>
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              {channel.lastTestStatus === 'success' ? 'Test passed' : 'Target required'}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right align-top">
+                          <button
+                            type="button"
+                            onClick={() => deleteNotificationChannel(channel.id)}
+                            className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+                            title="Delete channel"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {notificationChannels.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-500">
+                          No notification channels configured yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'users' && (
+            <div className="space-y-6">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">User Management</h2>
+                  <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    Registered users must be approved here before they can log in to the backend.
+                  </p>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Pending: {users.filter((user) => user.status === 'pending').length}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[1fr_1.3fr_1fr_150px_130px_auto]">
+                <input
+                  value={userDraft.name}
+                  onChange={(event) => setUserDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Name"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <input
+                  type="email"
+                  value={userDraft.email}
+                  onChange={(event) => setUserDraft((current) => ({ ...current, email: event.target.value }))}
+                  placeholder="Email"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <input
+                  type="password"
+                  value={userDraft.password}
+                  onChange={(event) => setUserDraft((current) => ({ ...current, password: event.target.value }))}
+                  placeholder="Initial password"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <select
+                  value={userDraft.role}
+                  onChange={(event) => setUserDraft((current) => ({ ...current, role: event.target.value }))}
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                >
+                  {USER_ROLES.map((role) => (
+                    <option key={role} value={role}>{role}</option>
+                  ))}
+                </select>
+                <input
+                  value={userDraft.siteId}
+                  onChange={(event) => setUserDraft((current) => ({ ...current, siteId: event.target.value }))}
+                  placeholder="factory-a"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddUser}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add
+                </button>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">User</th>
+                      <th className="px-4 py-3 font-semibold">Status</th>
+                      <th className="px-4 py-3 font-semibold">Role</th>
+                      <th className="px-4 py-3 font-semibold">Site / Tags</th>
+                      <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+                    {users.map((user) => (
+                      <tr key={user.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                        <td className="px-4 py-3">
+                          <input
+                            value={user.name}
+                            onChange={(event) => updateUser(user.id, { name: event.target.value })}
+                            className="block w-full rounded-md border-0 bg-transparent px-2 py-1 font-medium text-slate-900 ring-1 ring-transparent focus:ring-orange-500 dark:text-white"
+                          />
+                          <input
+                            value={user.email}
+                            onChange={(event) => updateUser(user.id, { email: event.target.value })}
+                            className="mt-1 block w-full rounded-md border-0 bg-transparent px-2 py-1 text-xs text-slate-500 ring-1 ring-transparent focus:ring-orange-500"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={cn(
+                            'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset',
+                            user.status === 'approved' && 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
+                            user.status === 'pending' && 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300',
+                            user.status === 'rejected' && 'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300'
+                          )}>
+                            {user.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={user.role}
+                            onChange={(event) => updateUser(user.id, { role: event.target.value })}
+                            className="rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
+                          >
+                            {USER_ROLES.map((role) => (
+                              <option key={role} value={role}>{role}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            value={user.siteId}
+                            onChange={(event) => updateUser(user.id, { siteId: event.target.value })}
+                            className="w-36 rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => approveUser(user.id, user.role, user.siteId)}
+                              className="inline-flex items-center gap-1 rounded-md border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/30 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+                            >
+                              <UserCheck className="h-3.5 w-3.5" />
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => rejectUser(user.id)}
+                              disabled={user.id === currentUser?.id}
+                              className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/10"
+                            >
+                              <UserX className="h-3.5 w-3.5" />
+                              Reject
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteUser(user.id)}
+                              disabled={user.id === currentUser?.id}
+                              className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+                              title="Delete user"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
+
         <div className="flex items-center justify-end gap-x-6 border-t border-slate-200 dark:border-slate-800 px-4 py-4 sm:px-8 bg-slate-50 dark:bg-slate-900/30 rounded-b-lg">
           <button type="button" className="text-sm font-semibold leading-6 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
             {t.common.cancel}

@@ -1,21 +1,33 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
-import { User as UserIcon, Lock, Mail, Building } from 'lucide-react';
+import { User as UserIcon, Lock, Mail } from 'lucide-react';
 
 export function Profile() {
   const { language, currentUser, updateCurrentUser } = useAppStore();
   const t = translations[language];
-
-  // Using settings translation for general page layout
   const [formData, setFormData] = useState({
-    name: currentUser.name,
-    email: currentUser.email,
-    password: currentUser.password || '',
+    name: currentUser?.name || '',
+    email: currentUser?.email || '',
+    password: currentUser?.password || '',
   });
 
+  useEffect(() => {
+    if (!currentUser) return;
+    setFormData({
+      name: currentUser.name,
+      email: currentUser.email,
+      password: currentUser.password || '',
+    });
+  }, [currentUser]);
+
+  if (!currentUser) {
+    return <Navigate to="/login" replace />;
+  }
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData(p => ({ ...p, [e.target.name]: e.target.value }));
+    setFormData((current) => ({ ...current, [e.target.name]: e.target.value }));
   };
 
   const handleSave = () => {
@@ -34,13 +46,13 @@ export function Profile() {
       <div className="bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 rounded-lg shadow-sm">
         <div className="px-4 py-5 sm:p-6 space-y-6">
           <div className="flex items-center gap-4">
-             <div className="h-16 w-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-300 font-medium text-xl border border-slate-200 dark:border-slate-700">
-                {currentUser.name.charAt(0)}
-             </div>
-             <div>
-               <h3 className="text-lg font-medium text-slate-900 dark:text-white">{currentUser.name}</h3>
-               <p className="text-sm text-slate-500">{currentUser.role} • {currentUser.siteId}</p>
-             </div>
+            <div className="h-16 w-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-300 font-medium text-xl border border-slate-200 dark:border-slate-700">
+              {currentUser.name.charAt(0)}
+            </div>
+            <div>
+              <h3 className="text-lg font-medium text-slate-900 dark:text-white">{currentUser.name}</h3>
+              <p className="text-sm text-slate-500">{currentUser.role} / {currentUser.siteId}</p>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-6">
@@ -83,12 +95,12 @@ export function Profile() {
           </div>
         </div>
         <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 sm:px-6 flex justify-end rounded-b-lg border-t border-slate-200 dark:border-slate-800">
-           <button
-             onClick={handleSave}
-             className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 focus:outline-none"
-           >
-             {t.common.save}
-           </button>
+          <button
+            onClick={handleSave}
+            className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 focus:outline-none"
+          >
+            {t.common.save}
+          </button>
         </div>
       </div>
     </div>
