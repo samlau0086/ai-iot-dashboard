@@ -24,17 +24,9 @@ export function Settings() {
     approveUser,
     rejectUser,
     currentUser,
-    deviceDataSettingsByUser,
-    updateDeviceDataSettings,
   } = useAppStore();
   const t = translations[language];
   const [activeTab, setActiveTab] = useState<'general' | 'data' | 'notifications' | 'users'>('general');
-  const currentDataSettings = currentUser ? deviceDataSettingsByUser[currentUser.id] : undefined;
-  const [dataDraft, setDataDraft] = useState({
-    apiUrl: '',
-    apiToken: '',
-    apiPollMs: 10000,
-  });
   const [mqttDraft, setMqttDraft] = useState({
     enabled: false,
     brokerUrl: '',
@@ -43,7 +35,6 @@ export function Settings() {
     topics: 'devices/+/telemetry',
   });
   const [mqttStatus, setMqttStatus] = useState<{ state: string; message: string; connectedAt?: string | null; lastMessageAt?: string | null } | null>(null);
-  const [dataSaveMessage, setDataSaveMessage] = useState('');
   const [mqttTestMessage, setMqttTestMessage] = useState('');
   const [channelDraft, setChannelDraft] = useState({
     type: 'email' as NotificationChannel['type'],
@@ -64,16 +55,6 @@ export function Settings() {
     { id: 'notifications', name: t.settings.tabs.notifications, icon: Bell },
     { id: 'users', name: t.settings.tabs.users, icon: Users },
   ];
-
-  useEffect(() => {
-    setDataDraft({
-      apiUrl: currentDataSettings?.apiUrl || '',
-      apiToken: currentDataSettings?.apiToken || '',
-      apiPollMs: currentDataSettings?.apiPollMs || 10000,
-    });
-    setDataSaveMessage('');
-    setMqttTestMessage('');
-  }, [currentDataSettings, currentUser?.id]);
 
   useEffect(() => {
     const loadMqttConfig = async () => {
@@ -125,16 +106,6 @@ export function Settings() {
       approvedAt: new Date().toISOString(),
     });
     setUserDraft({ name: '', email: '', password: '', role: 'Operator', siteId: 'factory-a' });
-  };
-
-  const handleSaveDataSettings = () => {
-    if (!currentUser) return;
-
-    updateDeviceDataSettings(currentUser.id, {
-      ...dataDraft,
-      apiPollMs: Number.isFinite(Number(dataDraft.apiPollMs)) ? Number(dataDraft.apiPollMs) : 10000,
-    });
-    setDataSaveMessage('Data source settings saved for current user.');
   };
 
   const handleSaveMqtt = async () => {
@@ -262,43 +233,6 @@ export function Settings() {
                   </p>
                 </div>
 
-                <details className="mt-4">
-                  <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">
-                    Optional external HTTP polling fallback
-                  </summary>
-                  <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.5fr_1fr_160px]">
-                    <div>
-                      <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">API URL</label>
-                      <input
-                        value={dataDraft.apiUrl}
-                        onChange={(event) => setDataDraft((current) => ({ ...current, apiUrl: event.target.value }))}
-                        placeholder="https://your-api.example.com/devices"
-                        className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Bearer Token</label>
-                      <input
-                        value={dataDraft.apiToken}
-                        onChange={(event) => setDataDraft((current) => ({ ...current, apiToken: event.target.value }))}
-                        placeholder="Optional"
-                        type="password"
-                        className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Poll ms</label>
-                      <input
-                        value={dataDraft.apiPollMs}
-                        onChange={(event) => setDataDraft((current) => ({ ...current, apiPollMs: Number(event.target.value) }))}
-                        type="number"
-                        min={1000}
-                        step={1000}
-                        className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                      />
-                    </div>
-                  </div>
-                </details>
               </div>
 
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
@@ -387,18 +321,6 @@ export function Settings() {
                 )}
               </div>
 
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleSaveDataSettings}
-                  className="rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 border border-orange-500"
-                >
-                  Save Data Source Settings
-                </button>
-                {dataSaveMessage && (
-                  <span className="text-sm text-emerald-600 dark:text-emerald-400">{dataSaveMessage}</span>
-                )}
-              </div>
             </div>
           )}
 

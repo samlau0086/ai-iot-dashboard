@@ -346,7 +346,7 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 
 ## 真实设备数据接入
 
-项目已提供真实设备数据接入入口。推荐方式是网关通过 HTTP 主动 POST 遥测数据到 Dashboard 后端；也可以让 Dashboard 后端连接外部 MQTT Broker 并订阅 Topic。外部 HTTP API 拉取仅作为兼容模式保留。
+项目已提供真实设备数据接入入口。推荐方式是网关通过 HTTP 主动 POST 遥测数据到 Dashboard 后端；也可以让 Dashboard 后端连接外部 MQTT Broker 并订阅 Topic。前端统一只读取 Dashboard 后端的 `/api/telemetry` 缓冲区。
 
 ### Gateway HTTP Push
 
@@ -380,42 +380,6 @@ Authorization: Bearer your-token
 ```
 
 Dashboard 前端会自动轮询本机 `/api/telemetry` 缓冲区，并将遥测数据合并到匹配设备。
-
-### Optional HTTP API Polling Fallback
-
-```bash
-VITE_DEVICE_API_URL="https://your-api.example.com/devices"
-VITE_DEVICE_API_TOKEN="your-api-token"
-VITE_DEVICE_API_POLL_MS=10000
-```
-
-接口响应支持两种格式：
-
-```json
-[
-  {
-    "device_id": "DEV-001",
-    "device_type": "energy_meter",
-    "tags": ["factory-a"],
-    "metrics": {
-      "voltage": 220,
-      "current": 18.5,
-      "power": 4070,
-      "energy_today": 128.6
-    },
-    "status": "online",
-    "timestamp": "2026-06-05T10:00:00Z"
-  }
-]
-```
-
-也可以返回：
-
-```json
-{
-  "devices": []
-}
-```
 
 ### Backend MQTT Subscriber
 
