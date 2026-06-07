@@ -886,6 +886,11 @@ const executeWorkflow = async (workflow, trigger, event) => {
           && branchTypes.has(workflow.nodes[nodeIndex].config?.type)
         ) {
           const condition = workflow.nodes[nodeIndex];
+          const previousBranchType = branches[branches.length - 1]?.condition.config?.type;
+          if (branches.length > 0 && (condition.config?.type === 'if' || previousBranchType === 'else')) {
+            break;
+          }
+
           const actions = [];
           nodeIndex++;
 

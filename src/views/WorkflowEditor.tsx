@@ -219,6 +219,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         && branchConditionTypes.has(draft.nodes[flowIndex].config.type)
       ) {
         const condition = draft.nodes[flowIndex];
+        const previousBranchType = branches[branches.length - 1]?.condition.config.type;
+        if (branches.length > 0 && (condition.config.type === 'if' || previousBranchType === 'else')) {
+          break;
+        }
+
         const branch: BranchGroup = { condition, index: flowIndex, nodes: [], endIndex: flowIndex + 1 };
         flowIndex++;
 
@@ -475,7 +480,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
           <button
             type="button"
-            onClick={() => setShowSelector({ show: true, insertIndex: endIndex || draft.nodes.length })}
+            onClick={() => setShowSelector({ show: true, insertIndex: endIndex || draft.nodes.length, allowedConditionTypes: ['if'] })}
             className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
             title="Add next node after branches"
           >
