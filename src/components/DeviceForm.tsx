@@ -10,6 +10,19 @@ interface DeviceFormProps {
   onClose: () => void;
 }
 
+const INDUSTRIAL_PROTOCOL_OPTIONS = [
+  'HTTP Push',
+  'MQTT',
+  'Modbus RTU',
+  'Modbus TCP',
+  'CAN',
+  'LoRa',
+  '4G',
+  'Ethernet',
+  'WiFi',
+  'Manual / Mock',
+];
+
 export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   const { language, devices, addDevice, updateDevice, currentUser, sites, activeSiteId } = useAppStore();
   const t = translations[language].devices.form;
@@ -188,8 +201,8 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
         return (
           <>
             <div className="sm:col-span-3">
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t.protocol}</label>
-              <select name="protocol" value={configData.protocol || 'MQTT'} onChange={handleConfigSelectChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Transport Mode</label>
+              <select name="transportMode" value={configData.transportMode || 'MQTT'} onChange={handleConfigSelectChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300">
                 <option value="MQTT">MQTT</option>
                 <option value="TCP">TCP</option>
                 <option value="UDP">UDP</option>
@@ -246,6 +259,123 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
       default:
         return null;
     }
+  };
+
+  const renderIndustrialProtocolFields = () => {
+    const protocol = configData.protocol || 'HTTP Push';
+
+    if (protocol === 'Modbus RTU') {
+      return (
+        <>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Serial Port</label>
+            <input type="text" name="serialPort" value={configData.serialPort || ''} onChange={handleConfigChange} placeholder="/dev/ttyUSB0 or COM3" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Baud Rate</label>
+            <input type="number" name="baudRate" value={configData.baudRate || 9600} onChange={handleConfigChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Slave ID</label>
+            <input type="number" name="slaveId" value={configData.slaveId || 1} onChange={handleConfigChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-6">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Register / Metric Map</label>
+            <input type="text" name="registerMap" value={configData.registerMap || ''} onChange={handleConfigChange} placeholder="40001:power,40002:voltage,40003:current" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+        </>
+      );
+    }
+
+    if (protocol === 'Modbus TCP') {
+      return (
+        <>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Device Host</label>
+            <input type="text" name="host" value={configData.host || ''} onChange={handleConfigChange} placeholder="192.168.1.50" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Port</label>
+            <input type="number" name="port" value={configData.port || 502} onChange={handleConfigChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Slave ID</label>
+            <input type="number" name="slaveId" value={configData.slaveId || 1} onChange={handleConfigChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-6">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Register / Metric Map</label>
+            <input type="text" name="registerMap" value={configData.registerMap || ''} onChange={handleConfigChange} placeholder="40001:power,40002:voltage,40003:current" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+        </>
+      );
+    }
+
+    if (protocol === 'CAN') {
+      return (
+        <>
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">CAN Channel</label>
+            <input type="text" name="canChannel" value={configData.canChannel || ''} onChange={handleConfigChange} placeholder="can0" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Bitrate</label>
+            <input type="number" name="bitrate" value={configData.bitrate || 500000} onChange={handleConfigChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+        </>
+      );
+    }
+
+    if (protocol === 'LoRa') {
+      return (
+        <>
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">DevEUI</label>
+            <input type="text" name="devEui" value={configData.devEui || ''} onChange={handleConfigChange} placeholder="70B3D57ED0000001" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t.frequencyPlan}</label>
+            <select name="frequencyPlan" value={configData.frequencyPlan || 'CN470'} onChange={handleConfigSelectChange} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300">
+              <option value="CN470">CN470</option>
+              <option value="EU868">EU868</option>
+              <option value="US915">US915</option>
+              <option value="AS923">AS923</option>
+            </select>
+          </div>
+        </>
+      );
+    }
+
+    if (protocol === '4G') {
+      return (
+        <>
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">APN</label>
+            <input type="text" name="apn" value={configData.apn || ''} onChange={handleConfigChange} placeholder="cmnet / iot.apn" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">IMEI</label>
+            <input type="text" name="imei" value={configData.imei || ''} onChange={handleConfigChange} placeholder="Gateway modem IMEI" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+        </>
+      );
+    }
+
+    if (protocol === 'Ethernet' || protocol === 'WiFi') {
+      return (
+        <>
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Address</label>
+            <input type="text" name="ipAddress" value={configData.ipAddress || ''} onChange={handleConfigChange} placeholder="192.168.1.100" className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{protocol === 'WiFi' ? 'SSID' : 'Subnet'}</label>
+            <input type="text" name={protocol === 'WiFi' ? 'ssid' : 'subnet'} value={protocol === 'WiFi' ? (configData.ssid || '') : (configData.subnet || '')} onChange={handleConfigChange} placeholder={protocol === 'WiFi' ? 'Factory-WiFi' : '255.255.255.0'} className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300" />
+          </div>
+        </>
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -398,6 +528,21 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
               </select>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose where live metrics for this device should come from.</p>
              </div>
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Industrial Protocol</label>
+              <select
+                name="protocol"
+                value={configData.protocol || 'HTTP Push'}
+                onChange={handleConfigSelectChange}
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              >
+                {INDUSTRIAL_PROTOCOL_OPTIONS.map((protocol) => (
+                  <option key={protocol} value={protocol}>{protocol}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Field-side protocol used by the edge gateway before data is normalized into HTTP Push or MQTT.</p>
+             </div>
+             {renderIndustrialProtocolFields()}
              <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">API Path</label>
               <input

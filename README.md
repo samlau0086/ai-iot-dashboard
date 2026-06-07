@@ -89,7 +89,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] HTTP Push 多通道数据源
 - [x] 设备专属 API Path 上报
 - [x] 用户级 Ingest Token 管理
-- [ ] 工业协议接入规划：Modbus RTU、Modbus TCP、CAN、LoRa、4G、Ethernet、WiFi
+- [x] 工业协议接入规划：Modbus RTU、Modbus TCP、CAN、LoRa、4G、Ethernet、WiFi
 - [ ] 原始数据查看
 - [ ] 指标筛选
 - [ ] 时间范围查询
@@ -545,6 +545,54 @@ MQTT Payload 格式：
 ```
 
 接入后，设备列表、总览 Tag 看板、Widget Builder 绑定设备和指标展示都会使用真实设备状态与 metrics。
+
+### 工业协议接入规划
+
+Dashboard 后端不直接作为 Modbus、CAN、LoRa 或蜂窝网络驱动运行。推荐架构是：
+
+```text
+现场设备 / PLC / 仪表
+  -> 边缘网关 / DTU / RTU / LoRa Gateway
+  -> 协议采集、寄存器解析、单位换算、metric 标准化
+  -> HTTP Push 或 MQTT Subscriber
+  -> Dashboard 后端 / PostgreSQL / Overview Widgets
+```
+
+这样做可以把实时采集、串口、总线和弱网重连放在现场网关侧，Dashboard 专注于设备资产、遥测存储、看板、告警、报表和自动化。
+
+| 现场协议 / 网络 | 推荐采集位置 | 进入 Dashboard 的方式 | 典型配置 |
+| --- | --- | --- | --- |
+| Modbus RTU | 串口网关、DTU、工业 PC | 网关轮询后通过 HTTP Push 或 MQTT 上报 | Serial Port、Baud Rate、Slave ID、Register / Metric Map |
+| Modbus TCP | 边缘网关、工业 PC | 网关通过 TCP 轮询设备后上报 | Device Host、Port `502`、Slave ID、Register / Metric Map |
+| CAN | CAN 网关、工业 PC | 网关解析 CAN Frame 后上报标准 metrics | CAN Channel、Bitrate、Frame ID 到 metric 映射 |
+| LoRa | LoRa Gateway / LoRaWAN Network Server | Gateway 或 Network Server Webhook / MQTT 上报 | DevEUI、Frequency Plan、Topic 或 Webhook URL |
+| 4G | DTU、蜂窝网关 | 网关主动连接 Dashboard HTTP / MQTT | APN、IMEI、External Device ID、Ingest Token |
+| Ethernet | 工业网关、PLC、IPC | 局域网采集后上报 | IP Address、Subnet、HTTP / MQTT Channel |
+| WiFi | WiFi 网关、无线传感器 | 设备或网关通过 HTTP / MQTT 上报 | SSID、IP Address、External Device ID |
+
+在 **Devices -> Add/Edit Device** 中：
+
+- `Industrial Protocol` 用于记录现场侧协议，例如 `Modbus RTU`、`Modbus TCP`、`CAN`、`LoRa`、`4G`、`Ethernet`、`WiFi`。
+- `Data Source` 用于选择平台侧入口，即 `HTTP API`、`MQTT` 或 `Manual / Mock`。
+- `External Device ID` 必须与网关上报 payload 中的 `device_id` / `deviceId` / `id` 保持一致。
+- Modbus 设备建议填写 `Register / Metric Map`，例如 `40001:power,40002:voltage,40003:current`，由网关转换为 Dashboard 支持的 `metrics` JSON。
+- CAN / LoRa 设备建议在网关侧先把原始帧、DevEUI、端口等解析为业务指标，再上报到 Dashboard。
+
+网关最终上报到 Dashboard 的 payload 仍然使用统一格式：
+
+```json
+{
+  "device_id": "METER-001",
+  "device_type": "energy_meter",
+  "metrics": {
+    "power": 4070,
+    "voltage": 380,
+    "current": 10.7
+  },
+  "status": "online",
+  "timestamp": "2026-06-07T10:00:00Z"
+}
+```
 
 ### 添加设备时的关联配置
 

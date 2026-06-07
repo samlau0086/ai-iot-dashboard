@@ -18,10 +18,22 @@ export interface DeviceConfig {
   mqttTopic?: string;
   metricMapping?: Record<string, string>;
 
-  // DTU
+  // Industrial protocol / edge gateway binding
   protocol?: string;
+  transportMode?: string;
+  serialPort?: string;
+  host?: string;
+  registerMap?: string;
+  canChannel?: string;
+  bitrate?: number;
+  devEui?: string;
+  apn?: string;
+  imei?: string;
+  ssid?: string;
   serverAddress?: string;
   port?: number;
+
+  // DTU
   baudRate?: number;
   
   // RTU
