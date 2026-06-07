@@ -867,60 +867,108 @@ const executeWorkflow = async (workflow, trigger, event) => {
   const steps = [];
 
   if (branchConditions.length > 0) {
-    let selectedBranch = null;
-    let selectedActions = [];
-    const branchNodeIds = new Set(branchConditions.map((condition) => condition.id));
-    const branchActionIds = new Set();
-    branchConditions.forEach((condition) => {
-      workflow.nodes.forEach((node) => {
-        if (node.type === 'action' && node.config?.groupId === condition.id) {
-          branchActionIds.add(node.id);
-        }
-      });
-    });
-    const branchGroupEndIndex = workflow.nodes.reduce((maxIndex, node, index) => (
-      branchNodeIds.has(node.id) || branchActionIds.has(node.id) ? Math.max(maxIndex, index + 1) : maxIndex
-    ), 0);
-    const continuationActions = workflow.nodes.slice(branchGroupEndIndex).filter((node) => (
-      node.type === 'action' && !branchActionIds.has(node.id)
-    ));
+    const selectedActions = [];
+    let nodeIndex = 0;
 
-    for (const condition of branchConditions) {
-      const passed = conditionMatchesEvent(condition, event);
-      steps.push({
-        nodeId: condition.id,
-        type: condition.config?.type || 'condition',
-        status: passed ? 'success' : 'skipped',
-        output: passed ? 'Branch matched' : 'Branch did not match event',
-        startedAt: new Date().toISOString(),
-        finishedAt: new Date().toISOString(),
-      });
-
-      if (passed) {
-        selectedBranch = condition;
-        const branchActions = workflow.nodes.filter((node) => (
-          node.type === 'action' && node.config?.groupId === condition.id
-        ));
-        selectedActions = [...branchActions, ...continuationActions];
-        break;
+    while (nodeIndex < workflow.nodes.length) {
+      const node = workflow.nodes[nodeIndex];
+      if (node.type === 'trigger') {
+        nodeIndex++;
+        continue;
       }
-    }
 
-    if (!selectedBranch) {
-      const finishedAt = new Date().toISOString();
-      await persistWorkflowRun({
-        id: createId('wfr'),
-        workflowId: workflow.id,
-        workflowName: workflow.name,
-        triggerType: trigger.config?.type || 'unknown',
-        eventSource: event.source || event.type,
-        status: 'skipped',
-        event,
-        steps,
-        startedAt,
-        finishedAt,
-      });
-      return;
+      if (node.type === 'condition' && branchTypes.has(node.config?.type)) {
+        const branches = [];
+
+        while (
+          nodeIndex < workflow.nodes.length
+          && workflow.nodes[nodeIndex].type === 'condition'
+          && branchTypes.has(workflow.nodes[nodeIndex].config?.type)
+        ) {
+          const condition = workflow.nodes[nodeIndex];
+          const actions = [];
+          nodeIndex++;
+
+          while (
+            nodeIndex < workflow.nodes.length
+            && workflow.nodes[nodeIndex].type === 'action'
+            && workflow.nodes[nodeIndex].config?.groupId === condition.id
+          ) {
+            actions.push(workflow.nodes[nodeIndex]);
+            nodeIndex++;
+          }
+
+          branches.push({condition, actions});
+        }
+
+        const matchedBranch = branches.find(({condition}) => {
+          const passed = conditionMatchesEvent(condition, event);
+          steps.push({
+            nodeId: condition.id,
+            type: condition.config?.type || 'condition',
+            status: passed ? 'success' : 'skipped',
+            output: passed ? 'Branch matched' : 'Branch did not match event',
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+          });
+          return passed;
+        });
+
+        if (!matchedBranch) {
+          const finishedAt = new Date().toISOString();
+          await persistWorkflowRun({
+            id: createId('wfr'),
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            triggerType: trigger.config?.type || 'unknown',
+            eventSource: event.source || event.type,
+            status: 'skipped',
+            event,
+            steps,
+            startedAt,
+            finishedAt,
+          });
+          return;
+        }
+
+        selectedActions.push(...matchedBranch.actions);
+        continue;
+      }
+
+      if (node.type === 'condition') {
+        const passed = conditionMatchesEvent(node, event);
+        steps.push({
+          nodeId: node.id,
+          type: node.config?.type || 'condition',
+          status: passed ? 'success' : 'skipped',
+          output: passed ? 'Condition passed' : 'Condition did not match event',
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        });
+        if (!passed) {
+          const finishedAt = new Date().toISOString();
+          await persistWorkflowRun({
+            id: createId('wfr'),
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            triggerType: trigger.config?.type || 'unknown',
+            eventSource: event.source || event.type,
+            status: 'skipped',
+            event,
+            steps,
+            startedAt,
+            finishedAt,
+          });
+          return;
+        }
+        nodeIndex++;
+        continue;
+      }
+
+      if (node.type === 'action') {
+        selectedActions.push(node);
+      }
+      nodeIndex++;
     }
 
     for (const action of selectedActions) {

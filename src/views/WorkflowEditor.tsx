@@ -176,32 +176,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
   const availableConditionTypes = Object.keys(t.workflows.conditionTypes);
   const branchConditionTypes = new Set(['if', 'elif', 'else']);
-  const hasElseBranch = otherNodes.some((node) => node.type === 'condition' && node.config.type === 'else');
   const conditionTypesForSelector = showSelector.allowedConditionTypes || availableConditionTypes;
 
-  const branchGroups: Array<{ condition: WorkflowNode; index: number; nodes: Array<{ node: WorkflowNode; index: number }>; endIndex: number }> = [];
-  otherNodes.forEach((node, index) => {
-    const absoluteIndex = triggerNodes.length + index;
-    if (node.type === 'condition' && branchConditionTypes.has(node.config.type)) {
-      branchGroups.push({ condition: node, index: absoluteIndex, nodes: [], endIndex: absoluteIndex + 1 });
-      return;
-    }
-
-    const activeBranch = branchGroups[branchGroups.length - 1];
-    if (activeBranch && node.config?.groupId === activeBranch.condition.id) {
-      activeBranch.nodes.push({ node, index: absoluteIndex });
-      activeBranch.endIndex = absoluteIndex + 1;
-    }
-  });
-  const useBranchLayout = branchGroups.length > 0
-    && otherNodes[0]?.type === 'condition'
-    && branchConditionTypes.has(otherNodes[0].config.type);
-  const branchOwnedNodeIds = new Set<string>();
-  branchGroups.forEach((branch) => {
-    branchOwnedNodeIds.add(branch.condition.id);
-    branch.nodes.forEach((item) => branchOwnedNodeIds.add(item.node.id));
-  });
-  const branchGroupEndIndex = branchGroups.reduce((maxIndex, branch) => Math.max(maxIndex, branch.endIndex), triggerNodes.length);
+  type BranchGroup = { condition: WorkflowNode; index: number; nodes: Array<{ node: WorkflowNode; index: number }>; endIndex: number };
+  type FlowItem = { type: 'branch_group'; branches: BranchGroup[]; startIndex: number; endIndex: number } | { type: 'nodes'; groups: any[] };
 
   const toActionGroups = (items: Array<{ node: WorkflowNode; index: number }>) => {
     const groups: any[] = [];
@@ -222,12 +200,59 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     return groups;
   };
 
+  const flowItems: FlowItem[] = [];
+  let flowIndex = triggerNodes.length;
+  while (flowIndex < draft.nodes.length) {
+    const node = draft.nodes[flowIndex];
+    if (node.type === 'trigger') {
+      flowIndex++;
+      continue;
+    }
+
+    if (node.type === 'condition' && branchConditionTypes.has(node.config.type)) {
+      const branches: BranchGroup[] = [];
+      const startIndex = flowIndex;
+
+      while (
+        flowIndex < draft.nodes.length
+        && draft.nodes[flowIndex].type === 'condition'
+        && branchConditionTypes.has(draft.nodes[flowIndex].config.type)
+      ) {
+        const condition = draft.nodes[flowIndex];
+        const branch: BranchGroup = { condition, index: flowIndex, nodes: [], endIndex: flowIndex + 1 };
+        flowIndex++;
+
+        while (
+          flowIndex < draft.nodes.length
+          && draft.nodes[flowIndex].type === 'action'
+          && draft.nodes[flowIndex].config?.groupId === condition.id
+        ) {
+          branch.nodes.push({ node: draft.nodes[flowIndex], index: flowIndex });
+          flowIndex++;
+          branch.endIndex = flowIndex;
+        }
+
+        branches.push(branch);
+      }
+
+      flowItems.push({ type: 'branch_group', branches, startIndex, endIndex: flowIndex });
+      continue;
+    }
+
+    const nodeItems: Array<{ node: WorkflowNode; index: number }> = [];
+    while (
+      flowIndex < draft.nodes.length
+      && draft.nodes[flowIndex].type !== 'trigger'
+      && !(draft.nodes[flowIndex].type === 'condition' && branchConditionTypes.has(draft.nodes[flowIndex].config.type))
+    ) {
+      nodeItems.push({ node: draft.nodes[flowIndex], index: flowIndex });
+      flowIndex++;
+    }
+    flowItems.push({ type: 'nodes', groups: toActionGroups(nodeItems) });
+  }
+
+  const useBranchLayout = flowItems.some((item) => item.type === 'branch_group');
   const otherNodeGroups = toActionGroups(otherNodes.map((node, index) => ({ node, index: triggerNodes.length + index })));
-  const postBranchNodeGroups = useBranchLayout
-    ? toActionGroups(draft.nodes
-      .map((node, index) => ({ node, index }))
-      .filter(({ node, index }) => index >= branchGroupEndIndex && !branchOwnedNodeIds.has(node.id)))
-    : [];
 
   useEffect(() => {
     if (!isNew) {
@@ -290,12 +315,18 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
     if (targetNode?.type === 'condition' && ['if', 'elif', 'else'].includes(targetNode.config.type)) {
       if (targetNode.config.type === 'if') {
-        branchGroups.forEach((branch) => {
+        const branchItem = flowItems.find((item): item is Extract<FlowItem, { type: 'branch_group' }> => (
+          item.type === 'branch_group' && item.branches.some((branch) => branch.condition.id === id)
+        ));
+        branchItem?.branches.forEach((branch) => {
           idsToDelete.add(branch.condition.id);
           branch.nodes.forEach((item) => idsToDelete.add(item.node.id));
         });
       } else {
-        const branch = branchGroups.find((item) => item.condition.id === id);
+        const branch = flowItems
+          .filter((item): item is Extract<FlowItem, { type: 'branch_group' }> => item.type === 'branch_group')
+          .flatMap((item) => item.branches)
+          .find((item) => item.condition.id === id);
         branch?.nodes.forEach((item) => idsToDelete.add(item.node.id));
       }
     }
@@ -366,7 +397,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     </div>
   );
 
-  const renderBranchColumn = (branch: typeof branchGroups[number]) => {
+  const renderBranchColumn = (branch: BranchGroup) => {
     const branchType = branch.condition.config.type;
 
     return (
@@ -390,10 +421,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     );
   };
 
-  const renderBranchBrace = (direction: 'down' | 'up') => {
-    if (branchGroups.length < 2) return null;
+  const renderBranchBrace = (branches: BranchGroup[], direction: 'down' | 'up') => {
+    if (branches.length < 2) return null;
 
-    const width = Math.max(520, branchGroups.length * 320 + (branchGroups.length - 1) * 80);
+    const width = Math.max(520, branches.length * 320 + (branches.length - 1) * 80);
     const mid = width / 2;
     const isDown = direction === 'down';
 
@@ -418,14 +449,17 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     );
   };
 
-  const renderBranchChain = () => (
+  const renderBranchChain = (branches: BranchGroup[], endIndex: number) => {
+    const groupHasElseBranch = branches.some((branch) => branch.condition.config.type === 'else');
+
+    return (
     <div className="mb-8 flex w-full min-w-max flex-col items-center overflow-x-auto px-4 py-2">
-      {renderBranchBrace('down')}
+      {renderBranchBrace(branches, 'down')}
       <div className="flex items-start justify-center">
-        {branchGroups.map((branch, index) => {
-          const nextBranch = branchGroups[index + 1];
-          const connectorAllowedTypes = hasElseBranch ? ['elif'] : ['elif', 'else'];
-          const isLastBranch = index === branchGroups.length - 1;
+        {branches.map((branch, index) => {
+          const nextBranch = branches[index + 1];
+          const connectorAllowedTypes = groupHasElseBranch ? ['elif'] : ['elif', 'else'];
+          const isLastBranch = index === branches.length - 1;
           const canAppendBranch = isLastBranch && branch.condition.config.type !== 'else';
           return (
             <React.Fragment key={branch.condition.id}>
@@ -436,12 +470,12 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
           );
         })}
       </div>
-      {renderBranchBrace('up')}
+      {renderBranchBrace(branches, 'up')}
       <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
           <button
             type="button"
-            onClick={() => setShowSelector({ show: true, insertIndex: branchGroupEndIndex || draft.nodes.length })}
+            onClick={() => setShowSelector({ show: true, insertIndex: endIndex || draft.nodes.length })}
             className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
             title="Add next node after branches"
           >
@@ -451,6 +485,81 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
       </div>
     </div>
+    );
+  };
+
+  const renderFlowNodeGroup = (group: any) => (
+    <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
+      {group.type === 'condition' ? (
+        <div className="flex flex-col items-center">
+          {renderNodeCard(group.node)}
+          <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
+              <button
+                onClick={() => setShowSelector({ show: true, insertIndex: group.index + 1 })}
+                className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
+            <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center w-full">
+          {group.nodes.length > 1 && (
+            <svg height="24" style={{ width: `${(group.nodes.length - 1) * 336}px`, overflow: 'visible' }} className="text-slate-300 dark:text-slate-600 -mt-1 relative z-0">
+              <path d={`M ${(group.nodes.length - 1) * 336 / 2} 0 L ${(group.nodes.length - 1) * 336 / 2} 10 Q ${(group.nodes.length - 1) * 336 / 2} 15 ${(group.nodes.length - 1) * 336 / 2 - 5} 15 L 10 15 Q 0 15 0 20 L 0 24 M ${(group.nodes.length - 1) * 336 / 2} 10 Q ${(group.nodes.length - 1) * 336 / 2} 15 ${(group.nodes.length - 1) * 336 / 2 + 5} 15 L ${(group.nodes.length - 1) * 336 - 10} 15 Q ${(group.nodes.length - 1) * 336} 15 ${(group.nodes.length - 1) * 336} 20 L ${(group.nodes.length - 1) * 336} 24`} fill="none" stroke="currentColor" strokeWidth="2" />
+              {group.nodes.length > 2 && Array.from({ length: group.nodes.length - 2 }).map((_, i) => (
+                <line key={i} x1={(i + 1) * 336} y1="15" x2={(i + 1) * 336} y2="24" stroke="currentColor" strokeWidth="2" />
+              ))}
+              {group.nodes.map((_: any, i: number) => (
+                <polygon key={`arr-${i}`} points={`${i * 336 - 5},14 ${i * 336 + 5},14 ${i * 336},24`} fill="currentColor" />
+              ))}
+            </svg>
+          )}
+
+          <div className="flex items-center gap-4 relative z-10 w-full justify-center">
+            <button
+              onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[0].index, actionGroupId: group.groupId })}
+              className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors shrink-0"
+            >
+              <Plus className="h-5 w-5 text-slate-400" />
+            </button>
+
+            {group.nodes.map((n: any) => renderNodeCard(n.node))}
+
+            <button
+              onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[group.nodes.length - 1].index + 1, actionGroupId: group.groupId })}
+              className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors shrink-0"
+            >
+              <Plus className="h-5 w-5 text-slate-400" />
+            </button>
+          </div>
+
+          {group.nodes.length > 1 && (
+            <svg height="24" style={{ width: `${(group.nodes.length - 1) * 336}px`, overflow: 'visible' }} className="text-slate-300 dark:text-slate-600 relative z-0">
+              <path d={`M 0 0 L 0 5 Q 0 10 10 10 L ${(group.nodes.length - 1) * 336 / 2 - 10} 10 Q ${(group.nodes.length - 1) * 336 / 2} 10 ${(group.nodes.length - 1) * 336 / 2} 15 L ${(group.nodes.length - 1) * 336 / 2} 24 M ${(group.nodes.length - 1) * 336} 0 L ${(group.nodes.length - 1) * 336} 5 Q ${(group.nodes.length - 1) * 336} 10 ${(group.nodes.length - 1) * 336 - 10} 10 L ${(group.nodes.length - 1) * 336 / 2 + 10} 10 Q ${(group.nodes.length - 1) * 336 / 2} 10 ${(group.nodes.length - 1) * 336 / 2} 15`} fill="none" stroke="currentColor" strokeWidth="2" />
+              {group.nodes.length > 2 && Array.from({ length: group.nodes.length - 2 }).map((_, i) => (
+                <line key={i} x1={(i + 1) * 336} y1="0" x2={(i + 1) * 336} y2="10" stroke="currentColor" strokeWidth="2" />
+              ))}
+            </svg>
+          )}
+
+          <div className={cn("w-px bg-slate-300 dark:bg-slate-600 relative transition-all", group.nodes.length > 1 ? "h-6 sm:h-8 my-0" : "h-8 sm:h-10 my-1 sm:my-2")}>
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
+              <button
+                onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[group.nodes.length - 1].index + 1 })}
+                className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
+            <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
+          </div>
+        </div>
+      )}
+    </React.Fragment>
   );
 
   return (
@@ -562,9 +671,13 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </div>
           )}
 
-          {useBranchLayout && renderBranchChain()}
+          {useBranchLayout && flowItems.map((item, index) => (
+            item.type === 'branch_group'
+              ? <React.Fragment key={`branch-${item.startIndex}`}>{renderBranchChain(item.branches, item.endIndex)}</React.Fragment>
+              : <React.Fragment key={`nodes-${index}`}>{item.groups.map(renderFlowNodeGroup)}</React.Fragment>
+          ))}
 
-          {(useBranchLayout ? postBranchNodeGroups : otherNodeGroups).map((group) => (
+          {(!useBranchLayout ? otherNodeGroups : []).map((group) => (
             <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
               {group.type === 'condition' ? (
                 <div className="flex flex-col items-center">
