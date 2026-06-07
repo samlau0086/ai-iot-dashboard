@@ -21,7 +21,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 | V1 Energy Monitoring MVP | 设备、能耗看板、告警、真实数据入口、基础报表 | 核心闭环已完成 |
 | V2 Industry Dashboard Engine | 行业模板、Tag 方案、可编辑看板、Widget Builder | 进行中 |
 | V3 Device & Data Foundation | 真实设备数据、PostgreSQL / pgvector、HTTP Push、MQTT Subscriber、Ingest Tokens | 进行中 |
-| V4 Control Center | 远程控制、参数下发、控制日志、权限校验 | 规划中 |
+| V4 Control Center | 远程控制、参数下发、控制日志、权限校验 | 基础闭环已完成 |
 | V5 Workflow Automation | Trigger / Condition / Action、通知、Webhook、任务与报告自动化 | 进行中 |
 | V6 AI Copilot | 自然语言查询、异常分析、建议动作、生成报表与工作流 | 规划中 |
 | V7 Partner / White Label | 多租户、客户管理、白标、代理商后台 | 规划中 |
@@ -39,7 +39,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Analytics 图表报告已支持绑定设备和 metric。
 - [x] 通知渠道支持同类型多条配置，并按渠道类型提供差异化字段和测试按钮。
 - [x] 移动端布局已改为 App-like shell，包含移动端顶部栏、底部导航和设备卡片列表。
-- [ ] 下一阶段重点：工作流后端执行器、控制中心、原始数据查询、时间范围查询、设备对比、AI Copilot 真实能力接入。
+- [ ] 下一阶段重点：原始数据查询、时间范围查询、设备对比、控制连接器、AI Copilot 真实能力接入。
 
 ### V1: Energy Monitoring MVP
 
@@ -101,15 +101,16 @@ An AI-powered industrial operations platform that connects machines, meters and 
 
 目标：从“只能看”升级为“可以安全控制”的工业运营平台。
 
-- [ ] 远程开关
-- [ ] 远程重启
-- [ ] 参数下发
-- [ ] 模式切换
-- [ ] 手动控制
+- [x] 控制中心页面
+- [x] 远程开关
+- [x] 远程重启
+- [x] 参数下发
+- [x] 模式切换
+- [x] 手动控制
 - [ ] 批量控制
-- [ ] 控制记录
-- [ ] 权限控制
-- [ ] 二次确认
+- [x] 控制记录
+- [x] 权限控制
+- [x] 二次确认
 - [ ] 危险操作审批
 - [ ] 失败回滚
 - [ ] 本地手动优先机制
@@ -122,9 +123,9 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Trigger / Condition / Action 概念建模
 - [x] 设备离线、指标阈值、告警、定时、AI、Webhook、MQTT 等触发类型占位
 - [x] 通知、工单、Webhook、报告、AI 分析等动作类型占位
-- [ ] 后端工作流执行器
+- [x] 后端工作流执行器
 - [ ] 真实通知渠道：Email、WhatsApp、Telegram、SMS、Webhook、Slack
-- [ ] Workflow Run 历史
+- [x] Workflow Run 历史
 - [ ] 自动报告
 - [ ] 设备控制动作接入
 
@@ -292,6 +293,26 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 进入 **Workflows** 页面，点击 **Create Workflow** 创建流程。工作流由触发器、条件和动作组成，可用于自动响应设备离线、指标超限、告警产生、计划任务、MQTT 消息或 AI 异常检测。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
+
+后端工作流执行器已内置在 `server.js` 中：
+
+- HTTP Push、设备专属 API Path 和 MQTT Subscriber 收到遥测后，会触发启用状态的工作流。
+- 已支持 `threshold`、`offline`、`alert`、`mqtt_message`、`webhook`、`schedule` 触发类型。
+- 已支持 `logic_and`、`logic_or`、`check_state`、`time_window` 等基础条件判断。
+- `webhook` 动作会由后端真实 POST 到目标 URL；`mqtt_publish`、`start_backup`、`stop_device` 会写入控制中心命令日志；`email`、`whatsapp`、`notification`、`ticket`、`report`、`ai_analyze` 会先写入执行步骤，作为后续真实连接器的队列记录。
+- 执行历史可通过 `GET /api/workflow-runs` 查看，也可以用 `GET /api/workflow-runs?workflowId=wf-xxx&limit=50` 查看单个工作流。
+
+### 使用控制中心
+
+进入 **Control Center** 页面后，可以选择 Site、可控设备和控制命令。当前支持的控制命令包括：
+
+- `power_on` / `power_off`：远程开关。
+- `restart`：远程重启。
+- `set_mode`：切换运行模式，例如 Auto、Manual、Eco、Maintenance。
+- `set_speed`：下发速度百分比。
+- `set_parameter`：下发任意参数名和值。
+
+控制命令提交前需要勾选二次确认。后端会通过 `POST /api/device-commands` 记录命令、设备、参数、操作者、角色、来源和状态，并可通过 `GET /api/device-commands` 查询控制日志。当前版本已完成控制指令审计闭环；真实下发到 Modbus、MQTT、HTTP 网关、PLC 或其他现场协议连接器，会在后续控制连接器中接入。
 
 ### 处理告警
 

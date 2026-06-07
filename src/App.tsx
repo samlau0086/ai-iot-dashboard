@@ -6,6 +6,7 @@ import { Devices } from './views/Devices';
 import { Alerts } from './views/Alerts';
 import { Analytics } from './views/Analytics';
 import { Workflows } from './views/Workflows';
+import { ControlCenter } from './views/ControlCenter';
 import { Reports } from './views/Reports';
 import { AIInsights } from './views/AIInsights';
 import { Settings } from './views/Settings';
@@ -71,6 +72,7 @@ export default function App() {
             <Route path="devices" element={<Devices />} />
             <Route path="devices/:id" element={<DeviceDetails />} />
             <Route path="workflows" element={<Workflows />} />
+            <Route path="control" element={<ControlCenter />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="alerts" element={<Alerts />} />
             <Route path="reports" element={<Reports />} />

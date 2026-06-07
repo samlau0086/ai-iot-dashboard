@@ -9,6 +9,7 @@ import {
   BrainCircuit, 
   Settings,
   GitMerge,
+  SlidersHorizontal,
   LogOut
 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -19,6 +20,7 @@ const menuItems: { key: keyof typeof translations.en.nav; to: string; icon: any 
   { key: 'overview', to: '/', icon: LayoutDashboard },
   { key: 'devices', to: '/devices', icon: Server },
   { key: 'workflows', to: '/workflows', icon: GitMerge },
+  { key: 'control', to: '/control', icon: SlidersHorizontal },
   { key: 'analytics', to: '/analytics', icon: Activity },
   { key: 'alerts', to: '/alerts', icon: Bell },
   { key: 'reports', to: '/reports', icon: FileText },

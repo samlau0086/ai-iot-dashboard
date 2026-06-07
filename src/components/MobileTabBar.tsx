@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   Server,
   Settings,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { translations } from '../lib/i18n';
@@ -18,6 +19,7 @@ const mobileItems: { key: keyof typeof translations.en.nav; to: string; icon: an
   { key: 'overview', to: '/', icon: LayoutDashboard },
   { key: 'devices', to: '/devices', icon: Server },
   { key: 'workflows', to: '/workflows', icon: GitMerge },
+  { key: 'control', to: '/control', icon: SlidersHorizontal },
   { key: 'analytics', to: '/analytics', icon: Activity },
   { key: 'alerts', to: '/alerts', icon: Bell },
   { key: 'reports', to: '/reports', icon: FileText },
