@@ -18,13 +18,26 @@ An AI-powered industrial operations platform that connects machines, meters and 
 
 | 阶段 | 目标 | 当前状态 |
 | --- | --- | --- |
-| V1 Energy Monitoring MVP | 设备、能耗看板、告警、Demo 数据、基础报表 | 进行中 |
+| V1 Energy Monitoring MVP | 设备、能耗看板、告警、真实数据入口、基础报表 | 核心闭环已完成 |
 | V2 Industry Dashboard Engine | 行业模板、Tag 方案、可编辑看板、Widget Builder | 进行中 |
-| V3 Device & Data Foundation | 真实设备数据、数据中心、指标查询、导出 | 规划中 |
+| V3 Device & Data Foundation | 真实设备数据、PostgreSQL / pgvector、HTTP Push、MQTT Subscriber、Ingest Tokens | 进行中 |
 | V4 Control Center | 远程控制、参数下发、控制日志、权限校验 | 规划中 |
 | V5 Workflow Automation | Trigger / Condition / Action、通知、Webhook、任务与报告自动化 | 进行中 |
 | V6 AI Copilot | 自然语言查询、异常分析、建议动作、生成报表与工作流 | 规划中 |
 | V7 Partner / White Label | 多租户、客户管理、白标、代理商后台 | 规划中 |
+
+### 最近进度更新
+
+- [x] V1 Energy Monitoring MVP 核心闭环已完成：设备、总览、告警、基础报表、VPS + PM2 自动部署、真实数据入口。
+- [x] 后端持久化已切换到 PostgreSQL + pgvector，`app_state`、遥测消息、Workflow Webhook 事件等由后端保存。
+- [x] 已支持真实设备数据接入：HTTP Push、多 HTTP Channel、后端 MQTT Subscriber、设备专属 API Path。
+- [x] Ingest Token 已改为后台用户级管理，支持 Generate / Revoke / Copy。
+- [x] Mock 告警和能耗数据已由设备 metrics 派生，减少前端固定假数据依赖。
+- [x] 总览中心 Widget 已支持绑定设备与 metric，并支持单位、精度、阈值、颜色规则配置。
+- [x] Analytics 图表报告已支持绑定设备和 metric。
+- [x] 通知渠道支持同类型多条配置，并按渠道类型提供差异化字段和测试按钮。
+- [x] 移动端布局已改为 App-like shell，包含移动端顶部栏、底部导航和设备卡片列表。
+- [ ] 下一阶段重点：工作流后端执行器、控制中心、原始数据查询、时间范围查询、设备对比、AI Copilot 真实能力接入。
 
 ### V1: Energy Monitoring MVP
 
@@ -38,7 +51,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 报表中心基础页面
 - [x] PM2 + VPS 自动部署
 - [x] 接入真实设备数据 API / 后端 MQTT Subscriber 入口
-- [ ] 替换 Mock 告警和能耗数据
+- [x] 替换 Mock 告警和能耗数据
 - [x] 基础报表 CSV 导出
 
 ### V2: Industry Dashboard Engine
@@ -60,7 +73,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Widget 标题、图标、绑定设备、显示方式配置
 - [x] Number / Line / Area / Bar / Gauge / Status / Donut 显示方式
 - [x] 一键 Auto Layout 排版
-- [ ] Widget 阈值、单位、精度、颜色规则配置
+- [x] Widget 阈值、单位、精度、颜色规则配置
 - [ ] Widget 模板市场 / 预设库
 
 ### V3: Device & Data Foundation
@@ -71,6 +84,10 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 设备 Tags 分组
 - [ ] 站点 Site / Tenant 数据模型
 - [x] 外部 MQTT Broker 接入：后端订阅 EMQX / Mosquitto 等 Broker
+- [x] PostgreSQL + pgvector 后端持久化
+- [x] HTTP Push 多通道数据源
+- [x] 设备专属 API Path 上报
+- [x] 用户级 Ingest Token 管理
 - [ ] 工业协议接入规划：Modbus RTU、Modbus TCP、CAN、LoRa、4G、Ethernet、WiFi
 - [ ] 原始数据查看
 - [ ] 指标筛选
