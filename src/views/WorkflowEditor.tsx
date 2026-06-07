@@ -402,6 +402,21 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </div>
           )}
 
+          {triggerNodes.length === 0 && otherNodes.length > 0 && (
+            <div className="flex flex-col items-center">
+              <button
+                onClick={() => setShowSelector({ show: true, insertIndex: 0, isTriggerSelect: true })}
+                className="w-80 rounded-xl border-2 border-dashed border-orange-300 bg-white/70 p-6 flex flex-col items-center justify-center gap-2 text-orange-600 hover:border-orange-500 hover:bg-orange-50 dark:border-orange-500/40 dark:bg-[#1c2128]/60 dark:text-orange-400 dark:hover:bg-orange-500/10 transition-all backdrop-blur-sm"
+              >
+                <Plus className="h-6 w-6" />
+                <span className="font-medium">Add Trigger</span>
+              </button>
+              <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
+                <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
+              </div>
+            </div>
+          )}
+
           {otherNodeGroups.map((group) => (
             <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
               {group.type === 'condition' ? (
