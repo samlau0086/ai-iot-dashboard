@@ -319,29 +319,30 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     );
   };
 
-  const renderBranchInsertButton = (insertIndex: number, allowedTypes: string[]) => (
-    <button
-      type="button"
-      onClick={() => setShowSelector({ show: true, insertIndex, branchOnly: true, allowedConditionTypes: allowedTypes })}
-      className="h-9 w-9 shrink-0 rounded-full border-2 border-dashed border-indigo-300 bg-white text-indigo-500 shadow-sm transition-colors hover:border-indigo-500 hover:bg-indigo-50 dark:border-indigo-500/40 dark:bg-[#1c2128] dark:text-indigo-300 dark:hover:bg-indigo-500/10"
-      title="Add branch"
-    >
-      <Plus className="mx-auto h-4 w-4" />
-    </button>
+  const renderBranchConnector = (insertIndex: number, allowedTypes: string[]) => (
+    <div className="group relative flex h-20 w-20 shrink-0 items-center justify-center">
+      <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-slate-300 dark:bg-slate-600" />
+      <div className="relative z-10 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-500 shadow-sm dark:border-slate-700 dark:bg-[#0f1115] dark:text-slate-400">
+        OR
+      </div>
+      <button
+        type="button"
+        onClick={() => setShowSelector({ show: true, insertIndex, branchOnly: true, allowedConditionTypes: allowedTypes })}
+        className="absolute left-1/2 top-1/2 z-20 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-indigo-300 bg-white text-indigo-500 opacity-0 shadow-sm transition-all hover:border-indigo-500 hover:bg-indigo-50 group-hover:translate-y-4 group-hover:opacity-100 dark:border-indigo-500/40 dark:bg-[#1c2128] dark:text-indigo-300 dark:hover:bg-indigo-500/10"
+        title="Add branch"
+      >
+        <Plus className="h-4 w-4" />
+      </button>
+    </div>
   );
 
   const renderBranchColumn = (branch: typeof branchGroups[number]) => {
     const branchType = branch.condition.config.type;
-    const showLeftAdd = branchType === 'elif' || branchType === 'else';
-    const showRightAdd = branchType === 'if' || branchType === 'elif';
-    const rightAllowedTypes = branchType === 'if' && !hasElseBranch ? ['elif', 'else'] : ['elif'];
 
     return (
       <div key={branch.condition.id} className="flex min-w-[22rem] flex-col items-center">
-        <div className="flex items-center gap-3">
-          {showLeftAdd ? renderBranchInsertButton(branch.index, ['elif']) : <div className="h-9 w-9 shrink-0" />}
+        <div className="flex h-20 items-center">
           {renderNodeCard(branch.condition)}
-          {showRightAdd ? renderBranchInsertButton(branch.endIndex, rightAllowedTypes) : <div className="h-9 w-9 shrink-0" />}
         </div>
 
         <div className="mt-4 flex min-h-24 w-80 flex-col items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-white/60 p-3 dark:border-slate-700 dark:bg-[#1c2128]/60">
@@ -358,6 +359,24 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       </div>
     );
   };
+
+  const renderBranchChain = () => (
+    <div className="mb-8 flex w-full min-w-max items-start justify-center overflow-x-auto px-4 py-2">
+      {branchGroups.map((branch, index) => {
+        const nextBranch = branchGroups[index + 1];
+        const connectorAllowedTypes = hasElseBranch ? ['elif'] : ['elif', 'else'];
+        const isLastBranch = index === branchGroups.length - 1;
+        const canAppendBranch = isLastBranch && branch.condition.config.type !== 'else';
+        return (
+          <React.Fragment key={branch.condition.id}>
+            {renderBranchColumn(branch)}
+            {nextBranch && renderBranchConnector(nextBranch.index, connectorAllowedTypes)}
+            {canAppendBranch && renderBranchConnector(branch.endIndex, connectorAllowedTypes)}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div className="absolute inset-0 z-10 bg-slate-50 dark:bg-[#0f1115] flex flex-col sm:flex-row overflow-hidden border-t sm:border-t-0 border-slate-200 dark:border-slate-800 rounded-none sm:rounded-tl-2xl">
@@ -468,11 +487,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </div>
           )}
 
-          {useBranchLayout && (
-            <div className="mb-8 flex w-full min-w-max items-start justify-center gap-8 overflow-x-auto px-4 py-2">
-              {branchGroups.map((branch) => renderBranchColumn(branch))}
-            </div>
-          )}
+          {useBranchLayout && renderBranchChain()}
 
           {!useBranchLayout && otherNodeGroups.map((group) => (
             <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
