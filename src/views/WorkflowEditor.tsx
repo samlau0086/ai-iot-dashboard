@@ -157,7 +157,14 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     nodes: []
   });
 
-  const [showSelector, setShowSelector] = useState<{ show: boolean, insertIndex: number, isTriggerSelect?: boolean, actionGroupId?: string }>({ show: false, insertIndex: 0 });
+  const [showSelector, setShowSelector] = useState<{
+    show: boolean;
+    insertIndex: number;
+    isTriggerSelect?: boolean;
+    actionGroupId?: string;
+    branchOnly?: boolean;
+    allowedConditionTypes?: string[];
+  }>({ show: false, insertIndex: 0 });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const triggerNodes = draft.nodes.filter(n => n.type === 'trigger');
@@ -168,6 +175,27 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const showConditions = !isTriggerOnly && !showSelector.actionGroupId;
 
   const availableConditionTypes = Object.keys(t.workflows.conditionTypes);
+  const branchConditionTypes = new Set(['if', 'elif', 'else']);
+  const hasElseBranch = otherNodes.some((node) => node.type === 'condition' && node.config.type === 'else');
+  const conditionTypesForSelector = showSelector.allowedConditionTypes || availableConditionTypes;
+
+  const branchGroups: Array<{ condition: WorkflowNode; index: number; nodes: Array<{ node: WorkflowNode; index: number }>; endIndex: number }> = [];
+  otherNodes.forEach((node, index) => {
+    const absoluteIndex = triggerNodes.length + index;
+    if (node.type === 'condition' && branchConditionTypes.has(node.config.type)) {
+      branchGroups.push({ condition: node, index: absoluteIndex, nodes: [], endIndex: absoluteIndex + 1 });
+      return;
+    }
+
+    const activeBranch = branchGroups[branchGroups.length - 1];
+    if (activeBranch) {
+      activeBranch.nodes.push({ node, index: absoluteIndex });
+      activeBranch.endIndex = absoluteIndex + 1;
+    }
+  });
+  const useBranchLayout = branchGroups.length > 0
+    && otherNodes[0]?.type === 'condition'
+    && branchConditionTypes.has(otherNodes[0].config.type);
 
   const otherNodeGroups: any[] = [];
   let currentIndex = triggerNodes.length;
@@ -291,6 +319,46 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     );
   };
 
+  const renderBranchInsertButton = (insertIndex: number, allowedTypes: string[]) => (
+    <button
+      type="button"
+      onClick={() => setShowSelector({ show: true, insertIndex, branchOnly: true, allowedConditionTypes: allowedTypes })}
+      className="h-9 w-9 shrink-0 rounded-full border-2 border-dashed border-indigo-300 bg-white text-indigo-500 shadow-sm transition-colors hover:border-indigo-500 hover:bg-indigo-50 dark:border-indigo-500/40 dark:bg-[#1c2128] dark:text-indigo-300 dark:hover:bg-indigo-500/10"
+      title="Add branch"
+    >
+      <Plus className="mx-auto h-4 w-4" />
+    </button>
+  );
+
+  const renderBranchColumn = (branch: typeof branchGroups[number]) => {
+    const branchType = branch.condition.config.type;
+    const showLeftAdd = branchType === 'elif' || branchType === 'else';
+    const showRightAdd = branchType === 'if' || branchType === 'elif';
+    const rightAllowedTypes = branchType === 'if' && !hasElseBranch ? ['elif', 'else'] : ['elif'];
+
+    return (
+      <div key={branch.condition.id} className="flex min-w-[22rem] flex-col items-center">
+        <div className="flex items-center gap-3">
+          {showLeftAdd ? renderBranchInsertButton(branch.index, ['elif']) : <div className="h-9 w-9 shrink-0" />}
+          {renderNodeCard(branch.condition)}
+          {showRightAdd ? renderBranchInsertButton(branch.endIndex, rightAllowedTypes) : <div className="h-9 w-9 shrink-0" />}
+        </div>
+
+        <div className="mt-4 flex min-h-24 w-80 flex-col items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-white/60 p-3 dark:border-slate-700 dark:bg-[#1c2128]/60">
+          {branch.nodes.map((item) => renderNodeCard(item.node))}
+          <button
+            type="button"
+            onClick={() => setShowSelector({ show: true, insertIndex: branch.endIndex, actionGroupId: branch.condition.id })}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm font-medium text-slate-500 transition-colors hover:border-blue-400 hover:bg-blue-50 hover:text-blue-600 dark:border-slate-700 dark:hover:bg-blue-500/10 dark:hover:text-blue-300"
+          >
+            <Plus className="h-4 w-4" />
+            Add action to {getActionLabel(branchType)}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="absolute inset-0 z-10 bg-slate-50 dark:bg-[#0f1115] flex flex-col sm:flex-row overflow-hidden border-t sm:border-t-0 border-slate-200 dark:border-slate-800 rounded-none sm:rounded-tl-2xl">
       {/* Main Graph Area */}
@@ -374,7 +442,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
                   <button 
-                    onClick={() => setShowSelector({ show: true, insertIndex: triggerNodes.length })}
+                    onClick={() => setShowSelector({ show: true, insertIndex: triggerNodes.length, allowedConditionTypes: ['if'] })}
                     className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
                   >
                     <Plus className="h-3 w-3" />
@@ -400,7 +468,13 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </div>
           )}
 
-          {otherNodeGroups.map((group) => (
+          {useBranchLayout && (
+            <div className="mb-8 flex w-full min-w-max items-start justify-center gap-8 overflow-x-auto px-4 py-2">
+              {branchGroups.map((branch) => renderBranchColumn(branch))}
+            </div>
+          )}
+
+          {!useBranchLayout && otherNodeGroups.map((group) => (
             <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
               {group.type === 'condition' ? (
                 <div className="flex flex-col items-center">
@@ -483,7 +557,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               <Plus className="h-6 w-6" />
               <span className="font-medium">Add Trigger</span>
             </button>
-          ) : (
+          ) : !useBranchLayout ? (
             <button
               onClick={() => setShowSelector({ show: true, insertIndex: draft.nodes.length })}
               className="w-80 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 p-6 flex flex-col items-center justify-center gap-2 text-slate-500 hover:border-orange-500 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-500/5 transition-all bg-white/50 dark:bg-[#1c2128]/50 backdrop-blur-sm"
@@ -491,7 +565,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               <Plus className="h-6 w-6" />
               <span className="font-medium">Add Node</span>
             </button>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -643,7 +717,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                     <div>
                       <h4 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 px-1">{t.workflows.conditions}</h4>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                        {availableConditionTypes.map(type => (
+                        {conditionTypesForSelector.map(type => (
                           <button
                             key={type}
                             onClick={() => addNode(type, false, true)}
@@ -660,6 +734,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       </div>
                     </div>
                   )}
+                  {!showSelector.branchOnly && (
                   <div>
                     <h4 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 px-1">{t.workflows.actions}</h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
@@ -679,6 +754,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       ))}
                     </div>
                   </div>
+                  )}
                 </div>
               )}
             </div>
