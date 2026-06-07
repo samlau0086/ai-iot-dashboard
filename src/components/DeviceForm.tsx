@@ -3,6 +3,7 @@ import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { Device, DeviceType } from '../types';
 import { IOT_ICONS } from '../lib/icons';
+import { Copy } from 'lucide-react';
 
 interface DeviceFormProps {
   deviceId?: string; // If provided, it's edit mode
@@ -10,9 +11,10 @@ interface DeviceFormProps {
 }
 
 export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
-  const { language, devices, addDevice, updateDevice } = useAppStore();
+  const { language, devices, addDevice, updateDevice, currentUser } = useAppStore();
   const t = translations[language].devices.form;
   const typesT = translations[language].devices.types;
+  const isAdmin = currentUser?.role === 'Admin';
 
   const existingDevice = deviceId ? devices.find(d => d.id === deviceId) : null;
 
@@ -30,6 +32,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   });
   
   const [tagInput, setTagInput] = useState('');
+  const [copyMessage, setCopyMessage] = useState('');
 
   const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === 'Tab') {
@@ -69,6 +72,79 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
       ...prev,
       [name]: value
     }));
+  };
+
+  const sampleMetricsByType = (type?: DeviceType) => {
+    switch (type) {
+      case 'energy_meter':
+        return { power: 4070, energy_today: 128.6, voltage: 380, current: 10.7 };
+      case 'temperature_sensor':
+      case 'sensor':
+        return { temperature: -18.4, humidity: 62, battery: 85 };
+      case 'air_compressor':
+        return { pressure: 7.8, air_flow: 520, oil_temp: 76, leakage_rate: 1.8, power: 22000 };
+      case 'solar_inverter':
+        return { pv_power: 52.6, energy_today: 318.4, dc_voltage: 720, efficiency: 97.2 };
+      case 'pump_controller':
+        return { flow_rate: 68.5, pressure: 4.2, motor_temp: 58.3, runtime_hours: 1260 };
+      case 'gateway':
+        return { cpu: 45, ram: 60, uptime: 720 };
+      case 'dtu':
+      case 'rtu':
+      case 'lora_gateway':
+        return { voltage: 24, signal: 82, packet_loss: 0.2 };
+      case 'plc':
+        return { io_rate: 128, cycle_time: 12, cpu: 38 };
+      default:
+        return { value: 1 };
+    }
+  };
+
+  const getTelemetryEndpoint = () => {
+    const apiPath = String(configData.apiPath || '').trim();
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3006';
+
+    if (apiPath.includes('/api/telemetry')) {
+      return apiPath.startsWith('http') ? apiPath : `${origin}${apiPath.startsWith('/') ? apiPath : `/${apiPath}`}`;
+    }
+
+    return `${origin}/api/telemetry`;
+  };
+
+  const buildTelemetryPayload = () => {
+    const fallbackId = existingDevice?.id || 'NEW-DEVICE-ID';
+    const externalDeviceId = String(configData.externalDeviceId || fallbackId).trim() || fallbackId;
+    const deviceType = (formData.type || 'gateway') as DeviceType;
+
+    return {
+      device_id: externalDeviceId,
+      device_type: deviceType,
+      tags: formData.tags || ['factory-a'],
+      ...(configData.dataSource === 'mqtt' && configData.mqttTopic ? { mqtt_topic: configData.mqttTopic } : {}),
+      metrics: Object.keys(existingDevice?.metrics || {}).length
+        ? existingDevice?.metrics
+        : sampleMetricsByType(deviceType),
+      status: existingDevice?.status || 'online',
+      timestamp: new Date().toISOString(),
+    };
+  };
+
+  const buildCurlRequest = () => {
+    const payload = JSON.stringify(buildTelemetryPayload(), null, 2);
+    return `curl -X POST "${getTelemetryEndpoint()}" \\
+  -H "Content-Type: application/json" \\
+  -H "x-iot-token: <copy-token-from-settings>" \\
+  -d '${payload}'`;
+  };
+
+  const handleCopyCurl = async () => {
+    setCopyMessage('');
+    try {
+      await navigator.clipboard.writeText(buildCurlRequest());
+      setCopyMessage('Curl request copied.');
+    } catch (error) {
+      setCopyMessage('Copy failed. Select the request text and copy it manually.');
+    }
   };
 
   const handleSave = () => {
@@ -307,6 +383,38 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
              {renderConfigFields()}
            </div>
         </div>
+
+        {isAdmin && (
+          <div className="border-t border-slate-200 dark:border-slate-800 pt-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-medium text-slate-900 dark:text-white">Telemetry Test Curl</h4>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Generated from the current device binding fields. Use an active Ingest Token from Settings when testing /api/telemetry.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopyCurl}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy
+              </button>
+            </div>
+            <pre className="mt-3 max-h-80 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-4 text-xs leading-5 text-slate-100 dark:border-slate-800">
+              <code>{buildCurlRequest()}</code>
+            </pre>
+            {configData.dataSource === 'mqtt' && (
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                MQTT devices should publish this JSON payload to the configured topic; the curl request is for validating the Dashboard HTTP ingest path with the same payload.
+              </p>
+            )}
+            {copyMessage && (
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{copyMessage}</p>
+            )}
+          </div>
+        )}
 
       </div>
       
