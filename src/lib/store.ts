@@ -17,6 +17,29 @@ export interface User {
   approvedAt?: string;
 }
 
+const DEFAULT_USERS: User[] = [
+  {
+    id: '1',
+    name: 'Admin User',
+    email: 'admin@factory.com',
+    role: 'Admin',
+    siteId: 'factory-a',
+    password: 'password123',
+    status: 'approved',
+    approvedAt: new Date().toISOString(),
+  },
+  {
+    id: 'demo-user',
+    name: 'Demo User',
+    email: 'demo@factory.com',
+    role: 'Demo',
+    siteId: 'factory-a',
+    password: 'demo123',
+    status: 'approved',
+    approvedAt: new Date().toISOString(),
+  },
+];
+
 export interface SiteTenant {
   id: string;
   name: string;
@@ -477,6 +500,14 @@ const clearStoredSessionUserId = () => {
   }
 };
 
+const mergeDefaultUsers = (users: User[] = []) => {
+  const existingEmails = new Set(users.map((user) => user.email.toLowerCase()));
+  return [
+    ...users,
+    ...DEFAULT_USERS.filter((user) => !existingEmails.has(user.email.toLowerCase())),
+  ];
+};
+
 const pickBackendState = (state: AppState): BackendState => ({
   language: state.language,
   theme: state.theme,
@@ -528,7 +559,7 @@ export const useAppStore = create<AppState>()(
           if (!response.ok) throw new Error(`State load failed: ${response.status}`);
           const payload = await response.json();
           const state = payload.state as BackendState | null;
-          const users = state?.users || useAppStore.getState().users;
+          const users = mergeDefaultUsers(state?.users || useAppStore.getState().users);
           const sessionUserId = getStoredSessionUserId();
           const sessionUser = sessionUserId
             ? users.find((user) => user.id === sessionUserId && user.status === 'approved') || null
@@ -544,6 +575,7 @@ export const useAppStore = create<AppState>()(
             sites: mergeDefaultSites(state?.sites),
             activeSiteId: state?.activeSiteId || 'factory-a',
             charts: mergeDefaultCharts(state?.charts),
+            users,
             currentUser: sessionUser,
             backendHydrated: true,
           } as Partial<AppState>);
@@ -650,9 +682,7 @@ export const useAppStore = create<AppState>()(
         };
       }),
 
-      users: [
-        { id: '1', name: 'Admin User', email: 'admin@factory.com', role: 'Admin', siteId: 'factory-a', password: 'password123', status: 'approved', approvedAt: new Date().toISOString() }
-      ],
+      users: DEFAULT_USERS,
       addUser: (user) => set((state) => ({ users: [...state.users, user] })),
       registerUser: (user) => {
         const email = user.email.trim().toLowerCase();
@@ -862,6 +892,7 @@ let backendSaveTimer: number | undefined;
 
 useAppStore.subscribe((state) => {
   if (!state.backendHydrated) return;
+  if (state.currentUser?.role === 'Demo') return;
 
   window.clearTimeout(backendSaveTimer);
   backendSaveTimer = window.setTimeout(() => {

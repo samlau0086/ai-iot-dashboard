@@ -1568,6 +1568,11 @@ app.post('/api/device-commands', async (req, res) => {
     const allowedRoles = new Set(['Owner', 'Admin', 'Engineer', 'Operator']);
     const requestedByRole = String(payload.requestedByRole || '');
 
+    if (requestedByRole === 'Demo') {
+      res.status(403).json({error: 'demo account commands are frontend-only and cannot affect devices'});
+      return;
+    }
+
     if (!allowedRoles.has(requestedByRole)) {
       res.status(403).json({error: 'current user role is not allowed to issue control commands'});
       return;

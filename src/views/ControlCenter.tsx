@@ -43,7 +43,8 @@ export function ControlCenter() {
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const canControl = ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
+  const isDemoUser = currentUser?.role === 'Demo';
+  const canControl = !isDemoUser && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
   const siteOptions = [{ id: 'All', name: 'All Sites' }, ...sites];
   const scopedDevices = useMemo(() => {
     return devices.filter((device) => {
@@ -141,7 +142,9 @@ export function ControlCenter() {
 
       {!canControl && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-          Your current role can view control history but cannot issue commands.
+          {isDemoUser
+            ? 'Demo account can preview control workflows, but commands will not be sent to backend or devices.'
+            : 'Your current role can view control history but cannot issue commands.'}
         </div>
       )}
 

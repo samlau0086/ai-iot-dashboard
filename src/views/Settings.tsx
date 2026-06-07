@@ -5,7 +5,7 @@ import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
-const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'];
+const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
 const SITE_TYPES: SiteTenant['type'][] = ['factory', 'solar', 'cold_storage', 'pump_station', 'compressed_air', 'other'];
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -146,6 +146,7 @@ export function Settings() {
     deleteSite,
   } = useAppStore();
   const t = translations[language];
+  const isDemoUser = currentUser?.role === 'Demo';
   const [activeTab, setActiveTab] = useState<'general' | 'sites' | 'data' | 'tokens' | 'notifications' | 'users'>('general');
   const [httpPushChannels, setHttpPushChannels] = useState<HttpPushChannel[]>([]);
   const [mqttChannels, setMqttChannels] = useState<MqttChannel[]>([]);
@@ -310,6 +311,11 @@ export function Settings() {
 
   const handleSaveDataSources = async () => {
     setDataSourceMessage('');
+    if (isDemoUser) {
+      setDataSourceMessage('Demo account changes are local only and will not be saved to backend data sources.');
+      return;
+    }
+
     const invalidMqtt = mqttChannels.find((channel) => {
       const topics = typeof channel.topics === 'string' ? channel.topics.trim() : channel.topics.join(',').trim();
       return channel.enabled && (!channel.brokerUrl.trim() || !topics);
@@ -353,6 +359,11 @@ export function Settings() {
 
   const handleGenerateToken = async () => {
     setTokenMessage('');
+    if (isDemoUser) {
+      setTokenMessage('Demo account cannot generate backend ingest tokens.');
+      return;
+    }
+
     try {
       const response = await fetch('/api/ingest-tokens', {
         method: 'POST',
@@ -376,6 +387,11 @@ export function Settings() {
 
   const handleRevokeToken = async (tokenId: string) => {
     setTokenMessage('');
+    if (isDemoUser) {
+      setTokenMessage('Demo account cannot revoke backend ingest tokens.');
+      return;
+    }
+
     try {
       const response = await fetch(`/api/ingest-tokens/${encodeURIComponent(tokenId)}/revoke`, {
         method: 'POST',

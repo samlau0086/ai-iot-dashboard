@@ -95,6 +95,16 @@ export function Auth({ mode }: { mode: AuthMode }) {
               </p>
             </div>
 
+            {mode === 'login' && (
+              <div className="mt-5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
+                <div className="font-medium text-orange-50">Demo account</div>
+                <div className="mt-1 text-orange-100/90">demo@factory.com / demo123</div>
+                <div className="mt-2 text-xs leading-5 text-orange-100/75">
+                  Demo changes stay in the browser session only. Backend data and device commands are not affected.
+                </div>
+              </div>
+            )}
+
             <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
               {mode === 'register' && (
                 <div>
