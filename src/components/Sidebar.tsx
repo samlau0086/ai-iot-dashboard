@@ -37,7 +37,7 @@ export function Sidebar() {
   };
 
   return (
-    <div className="flex w-64 flex-col bg-white dark:bg-[#16191f] text-slate-700 dark:text-slate-300 border-r border-slate-200 dark:border-slate-800">
+    <div className="hidden w-64 flex-col border-r border-slate-200 bg-white text-slate-700 dark:border-slate-800 dark:bg-[#16191f] dark:text-slate-300 lg:flex">
       <div className="flex h-16 shrink-0 items-center px-6 bg-slate-50 dark:bg-[#16191f] border-b border-slate-200 dark:border-slate-800">
         <BrainCircuit className="h-6 w-6 text-orange-500 mr-2" />
         <span className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">AI IoT Dashboard</span>

@@ -83,7 +83,92 @@ export function Devices() {
         ))}
       </div>
 
-      <div className="overflow-x-auto bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 rounded-lg shadow-sm pb-[100px]">
+      <div className="space-y-3 pb-6 md:hidden">
+        {filteredDevices.map((device) => {
+          const IconComp = getDeviceIcon(device.icon);
+          const keyMetric =
+            device.type === 'energy_meter' ? `${device.metrics.power || 0} W` :
+            device.type === 'temperature_sensor' ? `${device.metrics.temperature || 0} 掳C` :
+            device.type === 'air_compressor' ? `${device.metrics.pressure || 0} bar` :
+            device.type === 'gateway' ? `CPU: ${device.metrics.cpu || 0}%` :
+            device.type === 'dtu' ? `Volt: ${device.metrics.voltage || 0} V` :
+            device.type === 'rtu' ? `Mem: ${device.metrics.memory || 0}%` :
+            device.type === 'lora_gateway' ? `RSSI: ${device.metrics.rssi || 0} dBm` :
+            device.type === 'plc' ? `I/O: ${device.metrics.io_rate || 0}/s` :
+            device.type === 'solar_inverter' ? `${device.metrics.power || 0} W` :
+            device.type === 'pump_controller' ? `${device.metrics.pressure || 0} bar` :
+            '-';
+
+          return (
+            <div key={device.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+              <div className="flex items-start justify-between gap-3">
+                <Link to={`/devices/${device.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
+                    <IconComp className="h-5 w-5 text-orange-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{device.name}</p>
+                    <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">{device.id}</p>
+                  </div>
+                </Link>
+                <span className={cn(
+                  'mt-1 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize',
+                  device.status === 'online' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' :
+                  device.status === 'warning' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300' :
+                  'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300'
+                )}>
+                  <span className={cn(
+                    'h-1.5 w-1.5 rounded-full',
+                    device.status === 'online' ? 'bg-emerald-500' :
+                    device.status === 'warning' ? 'bg-amber-500' :
+                    'bg-red-500'
+                  )} />
+                  {device.status}
+                </span>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                <div className="rounded-md bg-slate-50 p-3 dark:bg-slate-900/40">
+                  <p className="text-[10px] uppercase text-slate-500 dark:text-slate-400">{t.devices.table.type}</p>
+                  <p className="mt-1 truncate font-medium text-slate-800 dark:text-slate-200">
+                    {(t.devices.types as any)[device.type] || device.type.replace('_', ' ')}
+                  </p>
+                </div>
+                <div className="rounded-md bg-slate-50 p-3 dark:bg-slate-900/40">
+                  <p className="text-[10px] uppercase text-slate-500 dark:text-slate-400">{t.devices.table.metric}</p>
+                  <p className="mt-1 truncate font-mono font-semibold text-slate-900 dark:text-white">{keyMetric}</p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {t.devices.table.lastSeen}: {new Date(device.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleEdit(device.id)}
+                    className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-orange-600 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-orange-400"
+                    title={t.devices.editDevice}
+                  >
+                    <Edit2 className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(device.id)}
+                    className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:text-slate-400 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+                    title={t.devices.form.delete}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="hidden overflow-x-auto bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 rounded-lg shadow-sm pb-[100px] md:block">
         <table className="w-full text-left text-xs">
           <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-500 font-mono uppercase text-[10px]">
             <tr>

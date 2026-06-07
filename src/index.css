@@ -4,6 +4,23 @@
 @import "react-grid-layout/css/styles.css";
 @import "react-resizable/css/styles.css";
 
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  overscroll-behavior: none;
+}
+
+.mobile-tab-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.mobile-tab-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 .react-grid-layout {
   position: relative;
   transition: height 200ms ease;

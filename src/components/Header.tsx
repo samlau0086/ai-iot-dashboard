@@ -1,19 +1,31 @@
 import React, { useState } from 'react';
-import { Bell, Search, Sun, Moon, Languages } from 'lucide-react';
+import { Bell, BrainCircuit, Languages, Moon, Search, Sun } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
 
 export function Header() {
-  const { language, setLanguage, theme, toggleTheme, devices } = useAppStore();
+  const { language, setLanguage, theme, toggleTheme, devices, currentUser } = useAppStore();
   const t = translations[language];
   const [showNotifications, setShowNotifications] = useState(false);
   const alerts = deriveAlertsFromDevices(devices);
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white/50 dark:border-slate-800 dark:bg-[#16191f]/50 backdrop-blur-md px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8 relative z-[40]">
-      <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
-        <form className="relative flex flex-1" action="#" method="GET">
+    <header className="relative z-[40] flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-[#16191f]/80 sm:h-16 sm:gap-x-6 sm:px-6 lg:px-8">
+      <div className="flex min-w-0 flex-1 gap-x-3 self-stretch lg:gap-x-6">
+        <div className="flex min-w-0 items-center gap-2 sm:hidden">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-orange-500/10">
+            <BrainCircuit className="h-5 w-5 text-orange-500" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">AI IoT Dashboard</p>
+            <p className="truncate text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              {currentUser?.role || 'Operator'}
+            </p>
+          </div>
+        </div>
+
+        <form className="relative hidden flex-1 sm:flex" action="#" method="GET">
           <label htmlFor="search-field" className="sr-only">
             Search
           </label>
@@ -29,7 +41,7 @@ export function Header() {
             name="search"
           />
         </form>
-        <div className="flex items-center gap-x-4 lg:gap-x-6">
+        <div className="ml-auto flex items-center gap-x-1 sm:gap-x-4 lg:gap-x-6">
           <button 
             type="button" 
             onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
@@ -64,7 +76,7 @@ export function Header() {
             {showNotifications && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowNotifications(false)}></div>
-                <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-2 z-20">
+                <div className="fixed left-3 right-3 top-16 z-20 rounded-lg border border-slate-200 bg-white py-2 shadow-lg dark:border-slate-700 dark:bg-[#1c2128] sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-80">
                   <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800/50">
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Recent Notifications</h3>
                   </div>
