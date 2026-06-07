@@ -1123,24 +1123,24 @@ export function Overview() {
           </div>
 
           {isTemplateEditing && (
-            <>
-            <button
-              type="button"
-              onClick={autoArrangeWidgets}
-              className="inline-flex items-center gap-x-2 rounded bg-white dark:bg-[#1c2128] px-3 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 shadow-sm border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-colors"
-            >
-              <LayoutGrid className="-ml-0.5 h-4 w-4" aria-hidden="true" />
-              Auto Layout
-            </button>
-            <button
-              type="button"
-              onClick={() => openWidgetBuilder()}
-              className="inline-flex items-center gap-x-2 rounded bg-white dark:bg-[#1c2128] px-3 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 shadow-sm border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-colors"
-            >
-              <Plus className="-ml-0.5 h-4 w-4" aria-hidden="true" />
-              Add Widget
-            </button>
-            </>
+            <div className="flex flex-wrap items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={autoArrangeWidgets}
+                className="inline-flex h-9 items-center gap-x-2 rounded border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1c2128] dark:text-slate-300 dark:hover:bg-slate-800/80"
+              >
+                <LayoutGrid className="-ml-0.5 h-4 w-4" aria-hidden="true" />
+                Auto Layout
+              </button>
+              <button
+                type="button"
+                onClick={() => openWidgetBuilder()}
+                className="inline-flex h-9 items-center gap-x-2 rounded border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1c2128] dark:text-slate-300 dark:hover:bg-slate-800/80"
+              >
+                <Plus className="-ml-0.5 h-4 w-4" aria-hidden="true" />
+                Add Widget
+              </button>
+            </div>
           )}
         </div>
       </div>
