@@ -9,6 +9,85 @@ const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+const DEFAULT_NOTIFICATION_CONFIG: Record<NotificationChannel['type'], Record<string, string>> = {
+  email: { recipients: '', subjectPrefix: '[IoT Alert]' },
+  webhook: { url: '', method: 'POST', secretHeader: '' },
+  bark: { serverUrl: 'https://api.day.app', deviceKey: '' },
+  sms: { provider: 'custom', phoneNumber: '', templateId: '' },
+  telegram: { botToken: '', chatId: '' },
+  slack: { webhookUrl: '', channel: '', username: 'AI IoT Dashboard' },
+};
+
+const NOTIFICATION_FIELDS: Record<NotificationChannel['type'], { key: string; label: string; placeholder: string; secret?: boolean }[]> = {
+  email: [
+    { key: 'recipients', label: 'Recipients', placeholder: 'ops@example.com, manager@example.com' },
+    { key: 'subjectPrefix', label: 'Subject Prefix', placeholder: '[IoT Alert]' },
+  ],
+  webhook: [
+    { key: 'url', label: 'Webhook URL', placeholder: 'https://example.com/iot-alerts' },
+    { key: 'method', label: 'Method', placeholder: 'POST' },
+    { key: 'secretHeader', label: 'Secret Header', placeholder: 'x-alert-secret: ********', secret: true },
+  ],
+  bark: [
+    { key: 'serverUrl', label: 'Bark Server', placeholder: 'https://api.day.app' },
+    { key: 'deviceKey', label: 'Device Key', placeholder: 'Bark device key', secret: true },
+  ],
+  sms: [
+    { key: 'provider', label: 'Provider', placeholder: 'twilio / aliyun / custom' },
+    { key: 'phoneNumber', label: 'Phone Number', placeholder: '+1 555 0100' },
+    { key: 'templateId', label: 'Template ID', placeholder: 'Optional provider template' },
+  ],
+  telegram: [
+    { key: 'botToken', label: 'Bot Token', placeholder: '123456:ABC...', secret: true },
+    { key: 'chatId', label: 'Chat ID', placeholder: '-1001234567890' },
+  ],
+  slack: [
+    { key: 'webhookUrl', label: 'Webhook URL', placeholder: 'https://hooks.slack.com/services/...' },
+    { key: 'channel', label: 'Channel', placeholder: '#factory-alerts' },
+    { key: 'username', label: 'Bot Name', placeholder: 'AI IoT Dashboard' },
+  ],
+};
+
+const notificationTargetFromConfig = (type: NotificationChannel['type'], config: Record<string, string>) => {
+  switch (type) {
+    case 'email': return config.recipients || '';
+    case 'webhook': return config.url || '';
+    case 'bark': return config.deviceKey || '';
+    case 'sms': return config.phoneNumber || '';
+    case 'telegram': return config.chatId || '';
+    case 'slack': return config.webhookUrl || config.channel || '';
+    default: return '';
+  }
+};
+
+const notificationConfigFromChannel = (channel: NotificationChannel) => {
+  const config = { ...DEFAULT_NOTIFICATION_CONFIG[channel.type], ...(channel.config || {}) };
+  if (!channel.config && channel.target) {
+    switch (channel.type) {
+      case 'email':
+        config.recipients = channel.target;
+        break;
+      case 'webhook':
+        config.url = channel.target;
+        break;
+      case 'bark':
+        config.deviceKey = channel.target;
+        break;
+      case 'sms':
+        config.phoneNumber = channel.target;
+        break;
+      case 'telegram':
+        config.chatId = channel.target;
+        break;
+      case 'slack':
+        config.webhookUrl = channel.target;
+        break;
+    }
+  }
+
+  return config;
+};
+
 type HttpPushChannel = {
   id: string;
   name: string;
@@ -73,7 +152,7 @@ export function Settings() {
   const [channelDraft, setChannelDraft] = useState({
     type: 'email' as NotificationChannel['type'],
     name: '',
-    target: '',
+    config: { ...DEFAULT_NOTIFICATION_CONFIG.email },
   });
   const [userDraft, setUserDraft] = useState({
     name: '',
@@ -127,16 +206,18 @@ export function Settings() {
   }, []);
 
   const handleAddChannel = () => {
-    if (!channelDraft.target.trim()) return;
+    const target = notificationTargetFromConfig(channelDraft.type, channelDraft.config);
+    if (!target.trim()) return;
 
     addNotificationChannel({
       id: newId('channel'),
       type: channelDraft.type,
       name: channelDraft.name.trim() || `${channelDraft.type.toUpperCase()} Channel`,
-      target: channelDraft.target.trim(),
+      target: target.trim(),
+      config: channelDraft.config,
       enabled: true,
     });
-    setChannelDraft({ type: 'email', name: '', target: '' });
+    setChannelDraft({ type: 'email', name: '', config: { ...DEFAULT_NOTIFICATION_CONFIG.email } });
   };
 
   const handleAddUser = () => {
@@ -273,6 +354,27 @@ export function Settings() {
       setTokenMessage('Copy failed. Select the token text and copy it manually.');
     }
   };
+
+  const renderNotificationConfigFields = (
+    type: NotificationChannel['type'],
+    config: Record<string, string>,
+    onChange: (key: string, value: string) => void
+  ) => (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {NOTIFICATION_FIELDS[type].map((field) => (
+        <div key={field.key}>
+          <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">{field.label}</label>
+          <input
+            type={field.secret ? 'password' : 'text'}
+            value={config[field.key] || ''}
+            onChange={(event) => onChange(field.key, event.target.value)}
+            placeholder={field.placeholder}
+            className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+          />
+        </div>
+      ))}
+    </div>
+  );
 
   return (
     <div className="space-y-6">
@@ -692,36 +794,40 @@ export function Settings() {
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[150px_1fr_1.5fr_auto]">
-                <select
-                  value={channelDraft.type}
-                  onChange={(event) => setChannelDraft((current) => ({ ...current, type: event.target.value as NotificationChannel['type'] }))}
-                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                >
-                  {CHANNEL_TYPES.map((type) => (
-                    <option key={type} value={type}>{type.toUpperCase()}</option>
-                  ))}
-                </select>
-                <input
-                  value={channelDraft.name}
-                  onChange={(event) => setChannelDraft((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="Channel name"
-                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                />
-                <input
-                  value={channelDraft.target}
-                  onChange={(event) => setChannelDraft((current) => ({ ...current, target: event.target.value }))}
-                  placeholder="Email, webhook URL, Bark URL, phone, bot target..."
-                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddChannel}
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add
-                </button>
+              <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-[150px_1fr_auto]">
+                  <select
+                    value={channelDraft.type}
+                    onChange={(event) => {
+                      const type = event.target.value as NotificationChannel['type'];
+                      setChannelDraft((current) => ({ ...current, type, config: { ...DEFAULT_NOTIFICATION_CONFIG[type] } }));
+                    }}
+                    className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                  >
+                    {CHANNEL_TYPES.map((type) => (
+                      <option key={type} value={type}>{type.toUpperCase()}</option>
+                    ))}
+                  </select>
+                  <input
+                    value={channelDraft.name}
+                    onChange={(event) => setChannelDraft((current) => ({ ...current, name: event.target.value }))}
+                    placeholder="Channel name"
+                    className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddChannel}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add
+                  </button>
+                </div>
+                {renderNotificationConfigFields(
+                  channelDraft.type,
+                  channelDraft.config,
+                  (key, value) => setChannelDraft((current) => ({ ...current, config: { ...current.config, [key]: value } }))
+                )}
               </div>
 
               <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
@@ -729,14 +835,17 @@ export function Settings() {
                   <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
                     <tr>
                       <th className="px-4 py-3 font-semibold">Channel</th>
-                      <th className="px-4 py-3 font-semibold">Target</th>
+                      <th className="px-4 py-3 font-semibold">Configuration</th>
                       <th className="px-4 py-3 font-semibold">Enabled</th>
                       <th className="px-4 py-3 font-semibold">Test</th>
                       <th className="px-4 py-3 text-right font-semibold">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
-                    {notificationChannels.map((channel) => (
+                    {notificationChannels.map((channel) => {
+                      const channelConfig = notificationConfigFromChannel(channel);
+
+                      return (
                       <tr key={channel.id}>
                         <td className="px-4 py-3 align-top">
                           <input
@@ -747,11 +856,19 @@ export function Settings() {
                           <div className="mt-1 text-xs uppercase text-slate-500">{channel.type}</div>
                         </td>
                         <td className="px-4 py-3 align-top">
-                          <input
-                            value={channel.target}
-                            onChange={(event) => updateNotificationChannel(channel.id, { target: event.target.value })}
-                            className="w-full min-w-64 rounded-md border-0 bg-transparent px-2 py-1 font-mono text-xs text-slate-600 ring-1 ring-transparent focus:ring-orange-500 dark:text-slate-300"
-                          />
+                          <div className="min-w-80">
+                            {renderNotificationConfigFields(
+                              channel.type,
+                              channelConfig,
+                              (key, value) => {
+                                const nextConfig = { ...channelConfig, [key]: value };
+                                updateNotificationChannel(channel.id, {
+                                  config: nextConfig,
+                                  target: notificationTargetFromConfig(channel.type, nextConfig),
+                                });
+                              }
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3 align-top">
                           <label className="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
@@ -779,7 +896,7 @@ export function Settings() {
                               channel.lastTestStatus === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
                             )}>
                               <CheckCircle2 className="h-3.5 w-3.5" />
-                              {channel.lastTestStatus === 'success' ? 'Test passed' : 'Target required'}
+                              {channel.lastTestStatus === 'success' ? 'Test passed' : 'Configuration required'}
                             </div>
                           )}
                         </td>
@@ -794,7 +911,8 @@ export function Settings() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {notificationChannels.length === 0 && (
                       <tr>
                         <td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-500">

@@ -22,6 +22,7 @@ export interface NotificationChannel {
   type: 'bark' | 'email' | 'webhook' | 'sms' | 'telegram' | 'slack';
   name: string;
   target: string;
+  config?: Record<string, string>;
   enabled: boolean;
   lastTestStatus?: 'success' | 'failed';
   lastTestAt?: string;
@@ -407,6 +408,26 @@ const pickBackendState = (state: AppState): BackendState => ({
   workflows: state.workflows,
 });
 
+const isNotificationChannelConfigured = (channel: NotificationChannel) => {
+  const config = channel.config || {};
+  switch (channel.type) {
+    case 'email':
+      return Boolean(config.recipients || channel.target);
+    case 'webhook':
+      return Boolean(config.url || channel.target);
+    case 'bark':
+      return Boolean(config.deviceKey || channel.target);
+    case 'sms':
+      return Boolean(config.phoneNumber || channel.target);
+    case 'telegram':
+      return Boolean((config.botToken && config.chatId) || channel.target);
+    case 'slack':
+      return Boolean(config.webhookUrl || channel.target);
+    default:
+      return Boolean(channel.target.trim());
+  }
+};
+
 export const useAppStore = create<AppState>()(
     (set) => ({
       backendHydrated: false,
@@ -472,8 +493,8 @@ export const useAppStore = create<AppState>()(
         notificationChannels: state.notificationChannels.map((item) => (
           item.id === id
             ? {
-                ...item,
-                lastTestStatus: item.enabled && item.target.trim() ? 'success' : 'failed',
+              ...item,
+                lastTestStatus: item.enabled && isNotificationChannelConfigured(item) ? 'success' : 'failed',
                 lastTestAt: new Date().toISOString(),
               }
             : item
