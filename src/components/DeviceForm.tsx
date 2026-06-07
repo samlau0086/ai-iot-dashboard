@@ -3,7 +3,7 @@ import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { Device, DeviceType } from '../types';
 import { IOT_ICONS } from '../lib/icons';
-import { Copy } from 'lucide-react';
+import { ArrowLeft, Copy } from 'lucide-react';
 
 interface DeviceFormProps {
   deviceId?: string; // If provided, it's edit mode
@@ -243,9 +243,19 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   return (
     <div className="bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 rounded-lg shadow-sm overflow-hidden">
       <div className="px-4 py-5 sm:px-6 border-b border-slate-200 dark:border-slate-800">
-        <h3 className="text-lg leading-6 font-medium text-slate-900 dark:text-white">
-          {existingDevice ? translations[language].devices.editDevice : translations[language].devices.addDevice}
-        </h3>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-2 -ml-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white"
+            title="Back to devices"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h3 className="text-lg leading-6 font-medium text-slate-900 dark:text-white">
+            {existingDevice ? translations[language].devices.editDevice : translations[language].devices.addDevice}
+          </h3>
+        </div>
       </div>
       <div className="px-4 py-5 sm:p-6 space-y-6">
         

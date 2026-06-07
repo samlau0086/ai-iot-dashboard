@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
-import { ArrowLeft, Activity, Info, Settings, Zap } from 'lucide-react';
+import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio } from 'lucide-react';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 
@@ -40,6 +40,125 @@ export function DeviceDetails() {
 
   const updateControl = (key: string, value: any) => {
     setControlValues(prev => ({ ...prev, [key]: value }));
+  };
+
+  const metricValue = (key: string) => Number(device.metrics?.[key]) || 0;
+
+  const metricUnit = (key: string) => {
+    if (key.includes('power') || key === 'pv_power') return 'W';
+    if (key.includes('energy') || key.includes('generation')) return 'kWh';
+    if (key.includes('temp')) return 'deg C';
+    if (key.includes('pressure')) return 'bar';
+    if (key.includes('humidity') || key.includes('efficiency') || key.includes('battery') || key.includes('soc') || key.includes('cpu') || key.includes('ram') || key.includes('leakage')) return '%';
+    if (key.includes('flow')) return 'm3/h';
+    if (key.includes('hours') || key.includes('uptime')) return 'h';
+    if (key.includes('voltage')) return 'V';
+    if (key.includes('current')) return 'A';
+    return '';
+  };
+
+  const metricMax = (key: string, value: number) => {
+    if (key.includes('temp') && value < 0) return 0;
+    if (key.includes('humidity') || key.includes('efficiency') || key.includes('battery') || key.includes('soc') || key.includes('cpu') || key.includes('ram') || key.includes('leakage')) return 100;
+    if (key.includes('pressure')) return 10;
+    if (key.includes('power') || key === 'pv_power') return Math.max(25000, value * 1.2);
+    if (key.includes('flow')) return Math.max(150, value * 1.2);
+    if (key.includes('voltage')) return 800;
+    return Math.max(100, value * 1.2);
+  };
+
+  const metricColor = (key: string, value: number) => {
+    if (device.status === 'warning') return 'bg-amber-500';
+    if ((key.includes('temp') && value >= 80) || key.includes('leakage')) return 'bg-red-500';
+    if (key.includes('battery') && value < 25) return 'bg-amber-500';
+    if (key.includes('power') || key === 'pv_power') return 'bg-orange-500';
+    return 'bg-emerald-500';
+  };
+
+  const primaryMetricKeysByType: Record<string, { key: string; label: string; icon: any }[]> = {
+    energy_meter: [
+      { key: 'power', label: 'Power Draw', icon: Zap },
+      { key: 'energy_today', label: 'Energy Today', icon: Activity },
+      { key: 'voltage', label: 'Voltage', icon: Gauge },
+      { key: 'current', label: 'Current', icon: Activity },
+    ],
+    temperature_sensor: [
+      { key: 'temperature', label: 'Temperature', icon: Thermometer },
+      { key: 'humidity', label: 'Humidity', icon: Droplets },
+      { key: 'door_open_events', label: 'Door Events', icon: DoorOpen },
+      { key: 'battery', label: 'Battery', icon: BatteryCharging },
+    ],
+    air_compressor: [
+      { key: 'pressure', label: 'Air Pressure', icon: Gauge },
+      { key: 'temperature', label: 'Temperature', icon: Thermometer },
+      { key: 'power', label: 'Power Draw', icon: Zap },
+      { key: 'leakage_rate', label: 'Leakage Rate', icon: Wind },
+    ],
+    pump_controller: [
+      { key: 'flow_rate', label: 'Flow Rate', icon: Waves },
+      { key: 'pressure', label: 'Pressure', icon: Gauge },
+      { key: 'running_hours', label: 'Runtime', icon: Timer },
+      { key: 'power', label: 'Power Draw', icon: Zap },
+    ],
+    solar_inverter: [
+      { key: 'power', label: 'PV Power', icon: Zap },
+      { key: 'energy_today', label: 'Generation Today', icon: Activity },
+      { key: 'efficiency', label: 'Efficiency', icon: Activity },
+      { key: 'battery_soc', label: 'Battery SOC', icon: BatteryCharging },
+    ],
+    gateway: [
+      { key: 'cpu', label: 'CPU Load', icon: Cpu },
+      { key: 'ram', label: 'Memory', icon: HardDrive },
+      { key: 'uptime', label: 'Uptime', icon: Timer },
+    ],
+    dtu: [
+      { key: 'voltage', label: 'Voltage', icon: Gauge },
+      { key: 'signal', label: 'Signal', icon: Radio },
+      { key: 'packet_loss', label: 'Packet Loss', icon: Activity },
+    ],
+    rtu: [
+      { key: 'memory', label: 'Memory', icon: HardDrive },
+      { key: 'voltage', label: 'Voltage', icon: Gauge },
+      { key: 'signal', label: 'Signal', icon: Radio },
+    ],
+    plc: [
+      { key: 'io_rate', label: 'I/O Rate', icon: Activity },
+      { key: 'cycle_time', label: 'Cycle Time', icon: Timer },
+      { key: 'cpu', label: 'CPU Load', icon: Cpu },
+    ],
+  };
+
+  const primaryMetricKeys = primaryMetricKeysByType[device.type] || Object.keys(device.metrics || {}).slice(0, 4).map((key) => ({ key, label: key, icon: Activity }));
+  const primaryMetrics = primaryMetricKeys.filter((metric) => device.metrics?.[metric.key] !== undefined);
+  const primaryMetricSet = new Set(primaryMetrics.map((metric) => metric.key));
+  const secondaryMetrics = Object.entries(device.metrics || {}).filter(([key]) => !primaryMetricSet.has(key));
+
+  const renderMetricCard = (metric: { key: string; label: string; icon: any }) => {
+    const value = metricValue(metric.key);
+    const max = metricMax(metric.key, value);
+    const percent = max === 0 ? 100 : Math.max(0, Math.min(100, Math.abs(value) / max * 100));
+    const Icon = metric.icon;
+
+    return (
+      <div key={metric.key} className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800/50 dark:bg-slate-900">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-[10px] font-mono uppercase tracking-wider text-slate-500">{metric.label}</p>
+            <p className="mt-2 truncate text-2xl font-semibold text-slate-900 dark:text-white">
+              {value.toFixed(value % 1 === 0 ? 0 : 1)}
+              <span className="ml-1 text-sm font-normal text-slate-500">{metricUnit(metric.key)}</span>
+            </p>
+          </div>
+          <div className="rounded-md bg-white p-2 text-orange-500 ring-1 ring-slate-200 dark:bg-[#1c2128] dark:ring-slate-800">
+            <Icon className="h-5 w-5" />
+          </div>
+        </div>
+        <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+          <div className={cn('h-full rounded-full', metricColor(metric.key, value))} style={{ width: `${percent}%` }} />
+        </div>
+        <p className="mt-2 truncate text-[10px] font-mono text-slate-400">{metric.key}</p>
+      </div>
+    );
   };
 
   return (
@@ -148,6 +267,33 @@ export function DeviceDetails() {
               <Activity className="h-4 w-4" /> Live Metrics
             </h3>
             {device.metrics && Object.keys(device.metrics).length > 0 ? (
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                  {(primaryMetrics.length ? primaryMetrics : Object.keys(device.metrics).slice(0, 4).map((key) => ({ key, label: key, icon: Activity }))).map(renderMetricCard)}
+                </div>
+
+                {secondaryMetrics.length > 0 && (
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800/50 overflow-hidden">
+                    <div className="bg-slate-50 px-4 py-2 text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:bg-slate-900">
+                      Additional Telemetry
+                    </div>
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800/70">
+                      {secondaryMetrics.map(([key, value]) => (
+                        <div key={key} className="flex items-center justify-between px-4 py-3 text-xs font-mono">
+                          <span className="text-slate-500">{key}</span>
+                          <span className="text-slate-900 dark:text-slate-300">
+                            {String(value)} {metricUnit(key)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">No telemetry data available.</p>
+            )}
+            {false && (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                 {Object.entries(device.metrics).map(([key, value]) => (
                   <div key={key} className="bg-slate-50 dark:bg-slate-900 p-4 rounded border border-slate-200 dark:border-slate-800/50">
@@ -161,8 +307,6 @@ export function DeviceDetails() {
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="text-xs text-slate-500">No telemetry data available.</p>
             )}
           </div>
 
