@@ -422,6 +422,19 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         })}
       </div>
       {renderBranchBrace('up')}
+      <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
+          <button
+            type="button"
+            onClick={() => setShowSelector({ show: true, insertIndex: branchGroups[branchGroups.length - 1]?.endIndex || draft.nodes.length })}
+            className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
+            title="Add next node after branches"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+        </div>
+        <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
+      </div>
     </div>
   );
 
