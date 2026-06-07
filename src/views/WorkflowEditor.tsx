@@ -188,7 +188,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     }
 
     const activeBranch = branchGroups[branchGroups.length - 1];
-    if (activeBranch) {
+    if (activeBranch && node.config?.groupId === activeBranch.condition.id) {
       activeBranch.nodes.push({ node, index: absoluteIndex });
       activeBranch.endIndex = absoluteIndex + 1;
     }
@@ -196,23 +196,38 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const useBranchLayout = branchGroups.length > 0
     && otherNodes[0]?.type === 'condition'
     && branchConditionTypes.has(otherNodes[0].config.type);
-
-  const otherNodeGroups: any[] = [];
-  let currentIndex = triggerNodes.length;
-  otherNodes.forEach(node => {
-    if (node.type === 'condition') {
-      otherNodeGroups.push({ type: 'condition', node, index: currentIndex });
-    } else {
-      const groupId = node.config.groupId || node.id;
-      const lastGroup = otherNodeGroups[otherNodeGroups.length - 1];
-      if (lastGroup && lastGroup.type === 'action_group' && lastGroup.groupId === groupId) {
-        lastGroup.nodes.push({ node, index: currentIndex });
-      } else {
-        otherNodeGroups.push({ type: 'action_group', groupId, nodes: [{ node, index: currentIndex }] });
-      }
-    }
-    currentIndex++;
+  const branchOwnedNodeIds = new Set<string>();
+  branchGroups.forEach((branch) => {
+    branchOwnedNodeIds.add(branch.condition.id);
+    branch.nodes.forEach((item) => branchOwnedNodeIds.add(item.node.id));
   });
+  const branchGroupEndIndex = branchGroups.reduce((maxIndex, branch) => Math.max(maxIndex, branch.endIndex), triggerNodes.length);
+
+  const toActionGroups = (items: Array<{ node: WorkflowNode; index: number }>) => {
+    const groups: any[] = [];
+    items.forEach(({ node, index }) => {
+      if (node.type === 'condition') {
+        groups.push({ type: 'condition', node, index });
+        return;
+      }
+
+      const groupId = node.config.groupId || node.id;
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup && lastGroup.type === 'action_group' && lastGroup.groupId === groupId) {
+        lastGroup.nodes.push({ node, index });
+      } else {
+        groups.push({ type: 'action_group', groupId, nodes: [{ node, index }] });
+      }
+    });
+    return groups;
+  };
+
+  const otherNodeGroups = toActionGroups(otherNodes.map((node, index) => ({ node, index: triggerNodes.length + index })));
+  const postBranchNodeGroups = useBranchLayout
+    ? toActionGroups(draft.nodes
+      .map((node, index) => ({ node, index }))
+      .filter(({ node, index }) => index >= branchGroupEndIndex && !branchOwnedNodeIds.has(node.id)))
+    : [];
 
   useEffect(() => {
     if (!isNew) {
@@ -426,7 +441,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
           <button
             type="button"
-            onClick={() => setShowSelector({ show: true, insertIndex: branchGroups[branchGroups.length - 1]?.endIndex || draft.nodes.length })}
+            onClick={() => setShowSelector({ show: true, insertIndex: branchGroupEndIndex || draft.nodes.length })}
             className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
             title="Add next node after branches"
           >
@@ -549,7 +564,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
           {useBranchLayout && renderBranchChain()}
 
-          {!useBranchLayout && otherNodeGroups.map((group) => (
+          {(useBranchLayout ? postBranchNodeGroups : otherNodeGroups).map((group) => (
             <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
               {group.type === 'condition' ? (
                 <div className="flex flex-col items-center">

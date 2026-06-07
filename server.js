@@ -869,6 +869,21 @@ const executeWorkflow = async (workflow, trigger, event) => {
   if (branchConditions.length > 0) {
     let selectedBranch = null;
     let selectedActions = [];
+    const branchNodeIds = new Set(branchConditions.map((condition) => condition.id));
+    const branchActionIds = new Set();
+    branchConditions.forEach((condition) => {
+      workflow.nodes.forEach((node) => {
+        if (node.type === 'action' && node.config?.groupId === condition.id) {
+          branchActionIds.add(node.id);
+        }
+      });
+    });
+    const branchGroupEndIndex = workflow.nodes.reduce((maxIndex, node, index) => (
+      branchNodeIds.has(node.id) || branchActionIds.has(node.id) ? Math.max(maxIndex, index + 1) : maxIndex
+    ), 0);
+    const continuationActions = workflow.nodes.slice(branchGroupEndIndex).filter((node) => (
+      node.type === 'action' && !branchActionIds.has(node.id)
+    ));
 
     for (const condition of branchConditions) {
       const passed = conditionMatchesEvent(condition, event);
@@ -883,12 +898,10 @@ const executeWorkflow = async (workflow, trigger, event) => {
 
       if (passed) {
         selectedBranch = condition;
-        const branchStart = workflow.nodes.findIndex((node) => node.id === condition.id);
-        const nextBranchOffset = workflow.nodes.slice(branchStart + 1).findIndex((node) => (
-          node.type === 'condition' && branchTypes.has(node.config?.type)
+        const branchActions = workflow.nodes.filter((node) => (
+          node.type === 'action' && node.config?.groupId === condition.id
         ));
-        const branchEnd = nextBranchOffset === -1 ? workflow.nodes.length : branchStart + 1 + nextBranchOffset;
-        selectedActions = workflow.nodes.slice(branchStart + 1, branchEnd).filter((node) => node.type === 'action');
+        selectedActions = [...branchActions, ...continuationActions];
         break;
       }
     }
