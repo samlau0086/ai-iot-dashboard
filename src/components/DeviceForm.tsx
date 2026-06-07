@@ -11,17 +11,20 @@ interface DeviceFormProps {
 }
 
 export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
-  const { language, devices, addDevice, updateDevice, currentUser } = useAppStore();
+  const { language, devices, addDevice, updateDevice, currentUser, sites, activeSiteId } = useAppStore();
   const t = translations[language].devices.form;
   const typesT = translations[language].devices.types;
   const isAdmin = currentUser?.role === 'Admin';
 
   const existingDevice = deviceId ? devices.find(d => d.id === deviceId) : null;
+  const defaultSite = sites.find((site) => site.id === (existingDevice?.siteId || activeSiteId)) || sites[0];
 
   const [formData, setFormData] = useState<Partial<Device>>({
     name: '',
     type: 'gateway',
-    tags: ['factory-a'],
+    siteId: defaultSite?.id || 'factory-a',
+    tenantId: defaultSite?.tenantId || 'default-tenant',
+    tags: defaultSite?.tags || ['factory-a'],
     icon: 'server',
     ...existingDevice
   });
@@ -150,11 +153,16 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
 
   const handleSave = () => {
     const deviceId = existingDevice?.id || `DEV-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+    const selectedSite = sites.find((site) => site.id === formData.siteId) || sites[0];
+    const siteTags = selectedSite?.tags || [];
+    const nextTags = Array.from(new Set([...(formData.tags || []), ...siteTags]));
     const newDevice: Device = {
       id: deviceId,
       name: formData.name || 'Unnamed Device',
       type: formData.type as DeviceType,
-      tags: formData.tags || ['factory-a'],
+      siteId: selectedSite?.id || formData.siteId || 'factory-a',
+      tenantId: selectedSite?.tenantId || formData.tenantId || 'default-tenant',
+      tags: nextTags.length ? nextTags : ['factory-a'],
       icon: formData.icon,
       config: {
         ...configData,
@@ -284,6 +292,29 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
                 <option key={key} value={key}>{(typesT as any)[key]}</option>
               ))}
             </select>
+          </div>
+
+          <div className="sm:col-span-3">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Site / Tenant</label>
+            <select
+              name="siteId"
+              value={formData.siteId || defaultSite?.id || 'factory-a'}
+              onChange={(event) => {
+                const selectedSite = sites.find((site) => site.id === event.target.value);
+                setFormData((prev) => ({
+                  ...prev,
+                  siteId: event.target.value,
+                  tenantId: selectedSite?.tenantId || prev.tenantId,
+                  tags: Array.from(new Set([...(prev.tags || []), ...(selectedSite?.tags || [])])),
+                }));
+              }}
+              className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+            >
+              {sites.map((site) => (
+                <option key={site.id} value={site.id}>{site.name} / {site.tenantName}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Devices inherit tenant ownership and default tags from the selected site.</p>
           </div>
           
           <div className="sm:col-span-3">

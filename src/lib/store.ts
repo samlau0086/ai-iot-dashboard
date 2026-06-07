@@ -17,6 +17,20 @@ export interface User {
   approvedAt?: string;
 }
 
+export interface SiteTenant {
+  id: string;
+  name: string;
+  tenantId: string;
+  tenantName: string;
+  type: 'factory' | 'solar' | 'cold_storage' | 'pump_station' | 'compressed_air' | 'other';
+  tags: string[];
+  location?: string;
+  timezone?: string;
+  status: 'active' | 'inactive';
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface NotificationChannel {
   id: string;
   type: 'bark' | 'email' | 'webhook' | 'sms' | 'telegram' | 'slack';
@@ -97,6 +111,43 @@ const DEFAULT_TAG_TEMPLATE_MAP: Record<string, string> = {
   'air-compressor': 'air-compressor',
 };
 
+const DEFAULT_SITES: SiteTenant[] = [
+  {
+    id: 'factory-a',
+    name: 'Factory A',
+    tenantId: 'default-tenant',
+    tenantName: 'Default Tenant',
+    type: 'factory',
+    tags: ['factory-a'],
+    location: 'Shenzhen',
+    timezone: 'Asia/Shanghai',
+    status: 'active',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'solar-site',
+    name: 'Solar Site',
+    tenantId: 'default-tenant',
+    tenantName: 'Default Tenant',
+    type: 'solar',
+    tags: ['solar'],
+    timezone: 'Asia/Shanghai',
+    status: 'active',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'pump-station',
+    name: 'Pump Station',
+    tenantId: 'default-tenant',
+    tenantName: 'Default Tenant',
+    type: 'pump_station',
+    tags: ['water-pump'],
+    timezone: 'Asia/Shanghai',
+    status: 'active',
+    createdAt: new Date().toISOString(),
+  },
+];
+
 const DEFAULT_OVERVIEW_LAYOUT = [
   { i: 'kpi-online-devices', x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
   { i: 'kpi-total-devices', x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
@@ -141,8 +192,20 @@ const mergeDefaultCharts = (charts: ChartConfig[] = []) => {
 const mergeDefaultDevices = (devices: Device[] = []) => {
   const existingIds = new Set(devices.map((device) => device.id));
   return [
-    ...devices,
+    ...devices.map((device) => ({
+      ...device,
+      siteId: device.siteId || device.tags?.[0] || 'factory-a',
+      tenantId: device.tenantId || 'default-tenant',
+    })),
     ...mockDevices.filter((device) => !existingIds.has(device.id)),
+  ];
+};
+
+const mergeDefaultSites = (sites: SiteTenant[] = []) => {
+  const existingIds = new Set(sites.map((site) => site.id));
+  return [
+    ...sites,
+    ...DEFAULT_SITES.filter((site) => !existingIds.has(site.id)),
   ];
 };
 
@@ -312,6 +375,13 @@ interface AppState {
   setDeviceDataSourceStatus: (status: 'mock' | 'api' | 'mqtt' | 'error') => void;
   updateDevice: (id: string, device: Partial<Device>) => void;
   deleteDevice: (id: string) => void;
+  // Sites / Tenants
+  sites: SiteTenant[];
+  activeSiteId: string;
+  setActiveSite: (siteId: string) => void;
+  addSite: (site: SiteTenant) => void;
+  updateSite: (id: string, site: Partial<SiteTenant>) => void;
+  deleteSite: (id: string) => void;
   // Users
   users: User[];
   addUser: (user: User) => void;
@@ -365,6 +435,8 @@ type BackendState = Partial<Pick<AppState,
   | 'notificationChannels'
   | 'devices'
   | 'deviceDataSourceStatus'
+  | 'sites'
+  | 'activeSiteId'
   | 'users'
   | 'charts'
   | 'overviewLayout'
@@ -414,6 +486,8 @@ const pickBackendState = (state: AppState): BackendState => ({
   notificationChannels: state.notificationChannels,
   devices: state.devices,
   deviceDataSourceStatus: state.deviceDataSourceStatus,
+  sites: state.sites,
+  activeSiteId: state.activeSiteId,
   users: state.users,
   charts: state.charts,
   overviewLayout: state.overviewLayout,
@@ -467,6 +541,8 @@ export const useAppStore = create<AppState>()(
           set({
             ...(state || {}),
             devices: mergeDefaultDevices(state?.devices),
+            sites: mergeDefaultSites(state?.sites),
+            activeSiteId: state?.activeSiteId || 'factory-a',
             charts: mergeDefaultCharts(state?.charts),
             currentUser: sessionUser,
             backendHydrated: true,
@@ -520,7 +596,11 @@ export const useAppStore = create<AppState>()(
 
       devices: mockDevices,
       deviceDataSourceStatus: 'mock',
-      addDevice: (device) => set((state) => ({ devices: [...state.devices, device] })),
+      addDevice: (device) => set((state) => ({ devices: [...state.devices, {
+        ...device,
+        siteId: device.siteId || state.activeSiteId || 'factory-a',
+        tenantId: device.tenantId || state.sites.find((site) => site.id === (device.siteId || state.activeSiteId))?.tenantId || 'default-tenant',
+      }] })),
       setDevices: (devices, source = 'api') => set({ devices, deviceDataSourceStatus: source }),
       applyTelemetryMessage: (message, source = 'mqtt') => set((state) => ({
         devices: mergeTelemetryIntoDevices(state.devices, message),
@@ -533,6 +613,42 @@ export const useAppStore = create<AppState>()(
       deleteDevice: (id) => set((state) => ({
         devices: state.devices.filter(d => d.id !== id)
       })),
+
+      sites: DEFAULT_SITES,
+      activeSiteId: 'factory-a',
+      setActiveSite: (siteId) => set({ activeSiteId: siteId }),
+      addSite: (site) => set((state) => ({
+        sites: [...state.sites, site],
+        tagDashboardTemplateMap: {
+          ...state.tagDashboardTemplateMap,
+          ...site.tags.reduce<Record<string, string>>((acc, tag) => {
+            acc[tag] = state.tagDashboardTemplateMap[tag] || DEFAULT_TAG_TEMPLATE_MAP[tag] || 'factory-energy';
+            return acc;
+          }, {}),
+        },
+      })),
+      updateSite: (id, site) => set((state) => ({
+        sites: state.sites.map((item) => (
+          item.id === id ? { ...item, ...site, updatedAt: new Date().toISOString() } : item
+        )),
+        users: site.id && site.id !== id
+          ? state.users.map((user) => user.siteId === id ? { ...user, siteId: site.id as string } : user)
+          : state.users,
+        devices: site.id && site.id !== id
+          ? state.devices.map((device) => device.siteId === id ? { ...device, siteId: site.id as string } : device)
+          : state.devices,
+        activeSiteId: state.activeSiteId === id ? (site.id || id) : state.activeSiteId,
+      })),
+      deleteSite: (id) => set((state) => {
+        const remainingSites = state.sites.filter((site) => site.id !== id);
+        const fallbackSiteId = remainingSites[0]?.id || 'factory-a';
+        return {
+          sites: remainingSites.length ? remainingSites : DEFAULT_SITES,
+          activeSiteId: state.activeSiteId === id ? fallbackSiteId : state.activeSiteId,
+          users: state.users.map((user) => user.siteId === id ? { ...user, siteId: fallbackSiteId } : user),
+          devices: state.devices.map((device) => device.siteId === id ? { ...device, siteId: fallbackSiteId } : device),
+        };
+      }),
 
       users: [
         { id: '1', name: 'Admin User', email: 'admin@factory.com', role: 'Admin', siteId: 'factory-a', password: 'password123', status: 'approved', approvedAt: new Date().toISOString() }

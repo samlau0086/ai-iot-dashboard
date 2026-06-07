@@ -45,6 +45,8 @@ export interface Device {
   id: string;
   name: string;
   type: DeviceType;
+  siteId?: string;
+  tenantId?: string;
   tags: string[];
   metrics: Record<string, number>;
   status: 'online' | 'offline' | 'warning';
@@ -62,6 +64,9 @@ export interface DeviceTelemetryMessage {
   device_type?: DeviceType;
   type?: DeviceType;
   site_id?: string;
+  siteId?: string;
+  tenant_id?: string;
+  tenantId?: string;
   tags?: string[];
   metrics?: Record<string, number>;
   status?: 'online' | 'offline' | 'warning';

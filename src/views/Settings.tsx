@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, CheckCircle2, Copy, Database, KeyRound, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
-import { useAppStore, type NotificationChannel } from '../lib/store';
+import { Bell, Building2, CheckCircle2, Copy, Database, KeyRound, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
+import { useAppStore, type NotificationChannel, type SiteTenant } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'];
+const SITE_TYPES: SiteTenant['type'][] = ['factory', 'solar', 'cold_storage', 'pump_station', 'compressed_air', 'other'];
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -139,9 +140,13 @@ export function Settings() {
     approveUser,
     rejectUser,
     currentUser,
+    sites,
+    addSite,
+    updateSite,
+    deleteSite,
   } = useAppStore();
   const t = translations[language];
-  const [activeTab, setActiveTab] = useState<'general' | 'data' | 'tokens' | 'notifications' | 'users'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'sites' | 'data' | 'tokens' | 'notifications' | 'users'>('general');
   const [httpPushChannels, setHttpPushChannels] = useState<HttpPushChannel[]>([]);
   const [mqttChannels, setMqttChannels] = useState<MqttChannel[]>([]);
   const [mqttStatuses, setMqttStatuses] = useState<Record<string, MqttStatus>>({});
@@ -161,9 +166,20 @@ export function Settings() {
     role: 'Operator',
     siteId: 'factory-a',
   });
+  const [siteDraft, setSiteDraft] = useState({
+    id: '',
+    name: '',
+    tenantId: 'default-tenant',
+    tenantName: 'Default Tenant',
+    type: 'factory' as SiteTenant['type'],
+    tags: 'factory-a',
+    location: '',
+    timezone: 'Asia/Shanghai',
+  });
 
   const tabs = [
     { id: 'general', name: t.settings.tabs.general, icon: SettingsIcon },
+    { id: 'sites', name: 'Sites', icon: Building2 },
     { id: 'data', name: 'Data Sources', icon: Database },
     { id: 'tokens', name: 'Ingest Tokens', icon: KeyRound },
     { id: 'notifications', name: t.settings.tabs.notifications, icon: Bell },
@@ -229,12 +245,40 @@ export function Settings() {
       email: userDraft.email.trim().toLowerCase(),
       password: userDraft.password,
       role: userDraft.role,
-      siteId: userDraft.siteId.trim() || 'factory-a',
+      siteId: userDraft.siteId.trim() || sites[0]?.id || 'factory-a',
       status: 'approved',
       createdAt: new Date().toISOString(),
       approvedAt: new Date().toISOString(),
     });
-    setUserDraft({ name: '', email: '', password: '', role: 'Operator', siteId: 'factory-a' });
+    setUserDraft({ name: '', email: '', password: '', role: 'Operator', siteId: sites[0]?.id || 'factory-a' });
+  };
+
+  const handleAddSite = () => {
+    const id = siteDraft.id.trim() || siteDraft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!id || !siteDraft.name.trim()) return;
+
+    addSite({
+      id,
+      name: siteDraft.name.trim(),
+      tenantId: siteDraft.tenantId.trim() || 'default-tenant',
+      tenantName: siteDraft.tenantName.trim() || siteDraft.tenantId.trim() || 'Default Tenant',
+      type: siteDraft.type,
+      tags: siteDraft.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      location: siteDraft.location.trim(),
+      timezone: siteDraft.timezone.trim() || 'Asia/Shanghai',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    });
+    setSiteDraft({
+      id: '',
+      name: '',
+      tenantId: 'default-tenant',
+      tenantName: 'Default Tenant',
+      type: 'factory',
+      tags: '',
+      location: '',
+      timezone: 'Asia/Shanghai',
+    });
   };
 
   const handleAddHttpPushChannel = () => {
@@ -389,7 +433,7 @@ export function Settings() {
             {tabs.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as 'general' | 'data' | 'tokens' | 'notifications' | 'users')}
+                onClick={() => setActiveTab(tab.id as 'general' | 'sites' | 'data' | 'tokens' | 'notifications' | 'users')}
                 className={cn(
                   activeTab === tab.id
                     ? 'border-orange-500 text-orange-600 dark:text-orange-500'
@@ -446,6 +490,153 @@ export function Settings() {
                     <option value="CST">CST (China Standard Time)</option>
                   </select>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'sites' && (
+            <div className="space-y-6">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">Site / Tenant Management</h2>
+                  <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    Model tenants and physical sites, then bind users and devices to a site for data isolation and dashboard scoping.
+                  </p>
+                </div>
+                <div className="text-xs text-slate-500">Sites: {sites.length}</div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[1fr_1fr_1fr_150px_1fr_1fr_auto]">
+                <input
+                  value={siteDraft.name}
+                  onChange={(event) => setSiteDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Site name"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <input
+                  value={siteDraft.id}
+                  onChange={(event) => setSiteDraft((current) => ({ ...current, id: event.target.value }))}
+                  placeholder="site-id"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <input
+                  value={siteDraft.tenantName}
+                  onChange={(event) => setSiteDraft((current) => ({ ...current, tenantName: event.target.value }))}
+                  placeholder="Tenant name"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <select
+                  value={siteDraft.type}
+                  onChange={(event) => setSiteDraft((current) => ({ ...current, type: event.target.value as SiteTenant['type'] }))}
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                >
+                  {SITE_TYPES.map((type) => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
+                <input
+                  value={siteDraft.tags}
+                  onChange={(event) => setSiteDraft((current) => ({ ...current, tags: event.target.value }))}
+                  placeholder="tags, comma separated"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <input
+                  value={siteDraft.location}
+                  onChange={(event) => setSiteDraft((current) => ({ ...current, location: event.target.value }))}
+                  placeholder="Location"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddSite}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add
+                </button>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Site</th>
+                      <th className="px-4 py-3 font-semibold">Tenant</th>
+                      <th className="px-4 py-3 font-semibold">Type</th>
+                      <th className="px-4 py-3 font-semibold">Tags</th>
+                      <th className="px-4 py-3 font-semibold">Status</th>
+                      <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+                    {sites.map((site) => (
+                      <tr key={site.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                        <td className="px-4 py-3">
+                          <input
+                            value={site.name}
+                            onChange={(event) => updateSite(site.id, { name: event.target.value })}
+                            className="block w-44 rounded-md border-0 bg-transparent px-2 py-1 font-medium text-slate-900 ring-1 ring-transparent focus:ring-orange-500 dark:text-white"
+                          />
+                          <input
+                            value={site.id}
+                            onChange={(event) => updateSite(site.id, { id: event.target.value })}
+                            className="mt-1 block w-44 rounded-md border-0 bg-transparent px-2 py-1 font-mono text-xs text-slate-500 ring-1 ring-transparent focus:ring-orange-500"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            value={site.tenantName}
+                            onChange={(event) => updateSite(site.id, { tenantName: event.target.value })}
+                            className="block w-44 rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-transparent focus:ring-orange-500 dark:text-slate-300"
+                          />
+                          <input
+                            value={site.tenantId}
+                            onChange={(event) => updateSite(site.id, { tenantId: event.target.value })}
+                            className="mt-1 block w-44 rounded-md border-0 bg-transparent px-2 py-1 font-mono text-xs text-slate-500 ring-1 ring-transparent focus:ring-orange-500"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={site.type}
+                            onChange={(event) => updateSite(site.id, { type: event.target.value as SiteTenant['type'] })}
+                            className="rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
+                          >
+                            {SITE_TYPES.map((type) => (
+                              <option key={type} value={type}>{type}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            value={site.tags.join(', ')}
+                            onChange={(event) => updateSite(site.id, { tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean) })}
+                            className="w-56 rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={site.status}
+                            onChange={(event) => updateSite(site.id, { status: event.target.value as SiteTenant['status'] })}
+                            className="rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
+                          >
+                            <option value="active">active</option>
+                            <option value="inactive">inactive</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => deleteSite(site.id)}
+                            className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+                            title="Delete site"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
@@ -970,12 +1161,15 @@ export function Settings() {
                     <option key={role} value={role}>{role}</option>
                   ))}
                 </select>
-                <input
+                <select
                   value={userDraft.siteId}
                   onChange={(event) => setUserDraft((current) => ({ ...current, siteId: event.target.value }))}
-                  placeholder="factory-a"
                   className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
-                />
+                >
+                  {sites.map((site) => (
+                    <option key={site.id} value={site.id}>{site.name}</option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={handleAddUser}
@@ -1034,11 +1228,15 @@ export function Settings() {
                           </select>
                         </td>
                         <td className="px-4 py-3">
-                          <input
+                          <select
                             value={user.siteId}
                             onChange={(event) => updateUser(user.id, { siteId: event.target.value })}
-                            className="w-36 rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
-                          />
+                            className="w-40 rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
+                          >
+                            {sites.map((site) => (
+                              <option key={site.id} value={site.id}>{site.name}</option>
+                            ))}
+                          </select>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex justify-end gap-2">

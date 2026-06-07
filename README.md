@@ -35,6 +35,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Mock 告警和能耗数据已由设备 metrics 派生，减少前端固定假数据依赖。
 - [x] 总览中心 Widget 已支持绑定设备与 metric，并支持单位、精度、阈值、颜色规则配置。
 - [x] Widget 模板市场 / 预设库已完成，可从行业预设快速加入可用 Widget。
+- [x] 站点 Site / Tenant 数据模型已完成，支持站点管理、租户归属、用户站点绑定和设备站点归属。
 - [x] Analytics 图表报告已支持绑定设备和 metric。
 - [x] 通知渠道支持同类型多条配置，并按渠道类型提供差异化字段和测试按钮。
 - [x] 移动端布局已改为 App-like shell，包含移动端顶部栏、底部导航和设备卡片列表。
@@ -82,7 +83,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 
 - [x] 支持多类型设备抽象：energy_meter、plc、temperature_sensor、solar_inverter、pump_controller、air_compressor、gateway
 - [x] 设备 Tags 分组
-- [ ] 站点 Site / Tenant 数据模型
+- [x] 站点 Site / Tenant 数据模型
 - [x] 外部 MQTT Broker 接入：后端订阅 EMQX / Mosquitto 等 Broker
 - [x] PostgreSQL + pgvector 后端持久化
 - [x] HTTP Push 多通道数据源

@@ -5,6 +5,8 @@ export const mockDevices: Device[] = [
     id: 'DEV-001',
     name: 'Main Energy Meter',
     type: 'energy_meter',
+    siteId: 'factory-a',
+    tenantId: 'default-tenant',
     tags: ['factory-a'],
     metrics: {
       voltage: 220,
@@ -20,6 +22,8 @@ export const mockDevices: Device[] = [
     id: 'DEV-002',
     name: 'CNC Machine 1 Power',
     type: 'energy_meter',
+    siteId: 'factory-a',
+    tenantId: 'default-tenant',
     tags: ['factory-a'],
     metrics: {
       voltage: 380,
@@ -35,6 +39,8 @@ export const mockDevices: Device[] = [
     id: 'DEV-003',
     name: 'Air Compressor 1',
     type: 'air_compressor',
+    siteId: 'factory-a',
+    tenantId: 'default-tenant',
     tags: ['factory-a', 'air-compressor'],
     metrics: {
       pressure: 7.8,
@@ -51,6 +57,8 @@ export const mockDevices: Device[] = [
     id: 'DEV-004',
     name: 'Cold Storage Ambient',
     type: 'temperature_sensor',
+    siteId: 'factory-a',
+    tenantId: 'default-tenant',
     tags: ['factory-a', 'cold-storage'],
     metrics: {
       temperature: -18.5,
@@ -66,6 +74,8 @@ export const mockDevices: Device[] = [
     id: 'GW-001',
     name: 'Factory Main Gateway',
     type: 'gateway',
+    siteId: 'factory-a',
+    tenantId: 'default-tenant',
     tags: ['factory-a'],
     metrics: {
       cpu: 45,
@@ -80,6 +90,8 @@ export const mockDevices: Device[] = [
     id: 'SOL-001',
     name: 'Rooftop PV Inverter',
     type: 'solar_inverter',
+    siteId: 'solar-site',
+    tenantId: 'default-tenant',
     tags: ['solar'],
     metrics: {
       power: 18400,
@@ -95,6 +107,8 @@ export const mockDevices: Device[] = [
     id: 'PMP-001',
     name: 'Water Pump Controller',
     type: 'pump_controller',
+    siteId: 'pump-station',
+    tenantId: 'default-tenant',
     tags: ['water-pump'],
     metrics: {
       flow_rate: 128,

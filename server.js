@@ -788,6 +788,8 @@ app.post('*', async (req, res, next) => {
         ...baseMessage,
         device_id: baseMessage.device_id || baseMessage.deviceId || baseMessage.id || externalDeviceId,
         device_type: baseMessage.device_type || baseMessage.type || device.type,
+        site_id: baseMessage.site_id || baseMessage.siteId || device.siteId,
+        tenant_id: baseMessage.tenant_id || baseMessage.tenantId || device.tenantId,
         tags: baseMessage.tags || device.tags || [],
       };
     };

@@ -14,6 +14,7 @@ const toNumberMetrics = (metrics: Record<string, unknown> = {}) => {
 export const normalizeDevice = (payload: DeviceTelemetryMessage): Device | null => {
   const id = payload.device_id || payload.deviceId || payload.id;
   const type = payload.device_type || payload.type;
+  const siteId = payload.site_id || payload.siteId || payload.tenant_id || payload.tenantId;
 
   if (!id || !type) return null;
 
@@ -21,7 +22,9 @@ export const normalizeDevice = (payload: DeviceTelemetryMessage): Device | null 
     id,
     name: payload.name || id,
     type,
-    tags: payload.tags || (payload.site_id ? [payload.site_id] : []),
+    siteId,
+    tenantId: payload.tenant_id || payload.tenantId,
+    tags: payload.tags || (siteId ? [siteId] : []),
     metrics: toNumberMetrics(payload.metrics),
     status: payload.status || 'online',
     lastSeen: payload.lastSeen || payload.timestamp || new Date().toISOString(),
@@ -61,6 +64,8 @@ export const mergeTelemetryIntoDevices = (devices: Device[], payload: DeviceTele
           type: payload.device_type || payload.type || device.type,
           status: payload.status || device.status,
           lastSeen: payload.lastSeen || payload.timestamp || new Date().toISOString(),
+          siteId: payload.site_id || payload.siteId || payload.tenant_id || payload.tenantId || device.siteId,
+          tenantId: payload.tenant_id || payload.tenantId || device.tenantId,
           tags: payload.tags?.length ? payload.tags : device.tags,
           metrics: {
             ...device.metrics,
