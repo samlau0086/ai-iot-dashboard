@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAppStore, Workflow, WorkflowNode } from '../lib/store';
+import { useAppStore, Workflow, WorkflowEdge, WorkflowNode } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
   ArrowLeft, Plus, Save, Trash2, Play, Square,
@@ -266,11 +266,74 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     }
   }, [workflowId, workflows, isNew]);
 
+  const buildWorkflowEdges = () => {
+    const edges: WorkflowEdge[] = [];
+    const addEdge = (source: string | undefined, target: string | undefined, type: WorkflowEdge['type'], label?: string) => {
+      if (!source || !target) return;
+      edges.push({
+        id: `edge-${source}-${target}-${type}-${edges.length}`,
+        source,
+        target,
+        type,
+        label,
+      });
+    };
+    const firstNodeOf = (item: FlowItem | undefined) => {
+      if (!item) return undefined;
+      if (item.type === 'branch_group') return item.branches[0]?.condition.id;
+      const firstGroup = item.groups[0];
+      return firstGroup?.type === 'condition' ? firstGroup.node.id : firstGroup?.nodes?.[0]?.node.id;
+    };
+
+    triggerNodes.forEach((trigger) => addEdge(trigger.id, firstNodeOf(flowItems[0]), 'next'));
+
+    flowItems.forEach((item, itemIndex) => {
+      const nextStart = firstNodeOf(flowItems[itemIndex + 1]);
+
+      if (item.type === 'nodes') {
+        item.groups.forEach((group, groupIndex) => {
+          const nextGroup = item.groups[groupIndex + 1];
+          const groupNext = nextGroup
+            ? (nextGroup.type === 'condition' ? nextGroup.node.id : nextGroup.nodes[0]?.node.id)
+            : nextStart;
+
+          if (group.type === 'condition') {
+            addEdge(group.node.id, groupNext, 'next');
+            return;
+          }
+
+          group.nodes.forEach((entry: any, nodeIndex: number) => {
+            addEdge(entry.node.id, group.nodes[nodeIndex + 1]?.node.id || groupNext, 'next');
+          });
+        });
+        return;
+      }
+
+      item.branches.forEach((branch, branchIndex) => {
+        const nextBranch = item.branches[branchIndex + 1];
+        const firstBranchAction = branch.nodes[0]?.node.id;
+
+        if (nextBranch) {
+          addEdge(branch.condition.id, nextBranch.condition.id, 'false');
+          addEdge(branch.condition.id, nextBranch.condition.id, 'branch', 'OR');
+        }
+
+        addEdge(branch.condition.id, firstBranchAction || nextStart, 'true');
+        branch.nodes.forEach((entry, nodeIndex) => {
+          addEdge(entry.node.id, branch.nodes[nodeIndex + 1]?.node.id || nextStart, nodeIndex === branch.nodes.length - 1 ? 'continue' : 'next');
+        });
+      });
+    });
+
+    return edges;
+  };
+
   const handleSave = () => {
+    const workflowToSave = { ...draft, edges: buildWorkflowEdges() };
     if (isNew) {
-      addWorkflow(draft);
+      addWorkflow(workflowToSave);
     } else {
-      updateWorkflow(draft.id, draft);
+      updateWorkflow(draft.id, workflowToSave);
     }
     onBack();
   };

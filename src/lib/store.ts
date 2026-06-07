@@ -362,12 +362,21 @@ export interface WorkflowNode {
   config: any;
 }
 
+export interface WorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: 'next' | 'branch' | 'true' | 'false' | 'continue';
+  label?: string;
+}
+
 export interface Workflow {
   id: string;
   name: string;
   description: string;
   enabled: boolean;
   nodes: WorkflowNode[];
+  edges?: WorkflowEdge[];
 }
 
 interface AppState {

@@ -859,8 +859,128 @@ const executeWorkflowAction = async (workflow, action, event) => {
   return {...baseStep, status: 'skipped', output: `Unsupported action type: ${config.type || 'unknown'}`};
 };
 
+const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => {
+  const nodesById = new Map((workflow.nodes || []).map((node) => [node.id, node]));
+  const outgoingEdges = new Map();
+  for (const edge of workflow.edges || []) {
+    if (!outgoingEdges.has(edge.source)) outgoingEdges.set(edge.source, []);
+    outgoingEdges.get(edge.source).push(edge);
+  }
+
+  const steps = [];
+  const visited = new Set();
+  let currentNode = trigger;
+  let guard = 0;
+
+  const persistResult = async (status) => {
+    const finishedAt = new Date().toISOString();
+    await persistWorkflowRun({
+      id: createId('wfr'),
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      triggerType: trigger.config?.type || 'unknown',
+      eventSource: event.source || event.type,
+      status,
+      event,
+      steps,
+      startedAt,
+      finishedAt,
+    });
+  };
+
+  while (currentNode && guard < 200) {
+    guard++;
+    if (visited.has(currentNode.id)) {
+      steps.push({
+        nodeId: currentNode.id,
+        type: currentNode.config?.type || currentNode.type,
+        status: 'failed',
+        output: 'Workflow graph cycle detected.',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      });
+      await persistResult('failed');
+      return;
+    }
+    visited.add(currentNode.id);
+
+    const outgoing = outgoingEdges.get(currentNode.id) || [];
+
+    if (currentNode.type === 'trigger') {
+      const nextEdge = outgoing.find((edge) => edge.type === 'next') || outgoing[0];
+      currentNode = nodesById.get(nextEdge?.target);
+      continue;
+    }
+
+    if (currentNode.type === 'condition') {
+      const passed = conditionMatchesEvent(currentNode, event);
+      steps.push({
+        nodeId: currentNode.id,
+        type: currentNode.config?.type || 'condition',
+        status: passed ? 'success' : 'skipped',
+        output: passed ? 'Condition passed' : 'Condition did not match event',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      });
+
+      const nextEdge = passed
+        ? outgoing.find((edge) => edge.type === 'true' || edge.type === 'next')
+        : outgoing.find((edge) => edge.type === 'false');
+
+      if (!nextEdge && !passed) {
+        await persistResult('skipped');
+        return;
+      }
+
+      currentNode = nodesById.get(nextEdge?.target);
+      continue;
+    }
+
+    if (currentNode.type === 'action') {
+      try {
+        steps.push(await executeWorkflowAction(workflow, currentNode, event));
+      } catch (error) {
+        steps.push({
+          nodeId: currentNode.id,
+          type: currentNode.config?.type || 'action',
+          status: 'failed',
+          output: error.message,
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        });
+      }
+
+      const nextEdge = outgoing.find((edge) => edge.type === 'next' || edge.type === 'continue');
+      currentNode = nodesById.get(nextEdge?.target);
+      continue;
+    }
+
+    currentNode = undefined;
+  }
+
+  if (guard >= 200) {
+    steps.push({
+      nodeId: currentNode?.id || 'workflow',
+      type: 'workflow',
+      status: 'failed',
+      output: 'Workflow graph execution exceeded step limit.',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+    await persistResult('failed');
+    return;
+  }
+
+  await persistResult(steps.some((step) => step.status === 'failed') ? 'failed' : 'success');
+};
+
 const executeWorkflow = async (workflow, trigger, event) => {
   const startedAt = new Date().toISOString();
+  if (Array.isArray(workflow.edges) && workflow.edges.length > 0) {
+    await executeWorkflowWithEdges(workflow, trigger, event, startedAt);
+    return;
+  }
+
   const branchTypes = new Set(['if', 'elif', 'else']);
   const nonTriggerNodes = workflow.nodes.filter((node) => node.type !== 'trigger');
   const branchConditions = nonTriggerNodes.filter((node) => node.type === 'condition' && branchTypes.has(node.config?.type));
