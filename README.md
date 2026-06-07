@@ -34,6 +34,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Ingest Token 已改为后台用户级管理，支持 Generate / Revoke / Copy。
 - [x] Mock 告警和能耗数据已由设备 metrics 派生，减少前端固定假数据依赖。
 - [x] 总览中心 Widget 已支持绑定设备与 metric，并支持单位、精度、阈值、颜色规则配置。
+- [x] Widget 模板市场 / 预设库已完成，可从行业预设快速加入可用 Widget。
 - [x] Analytics 图表报告已支持绑定设备和 metric。
 - [x] 通知渠道支持同类型多条配置，并按渠道类型提供差异化字段和测试按钮。
 - [x] 移动端布局已改为 App-like shell，包含移动端顶部栏、底部导航和设备卡片列表。
@@ -63,7 +64,6 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Cold Storage Monitoring 模板
 - [x] Water Pump Monitoring 模板
 - [x] Air Compressor Monitoring 模板
-- [ ] CNC Machine Monitoring 模板
 - [x] Tag 对应方案与看板
 - [x] 模板新增、编辑、删除、保存
 - [x] Drag & Drop 看板布局
@@ -74,7 +74,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Number / Line / Area / Bar / Gauge / Status / Donut 显示方式
 - [x] 一键 Auto Layout 排版
 - [x] Widget 阈值、单位、精度、颜色规则配置
-- [ ] Widget 模板市场 / 预设库
+- [x] Widget 模板市场 / 预设库
 
 ### V3: Device & Data Foundation
 

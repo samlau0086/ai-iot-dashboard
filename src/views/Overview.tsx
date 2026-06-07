@@ -165,6 +165,152 @@ const DEFAULT_WIDGET_COLORS: Record<WidgetRuleState, string> = {
   noData: '#94a3b8',
 };
 
+const WIDGET_PRESET_LIBRARY: (OverviewWidget & { category: string; description: string })[] = [
+  {
+    id: 'preset-power-demand',
+    type: 'custom',
+    category: 'Factory Energy',
+    title: 'Power Demand',
+    description: 'Current total power demand with warning and critical bands.',
+    displayMode: 'number',
+    metricKey: 'power',
+    iconId: 'zap',
+    unit: 'W',
+    precision: 0,
+    thresholds: { direction: 'above', warning: 3500, critical: 5000 },
+  },
+  {
+    id: 'preset-energy-trend',
+    type: 'custom',
+    category: 'Factory Energy',
+    title: 'Energy Trend',
+    description: 'Area trend for daily energy consumption.',
+    displayMode: 'area',
+    metricKey: 'energy_today',
+    iconId: 'plug-zap',
+    unit: 'kWh',
+    precision: 1,
+    thresholds: { direction: 'above', warning: 650, critical: 900 },
+  },
+  {
+    id: 'preset-equipment-status',
+    type: 'custom',
+    category: 'Common',
+    title: 'Equipment Health Status',
+    description: 'Status tile for any health or load percentage metric.',
+    displayMode: 'status',
+    metricKey: 'health',
+    iconId: 'activity',
+    unit: '%',
+    precision: 0,
+    thresholds: { direction: 'below', warning: 70, critical: 45 },
+  },
+  {
+    id: 'preset-temperature-status',
+    type: 'custom',
+    category: 'Cold Storage',
+    title: 'Cold Room Temperature',
+    description: 'Temperature status for cold storage and refrigeration rooms.',
+    displayMode: 'status',
+    metricKey: 'temperature',
+    iconId: 'thermometer',
+    unit: 'deg C',
+    precision: 1,
+    thresholds: { direction: 'above', warning: -12, critical: -8 },
+  },
+  {
+    id: 'preset-humidity-gauge',
+    type: 'custom',
+    category: 'Cold Storage',
+    title: 'Humidity Gauge',
+    description: 'Gauge for cold storage humidity monitoring.',
+    displayMode: 'gauge',
+    metricKey: 'humidity',
+    iconId: 'droplet',
+    unit: '%',
+    precision: 0,
+    thresholds: { direction: 'above', warning: 75, critical: 85 },
+  },
+  {
+    id: 'preset-solar-generation',
+    type: 'custom',
+    category: 'Solar',
+    title: 'PV Generation',
+    description: 'Solar generation line trend for inverter or plant metrics.',
+    displayMode: 'line',
+    metricKey: 'daily_generation',
+    iconId: 'sun',
+    unit: 'kWh',
+    precision: 1,
+    thresholds: { direction: 'below', warning: 180, critical: 100 },
+  },
+  {
+    id: 'preset-battery-soc',
+    type: 'custom',
+    category: 'Solar',
+    title: 'Battery SOC',
+    description: 'Battery state of charge gauge.',
+    displayMode: 'gauge',
+    metricKey: 'battery_soc',
+    iconId: 'battery-charging',
+    unit: '%',
+    precision: 0,
+    thresholds: { direction: 'below', warning: 35, critical: 20 },
+  },
+  {
+    id: 'preset-pump-pressure',
+    type: 'custom',
+    category: 'Water Pump',
+    title: 'Pump Pressure',
+    description: 'Pump station pressure trend.',
+    displayMode: 'line',
+    metricKey: 'pressure',
+    iconId: 'gauge',
+    unit: 'bar',
+    precision: 1,
+    thresholds: { direction: 'above', warning: 6, critical: 8 },
+  },
+  {
+    id: 'preset-flow-rate',
+    type: 'custom',
+    category: 'Water Pump',
+    title: 'Flow Rate',
+    description: 'Bar chart comparing flow rate across selected pumps.',
+    displayMode: 'bar',
+    metricKey: 'flow_rate',
+    iconId: 'waves',
+    unit: 'm3/h',
+    precision: 1,
+    thresholds: { direction: 'below', warning: 35, critical: 20 },
+  },
+  {
+    id: 'preset-air-pressure',
+    type: 'custom',
+    category: 'Air Compressor',
+    title: 'Air Pressure',
+    description: 'Compressed air pressure gauge.',
+    displayMode: 'gauge',
+    metricKey: 'pressure',
+    iconId: 'gauge-circle',
+    unit: 'bar',
+    precision: 1,
+    thresholds: { direction: 'below', warning: 6.5, critical: 5.5 },
+  },
+  {
+    id: 'preset-leakage-rate',
+    type: 'custom',
+    category: 'Air Compressor',
+    title: 'Leakage Rate',
+    description: 'Leakage rate status for compressed air systems.',
+    displayMode: 'status',
+    metricKey: 'leakage_rate',
+    iconId: 'wind',
+    unit: '%',
+    precision: 1,
+    thresholds: { direction: 'above', warning: 8, critical: 15 },
+  },
+];
+
 const collides = (a: any, b: any) => {
   if (a.i === b.i) return false;
 
@@ -510,6 +656,7 @@ export function Overview() {
     { label: 'Critical', value: builderCriticalColor, setValue: setBuilderCriticalColor },
     { label: 'No Data', value: builderNoDataColor, setValue: setBuilderNoDataColor },
   ];
+  const widgetPresetCategories = Array.from(new Set(WIDGET_PRESET_LIBRARY.map((preset) => preset.category)));
 
   const getWidgetDevices = (widget: OverviewWidget) => {
     if (widget.deviceIds?.length) {
@@ -635,6 +782,25 @@ export function Overview() {
 
     setShowWidgetBuilder(false);
     resetWidgetBuilder();
+  };
+
+  const addPresetWidgetToLibrary = (preset: OverviewWidget & { category: string; description: string }) => {
+    const { category: _category, description: _description, id: _presetId, ...widgetPreset } = preset;
+    const id = createWidgetId(preset.id);
+
+    addOverviewWidgetLibraryItem({
+      ...widgetPreset,
+      id,
+      title: preset.title || 'Preset Widget',
+      colorRules: {
+        normal: DEFAULT_WIDGET_COLORS.normal,
+        warning: DEFAULT_WIDGET_COLORS.warning,
+        critical: DEFAULT_WIDGET_COLORS.critical,
+        noData: DEFAULT_WIDGET_COLORS.noData,
+        ...preset.colorRules,
+      },
+      deviceIds: [],
+    });
   };
 
   const getDropGridPosition = (event: React.DragEvent<HTMLDivElement>, width: number) => {
@@ -1473,51 +1639,96 @@ export function Overview() {
       )}
 
       {isTemplateEditing && (
-        <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Available Widgets</h2>
-            <span className="text-xs text-slate-500 dark:text-slate-400">Drag a widget into the dashboard below</span>
-          </div>
-          <div className="flex gap-3 overflow-x-auto pb-1">
-            {overviewWidgetLibrary.map((widget) => {
-              const Icon = IOT_ICONS[widget.iconId || 'activity'] || Activity;
-              return (
-                <div
-                  key={widget.id}
-                  draggable
-                  onDragStart={() => setDraggingLibraryWidgetId(widget.id)}
-                  onDragEnd={() => setDraggingLibraryWidgetId(null)}
-                  className="flex min-w-[220px] cursor-grab items-center justify-between gap-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 px-3 py-2 active:cursor-grabbing"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Icon className="h-4 w-4 shrink-0 text-orange-500" />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{widget.title}</div>
-                      <div className="truncate text-[10px] uppercase tracking-wider text-slate-400">{getDisplayModeLabel(widget.displayMode)} / {widget.metricKey}</div>
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => openWidgetBuilder(widget)}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:text-orange-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeOverviewWidgetLibraryItem(widget.id)}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Widget Preset Library</h2>
+              <span className="text-xs text-slate-500 dark:text-slate-400">Add presets to the available widget shelf</span>
+            </div>
+            <div className="space-y-4">
+              {widgetPresetCategories.map((category) => (
+                <div key={category}>
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{category}</div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {WIDGET_PRESET_LIBRARY.filter((preset) => preset.category === category).map((preset) => {
+                      const Icon = IOT_ICONS[preset.iconId || 'activity'] || Activity;
+                      return (
+                        <div key={preset.id} className="flex min-w-0 items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                          <div className="flex min-w-0 gap-3">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-orange-500/10 text-orange-500">
+                              <Icon className="h-4 w-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-slate-900 dark:text-white">{preset.title}</div>
+                              <div className="mt-0.5 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{preset.description}</div>
+                              <div className="mt-2 truncate text-[10px] uppercase tracking-wider text-slate-400">
+                                {getDisplayModeLabel(preset.displayMode)} / {preset.metricKey} {preset.unit ? `/ ${preset.unit}` : ''}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => addPresetWidgetToLibrary(preset)}
+                            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                            Add
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              );
-            })}
-            {overviewWidgetLibrary.length === 0 && (
-              <div className="text-sm text-slate-500 dark:text-slate-400">No available widgets yet.</div>
-            )}
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Available Widgets</h2>
+              <span className="text-xs text-slate-500 dark:text-slate-400">Drag a widget into the dashboard below</span>
+            </div>
+            <div className="flex gap-3 overflow-x-auto pb-1">
+              {overviewWidgetLibrary.map((widget) => {
+                const Icon = IOT_ICONS[widget.iconId || 'activity'] || Activity;
+                return (
+                  <div
+                    key={widget.id}
+                    draggable
+                    onDragStart={() => setDraggingLibraryWidgetId(widget.id)}
+                    onDragEnd={() => setDraggingLibraryWidgetId(null)}
+                    className="flex min-w-[220px] cursor-grab items-center justify-between gap-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 px-3 py-2 active:cursor-grabbing"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Icon className="h-4 w-4 shrink-0 text-orange-500" />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{widget.title}</div>
+                        <div className="truncate text-[10px] uppercase tracking-wider text-slate-400">{getDisplayModeLabel(widget.displayMode)} / {widget.metricKey}</div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openWidgetBuilder(widget)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:text-orange-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeOverviewWidgetLibraryItem(widget.id)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {overviewWidgetLibrary.length === 0 && (
+                <div className="text-sm text-slate-500 dark:text-slate-400">No available widgets yet.</div>
+              )}
+            </div>
           </div>
         </div>
       )}
