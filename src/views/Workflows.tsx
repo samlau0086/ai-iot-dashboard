@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAppStore } from '../lib/store';
+import { useAppStore, type WorkflowNode } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
   GitMerge, GitBranch, GitCommit, Settings2, Timer, Plus, Play, Square, Trash2, Edit2, 
@@ -56,6 +56,129 @@ export function Workflows() {
     // @ts-ignore
     return t.workflows.actionTypes[type] || t.workflows.conditionTypes[type] || t.workflows.triggerTypes[type] || type;
   };
+
+  type PreviewItem =
+    | { type: 'nodes'; nodes: WorkflowNode[] }
+    | { type: 'branchGroup'; branches: Array<{ condition: WorkflowNode; actions: WorkflowNode[] }> };
+
+  const isBranchCondition = (node: WorkflowNode) =>
+    node.type === 'condition' && ['if', 'elif', 'else'].includes(node.config.type);
+
+  const buildPreviewItems = (nodes: WorkflowNode[]): PreviewItem[] => {
+    const items: PreviewItem[] = [];
+    const flowNodes = nodes.filter((node) => node.type !== 'trigger');
+    let index = 0;
+
+    while (index < flowNodes.length) {
+      const node = flowNodes[index];
+
+      if (isBranchCondition(node)) {
+        const branches: Array<{ condition: WorkflowNode; actions: WorkflowNode[] }> = [];
+
+        while (index < flowNodes.length && isBranchCondition(flowNodes[index])) {
+          const condition = flowNodes[index];
+          const previousType = branches.length > 0 ? branches[branches.length - 1].condition.config.type : undefined;
+
+          if (branches.length > 0 && (condition.config.type === 'if' || previousType === 'else')) {
+            break;
+          }
+
+          index += 1;
+          const actions: WorkflowNode[] = [];
+
+          while (
+            index < flowNodes.length &&
+            flowNodes[index].type === 'action' &&
+            flowNodes[index].config.groupId === condition.id
+          ) {
+            actions.push(flowNodes[index]);
+            index += 1;
+          }
+
+          branches.push({ condition, actions });
+        }
+
+        items.push({ type: 'branchGroup', branches });
+        continue;
+      }
+
+      const group: WorkflowNode[] = [];
+      while (index < flowNodes.length && !isBranchCondition(flowNodes[index])) {
+        group.push(flowNodes[index]);
+        index += 1;
+      }
+      items.push({ type: 'nodes', nodes: group });
+    }
+
+    return items;
+  };
+
+  const renderPreviewCard = (node: WorkflowNode) => {
+    const isCondition = node.type === 'condition';
+    const isTrigger = node.type === 'trigger';
+
+    return (
+      <div
+        key={node.id}
+        className={cn(
+          "w-48 rounded-lg border p-3 flex flex-col gap-2 transition-all shadow-sm bg-white dark:bg-[#1c2128]",
+          isTrigger
+            ? "border-orange-200 dark:border-orange-500/30 ring-1 ring-orange-500/10"
+            : isCondition
+              ? "border-indigo-200 dark:border-indigo-500/30 ring-1 ring-indigo-500/10"
+              : "border-slate-200 dark:border-slate-800"
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <div
+            className={cn(
+              "p-1.5 rounded-md",
+              isTrigger
+                ? "bg-orange-50 dark:bg-orange-500/10"
+                : isCondition
+                  ? "bg-indigo-50 dark:bg-indigo-500/10"
+                  : "bg-slate-50 dark:bg-slate-800/50"
+            )}
+          >
+            {getActionIcon(node.config.type)}
+          </div>
+          <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 line-clamp-1">
+            {getActionLabel(node.config.type)}
+          </span>
+        </div>
+        <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono bg-slate-50/50 dark:bg-slate-900/30 p-2 rounded line-clamp-2">
+          {Object.entries(node.config).filter(([key]) => key !== 'type' && key !== 'groupId').map(([key, value]) => `${key}: ${value}`).join(', ')}
+        </div>
+      </div>
+    );
+  };
+
+  const renderBranchPreview = (item: Extract<PreviewItem, { type: 'branchGroup' }>) => (
+    <div className="flex items-start gap-3 rounded-xl border border-indigo-200/70 dark:border-indigo-500/20 bg-indigo-50/30 dark:bg-indigo-500/[0.03] px-4 py-3">
+      {item.branches.map((branch, index) => (
+        <React.Fragment key={branch.condition.id}>
+          {index > 0 && (
+            <div className="mt-10 flex items-center gap-2 text-[10px] font-semibold text-slate-400 dark:text-slate-500">
+              <span className="h-px w-6 bg-slate-300 dark:bg-slate-700" />
+              <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-1.5 py-0.5">OR</span>
+              <span className="h-px w-6 bg-slate-300 dark:bg-slate-700" />
+            </div>
+          )}
+          <div className="flex flex-col items-center gap-3">
+            {renderPreviewCard(branch.condition)}
+            {branch.actions.length > 0 && (
+              <>
+                <div className="h-5 w-px bg-slate-300 dark:bg-slate-700" />
+                <div className="flex flex-col gap-3">
+                  {branch.actions.map(renderPreviewCard)}
+                </div>
+              </>
+            )}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  );
 
   return (
     <div className="space-y-6">
@@ -144,21 +267,7 @@ export function Workflows() {
                 <div className="flex items-center gap-4 min-w-max">
                   {/* Triggers Group */}
                   <div className="flex flex-col gap-3">
-                    {workflow.nodes.filter(n => n.type === 'trigger').map(node => (
-                      <div key={node.id} className="w-48 rounded-lg border p-3 flex flex-col gap-2 transition-all shadow-sm bg-white dark:bg-[#1c2128] border-orange-200 dark:border-orange-500/30 ring-1 ring-orange-500/10">
-                        <div className="flex items-center gap-2">
-                          <div className="p-1.5 rounded-md bg-orange-50 dark:bg-orange-500/10">
-                            {getActionIcon(node.config.type)}
-                          </div>
-                          <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 line-clamp-1">
-                            {getActionLabel(node.config.type)}
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono bg-slate-50/50 dark:bg-slate-900/30 p-2 rounded line-clamp-2">
-                          {Object.entries(node.config).filter(([k]) => k !== 'type').map(([k, v]) => `${k}: ${v}`).join(', ')}
-                        </div>
-                      </div>
-                    ))}
+                    {workflow.nodes.filter(n => n.type === 'trigger').map(renderPreviewCard)}
                   </div>
 
                   {workflow.nodes.filter(n => n.type === 'trigger').length > 0 && workflow.nodes.filter(n => n.type !== 'trigger').length > 0 && (
@@ -166,26 +275,21 @@ export function Workflows() {
                   )}
 
                   {/* Other Nodes */}
-                  {workflow.nodes.filter(n => n.type !== 'trigger').map((node, index, arr) => {
-                    const isCondition = node.type === 'condition';
+                  {buildPreviewItems(workflow.nodes).map((item, index, arr) => {
                     return (
-                      <React.Fragment key={node.id}>
-                        <div className={cn(
-                          "w-48 rounded-lg border p-3 flex flex-col gap-2 transition-all shadow-sm bg-white dark:bg-[#1c2128]",
-                          isCondition ? "border-indigo-200 dark:border-indigo-500/30 ring-1 ring-indigo-500/10" : "border-slate-200 dark:border-slate-800"
-                        )}>
-                          <div className="flex items-center gap-2">
-                            <div className={cn("p-1.5 rounded-md", isCondition ? "bg-indigo-50 dark:bg-indigo-500/10" : "bg-slate-50 dark:bg-slate-800/50")}>
-                              {getActionIcon(node.config.type)}
-                            </div>
-                            <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 line-clamp-1">
-                              {getActionLabel(node.config.type)}
-                            </span>
-                          </div>
-                          <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono bg-slate-50/50 dark:bg-slate-900/30 p-2 rounded line-clamp-2">
-                            {Object.entries(node.config).filter(([k]) => k !== 'type').map(([k, v]) => `${k}: ${v}`).join(', ')}
-                          </div>
-                        </div>
+                      <React.Fragment key={`${item.type}-${index}`}>
+                        {item.type === 'branchGroup' ? (
+                          renderBranchPreview(item)
+                        ) : (
+                          item.nodes.map((node, nodeIndex) => (
+                            <React.Fragment key={node.id}>
+                              {renderPreviewCard(node)}
+                              {nodeIndex < item.nodes.length - 1 && (
+                                <ArrowRight className="h-4 w-4 text-slate-300 dark:text-slate-600 shrink-0" />
+                              )}
+                            </React.Fragment>
+                          ))
+                        )}
                         {index < arr.length - 1 && (
                           <ArrowRight className="h-4 w-4 text-slate-300 dark:text-slate-600 shrink-0" />
                         )}
