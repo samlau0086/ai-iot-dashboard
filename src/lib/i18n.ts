@@ -21,7 +21,7 @@ export const translations = {
     // Overview
     overview: {
       title: 'Overview',
-      site: 'Tags',
+      site: 'Sites',
       totalDevices: 'Total Devices',
       onlineDevices: 'Online Devices',
       energyToday: 'Energy Today',
@@ -190,7 +190,7 @@ export const translations = {
     // Overview
     overview: {
       title: '总览',
-      site: 'Tags',
+      site: 'Sites',
       totalDevices: '总设备数',
       onlineDevices: '在线设备',
       energyToday: '今日能耗',

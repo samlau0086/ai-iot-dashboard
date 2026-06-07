@@ -356,6 +356,9 @@ export function Overview() {
     dashboardTemplates,
     activeDashboardTemplateId,
     tagDashboardTemplateMap,
+    sites,
+    activeSiteId,
+    setActiveSite,
     addOverviewWidget,
     removeOverviewWidget,
     updateOverviewWidget,
@@ -376,7 +379,7 @@ export function Overview() {
   const [templateEditorMode, setTemplateEditorMode] = useState<'new' | 'edit' | null>(null);
   const [templateName, setTemplateName] = useState('');
   const [templateDescription, setTemplateDescription] = useState('');
-  const [selectedTag, setSelectedTag] = useState('All');
+  const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || 'factory-a');
   const [configWidgetId, setConfigWidgetId] = useState<string | null>(null);
   const [editingLibraryWidgetId, setEditingLibraryWidgetId] = useState<string | null>(null);
   const [draggingLibraryWidgetId, setDraggingLibraryWidgetId] = useState<string | null>(null);
@@ -435,39 +438,56 @@ export function Overview() {
     lg: overviewLayout.map((item) => ({ ...item })),
   }), [overviewLayout]);
 
-  const availableTags = useMemo(() => {
-    return ['All', ...Array.from(new Set(devices.flatMap((device) => device.tags || [])))].filter(Boolean);
-  }, [devices]);
+  const siteFilters = useMemo(() => [
+    { id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] },
+    ...sites,
+  ], [sites]);
 
-  const taggedDevices = useMemo(() => {
-    return selectedTag === 'All'
-      ? devices
-      : devices.filter((device) => device.tags?.includes(selectedTag));
-  }, [devices, selectedTag]);
+  useEffect(() => {
+    if (!selectedSiteId && activeSiteId) setSelectedSiteId(activeSiteId);
+  }, [activeSiteId, selectedSiteId]);
 
-  const taggedDeviceIds = useMemo(() => new Set(taggedDevices.map((device) => device.id)), [taggedDevices]);
-  const taggedAlerts = useMemo(() => {
+  useEffect(() => {
+    if (!activeSiteId || selectedSiteId === 'All' || selectedSiteId === activeSiteId) return;
+
+    setSelectedSiteId(activeSiteId);
+  }, [activeSiteId, selectedSiteId]);
+
+  const selectedSite = useMemo(() => sites.find((site) => site.id === selectedSiteId) || null, [selectedSiteId, sites]);
+
+  const scopedDevices = useMemo(() => {
+    if (selectedSiteId === 'All') return devices;
+
+    const siteTags = new Set(selectedSite?.tags || []);
+    return devices.filter((device) => (
+      device.siteId === selectedSiteId ||
+      Boolean(device.tags?.some((tag) => siteTags.has(tag)))
+    ));
+  }, [devices, selectedSite, selectedSiteId]);
+
+  const scopedDeviceIds = useMemo(() => new Set(scopedDevices.map((device) => device.id)), [scopedDevices]);
+  const scopedAlerts = useMemo(() => {
     const alerts = deriveAlertsFromDevices(devices);
-    return selectedTag === 'All'
+    return selectedSiteId === 'All'
       ? alerts
-      : alerts.filter((alert) => taggedDeviceIds.has(alert.deviceId));
-  }, [devices, selectedTag, taggedDeviceIds]);
+      : alerts.filter((alert) => scopedDeviceIds.has(alert.deviceId));
+  }, [devices, selectedSiteId, scopedDeviceIds]);
 
-  const tagMetricOptions = useMemo(() => {
+  const scopedMetricOptions = useMemo(() => {
     const metrics = new Set<string>();
-    taggedDevices.forEach((device) => {
+    scopedDevices.forEach((device) => {
       Object.keys(device.metrics || {}).forEach((metric) => metrics.add(metric));
     });
 
     return Array.from(metrics).sort();
-  }, [taggedDevices]);
+  }, [scopedDevices]);
 
   const builderDevices = useMemo(() => {
-    if (builderDeviceIds.length === 0) return taggedDevices;
+    if (builderDeviceIds.length === 0) return scopedDevices;
 
     const selectedDeviceIds = new Set(builderDeviceIds);
     return devices.filter((device) => selectedDeviceIds.has(device.id));
-  }, [builderDeviceIds, devices, taggedDevices]);
+  }, [builderDeviceIds, devices, scopedDevices]);
 
   const builderMetricOptions = useMemo(() => {
     const metrics = new Set<string>();
@@ -479,7 +499,7 @@ export function Overview() {
   }, [builderDevices]);
 
   const getAlertsForDevices = (targetDevices: any[]) => {
-    if (targetDevices === taggedDevices) return taggedAlerts;
+    if (targetDevices === scopedDevices) return scopedAlerts;
 
     const targetIds = new Set(targetDevices.map((device) => device.id));
     return deriveAlertsFromDevices(devices).filter((alert) => targetIds.has(alert.deviceId));
@@ -508,7 +528,7 @@ export function Overview() {
     };
   };
 
-  const stats = getStatsForDevices(taggedDevices);
+  const stats = getStatsForDevices(scopedDevices);
 
   useEffect(() => {
     const hasLegacyKpis = overviewWidgets.some((widget) => widget.type === 'kpis') || overviewLayout.some((item) => item.i === 'kpis');
@@ -664,7 +684,7 @@ export function Overview() {
       return devices.filter((device) => selectedDeviceIds.has(device.id));
     }
 
-    return taggedDevices;
+    return scopedDevices;
   };
 
   const getWidgetDefaultTitle = (widget: OverviewWidget) => {
@@ -702,7 +722,7 @@ export function Overview() {
     setEditingLibraryWidgetId(null);
     setBuilderTitle('New Widget');
     setBuilderDisplayMode('number');
-    setBuilderMetricKey(builderMetricOptions[0] || tagMetricOptions[0] || 'power');
+    setBuilderMetricKey(builderMetricOptions[0] || scopedMetricOptions[0] || 'power');
     setBuilderIconId('activity');
     setBuilderDeviceIds([]);
     setBuilderUnit('');
@@ -721,7 +741,7 @@ export function Overview() {
       setEditingLibraryWidgetId(widget.id);
       setBuilderTitle(widget.title || 'New Widget');
       setBuilderDisplayMode(widget.displayMode || 'number');
-      setBuilderMetricKey(widget.metricKey || tagMetricOptions[0] || 'power');
+      setBuilderMetricKey(widget.metricKey || scopedMetricOptions[0] || 'power');
       setBuilderIconId(widget.iconId || 'activity');
       setBuilderDeviceIds(widget.deviceIds ? [...widget.deviceIds] : []);
       setBuilderUnit(widget.unit || '');
@@ -902,10 +922,13 @@ export function Overview() {
     setActiveSnapGuide({});
   };
 
-  const handleTagSelect = (tag: string) => {
-    setSelectedTag(tag);
+  const handleSiteSelect = (siteId: string) => {
+    setSelectedSiteId(siteId);
+    if (siteId !== 'All') setActiveSite(siteId);
 
-    const templateId = tagDashboardTemplateMap[tag] || getTagTemplateId(tag);
+    const site = sites.find((item) => item.id === siteId);
+    const templateHint = [site?.id, site?.type, site?.name, ...(site?.tags || [])].filter(Boolean).join(' ');
+    const templateId = tagDashboardTemplateMap[siteId] || getTagTemplateId(templateHint || siteId);
     if (dashboardTemplates.some((template) => template.id === templateId)) {
       applyDashboardTemplate(templateId);
     }
@@ -947,8 +970,8 @@ export function Overview() {
     if (templateEditorMode === 'new') {
       const template = buildTemplateFromCurrentDashboard(`custom-${Date.now()}`, templateName, templateDescription);
       addDashboardTemplate(template);
-      if (selectedTag !== 'All') {
-        setTagDashboardTemplate(selectedTag, template.id);
+      if (selectedSiteId !== 'All') {
+        setTagDashboardTemplate(selectedSiteId, template.id);
       }
       closeTemplateEditor();
       return;
@@ -957,8 +980,8 @@ export function Overview() {
     if (templateEditorMode === 'edit' && activeTemplate) {
       const template = buildTemplateFromCurrentDashboard(activeTemplate.id, templateName, templateDescription);
       updateDashboardTemplate(template);
-      if (selectedTag !== 'All') {
-        setTagDashboardTemplate(selectedTag, template.id);
+      if (selectedSiteId !== 'All') {
+        setTagDashboardTemplate(selectedSiteId, template.id);
       }
       closeTemplateEditor();
       return;
@@ -967,8 +990,8 @@ export function Overview() {
     if (activeTemplate) {
       const template = buildTemplateFromCurrentDashboard(activeTemplate.id, activeTemplate.name, activeTemplate.description);
       updateDashboardTemplate(template);
-      if (selectedTag !== 'All') {
-        setTagDashboardTemplate(selectedTag, template.id);
+      if (selectedSiteId !== 'All') {
+        setTagDashboardTemplate(selectedSiteId, template.id);
       }
     }
   };
@@ -1332,19 +1355,25 @@ export function Overview() {
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{t.overview.title}</h1>
           <div className="mt-2 flex max-w-full items-center gap-2 overflow-x-auto pb-1">
-            {availableTags.map((tag) => (
+            {siteFilters.map((site) => (
               <button
-                key={tag}
+                key={site.id}
                 type="button"
-                onClick={() => handleTagSelect(tag)}
+                onClick={() => handleSiteSelect(site.id)}
                 className={cn(
-                  "px-3 py-1 text-xs font-medium rounded-full border transition-colors whitespace-nowrap",
-                  selectedTag === tag
+                  "inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border transition-colors whitespace-nowrap",
+                  selectedSiteId === site.id
                     ? "bg-slate-800 text-white border-slate-800 dark:bg-slate-200 dark:text-slate-900 dark:border-slate-200 shadow-sm"
                     : "bg-white dark:bg-[#1c2128] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800"
                 )}
               >
-                {tag}
+                <span>{site.name}</span>
+                {site.id !== 'All' && (
+                  <span className={cn(
+                    "text-[10px] font-normal",
+                    selectedSiteId === site.id ? "text-slate-300 dark:text-slate-600" : "text-slate-400"
+                  )}>{site.tenantName}</span>
+                )}
               </button>
             ))}
           </div>
@@ -1501,7 +1530,7 @@ export function Overview() {
                 )}
               </select>
               <p className="mt-1 truncate text-[10px] text-slate-500 dark:text-slate-400">
-                {builderDeviceIds.length > 0 ? 'Metrics from bound devices' : 'Metrics from current tag devices'}
+                {builderDeviceIds.length > 0 ? 'Metrics from bound devices' : 'Metrics from current site devices'}
               </p>
             </div>
             <div>
@@ -1529,7 +1558,7 @@ export function Overview() {
                   className="h-7 min-w-[150px] flex-1 bg-transparent text-xs text-slate-700 outline-none dark:text-slate-300"
                 >
                   <option value="">Add device...</option>
-                  {taggedDevices.filter((device) => !builderDeviceIds.includes(device.id)).map((device) => (
+                  {scopedDevices.filter((device) => !builderDeviceIds.includes(device.id)).map((device) => (
                     <option key={device.id} value={device.id}>{device.name}</option>
                   ))}
                 </select>
@@ -1752,11 +1781,11 @@ export function Overview() {
                   onClick={() => clearWidgetDevices(configWidget)}
                   className="text-xs font-medium text-orange-600 hover:text-orange-500 dark:text-orange-400"
                 >
-                  Use current tag
+                  Use current site
                 </button>
               </div>
               <div className="mt-2 grid max-h-32 gap-2 overflow-y-auto sm:grid-cols-2 xl:grid-cols-3">
-                {taggedDevices.map((device) => (
+                {scopedDevices.map((device) => (
                   <label
                     key={device.id}
                     className="flex min-w-0 items-center gap-2 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 px-2 py-1.5 text-xs text-slate-700 dark:text-slate-300"
@@ -1770,8 +1799,8 @@ export function Overview() {
                     <span className="truncate">{device.name}</span>
                   </label>
                 ))}
-                {taggedDevices.length === 0 && (
-                  <div className="text-xs text-slate-500 dark:text-slate-400">No devices under this tag.</div>
+                {scopedDevices.length === 0 && (
+                  <div className="text-xs text-slate-500 dark:text-slate-400">No devices under this site.</div>
                 )}
               </div>
             </div>
