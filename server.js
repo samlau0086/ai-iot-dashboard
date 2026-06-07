@@ -309,6 +309,32 @@ const validateIngestToken = async (req, source) => {
   return true;
 };
 
+const normalizeApiPath = (value) => {
+  if (!value) return '';
+  try {
+    if (String(value).startsWith('http')) {
+      return new URL(value).pathname.replace(/\/+$/, '') || '/';
+    }
+  } catch (error) {
+    return '';
+  }
+
+  const pathValue = String(value).trim();
+  if (!pathValue) return '';
+  return `/${pathValue.replace(/^\/+/, '')}`.replace(/\/+$/, '') || '/';
+};
+
+const getDashboardDevices = async () => {
+  const state = await getAppState('dashboard_state');
+  return Array.isArray(state?.devices) ? state.devices : [];
+};
+
+const findDeviceByApiPath = async (requestPath) => {
+  const normalizedRequestPath = normalizeApiPath(requestPath);
+  const devices = await getDashboardDevices();
+  return devices.find((device) => normalizeApiPath(device?.config?.apiPath) === normalizedRequestPath) || null;
+};
+
 const mqttStatusFor = (channelId) => mqttRuntimes.get(channelId)?.status || {
   state: 'disabled',
   message: 'MQTT subscriber is disabled',
@@ -735,6 +761,42 @@ app.post('/api/telemetry', async (req, res) => {
     const accepted = await ingestTelemetryPayload(req.body, 'http:legacy');
 
     res.status(202).json({accepted: accepted.length});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.post('*', async (req, res, next) => {
+  try {
+    const device = await findDeviceByApiPath(req.path);
+    if (!device) {
+      next();
+      return;
+    }
+
+    const isAuthorized = await validateIngestToken(req, `http:path:${req.path}`);
+    if (!isAuthorized) {
+      res.status(401).json({error: 'invalid telemetry token'});
+      return;
+    }
+
+    const payload = req.body || {};
+    const externalDeviceId = device.config?.externalDeviceId || device.id;
+    const enrichMessage = (message) => {
+      const baseMessage = message && typeof message === 'object' ? message : {};
+      return {
+        ...baseMessage,
+        device_id: baseMessage.device_id || baseMessage.deviceId || baseMessage.id || externalDeviceId,
+        device_type: baseMessage.device_type || baseMessage.type || device.type,
+        tags: baseMessage.tags || device.tags || [],
+      };
+    };
+    const accepted = await ingestTelemetryPayload(
+      Array.isArray(payload) ? payload.map(enrichMessage) : enrichMessage(payload),
+      `http:path:${req.path}`
+    );
+
+    res.status(202).json({accepted: accepted.length, deviceId: device.id});
   } catch (error) {
     res.status(500).json({error: error.message});
   }

@@ -536,7 +536,7 @@ MQTT Payload 格式：
 | --- | --- |
 | `External Device ID` | 真实 API / MQTT 消息里的 `device_id`、`deviceId` 或 `id`。平台会用它把遥测数据匹配到当前设备。 |
 | `Data Source` | 选择 `HTTP API`、`MQTT` 或 `Manual / Mock`。 |
-| `API Path` | 可选，用于记录该设备在后端 API 中的路径，例如 `/devices/meter-001`。 |
+| `API Path` | 可选，用作该设备的专属 HTTP POST 上报路径，例如 `/api/device-ingest/meter-001`。网关 POST 到该路径时，后端会按该路径绑定到当前设备。 |
 | `MQTT Topic` | 可选，用于记录该设备的遥测主题，例如 `factory-a/energy/meter-001/telemetry`。 |
 
 实际遥测更新时，系统会优先用 `External Device ID` 匹配设备；如果没有配置，则使用平台内部设备 ID 匹配。

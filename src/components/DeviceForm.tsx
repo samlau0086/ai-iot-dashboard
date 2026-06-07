@@ -104,8 +104,9 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
     const apiPath = String(configData.apiPath || '').trim();
     const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3006';
 
-    if (apiPath.includes('/api/telemetry')) {
-      return apiPath.startsWith('http') ? apiPath : `${origin}${apiPath.startsWith('/') ? apiPath : `/${apiPath}`}`;
+    if (apiPath) {
+      if (apiPath.startsWith('http')) return apiPath;
+      return `${origin}${apiPath.startsWith('/') ? apiPath : `/${apiPath}`}`;
     }
 
     return `${origin}/api/telemetry`;
@@ -363,10 +364,10 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
                 name="apiPath"
                 value={configData.apiPath || ''}
                 onChange={handleConfigChange}
-                placeholder="/devices/meter-001 or /telemetry/meter-001"
+                placeholder="/api/device-ingest/meter-001"
                 className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
               />
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional record of the backend endpoint used for this device.</p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional dedicated POST path for this device. Incoming payloads on this path are bound to this device.</p>
              </div>
              <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">MQTT Topic</label>
