@@ -5,6 +5,7 @@ import { Overview } from './views/Overview';
 import { Devices } from './views/Devices';
 import { Alerts } from './views/Alerts';
 import { Analytics } from './views/Analytics';
+import { RawData } from './views/RawData';
 import { Workflows } from './views/Workflows';
 import { ControlCenter } from './views/ControlCenter';
 import { Reports } from './views/Reports';
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="workflows" element={<Workflows />} />
             <Route path="control" element={<ControlCenter />} />
             <Route path="analytics" element={<Analytics />} />
+            <Route path="raw-data" element={<RawData />} />
             <Route path="alerts" element={<Alerts />} />
             <Route path="reports" element={<Reports />} />
             <Route path="ai-insights" element={<AIInsights />} />

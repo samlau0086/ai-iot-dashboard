@@ -39,7 +39,9 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Analytics 图表报告已支持绑定设备和 metric。
 - [x] 通知渠道支持同类型多条配置，并按渠道类型提供差异化字段和测试按钮。
 - [x] 移动端布局已改为 App-like shell，包含移动端顶部栏、底部导航和设备卡片列表。
-- [ ] 下一阶段重点：原始数据查询、时间范围查询、设备对比、控制连接器、AI Copilot 真实能力接入。
+- [x] Demo 账户角色已完成：内置 `demo@factory.com / demo123`，Demo 修改仅保存在前端会话中，不写入后端数据库，也不会对设备控制生效。
+- [x] 原始数据查询已完成：支持按设备、metric、来源、时间范围和 limit 查询遥测原始 payload，并支持 JSON 导出。
+- [ ] 下一阶段重点：指标筛选、时间范围分析、设备对比、控制连接器、AI Copilot 真实能力接入。
 
 ### V1: Energy Monitoring MVP
 
@@ -55,6 +57,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 接入真实设备数据 API / 后端 MQTT Subscriber 入口
 - [x] 替换 Mock 告警和能耗数据
 - [x] 基础报表 CSV 导出
+- [x] Demo 演示账户与前端-only 修改隔离
 
 ### V2: Industry Dashboard Engine
 
@@ -90,7 +93,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 设备专属 API Path 上报
 - [x] 用户级 Ingest Token 管理
 - [x] 工业协议接入规划：Modbus RTU、Modbus TCP、CAN、LoRa、4G、Ethernet、WiFi
-- [ ] 原始数据查看
+- [x] 原始数据查看与查询
 - [ ] 指标筛选
 - [ ] 时间范围查询
 - [ ] 设备对比
@@ -110,6 +113,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [ ] 批量控制
 - [x] 控制记录
 - [x] 权限控制
+- [x] Demo 角色禁止下发真实设备命令
 - [x] 二次确认
 - [ ] 危险操作审批
 - [ ] 失败回滚
@@ -157,7 +161,9 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [ ] 代理商后台
 - [ ] 客户子账号
 - [ ] 项目报价记录
-- [ ] 角色权限：Owner、Admin、Engineer、Operator、Viewer、Partner、Customer
+- [x] 基础角色权限：Owner、Admin、Engineer、Operator、Viewer、Demo、Partner、Customer
+- [x] Demo 账户本地演示模式：允许体验界面和配置流程，但不持久化到后端、不影响设备
+- [ ] 更细粒度 RBAC：菜单、站点、设备、控制动作、数据源、Token 权限矩阵
 
 ### 技术演进方向
 
@@ -183,6 +189,7 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 - **数据分析**：支持创建柱状图、折线图、饼图，数据源包括能耗、设备健康和告警频率。
 - **自动化工作流**：支持基于触发器、条件和动作的事件驱动流程，例如阈值告警、设备离线、定时任务、Webhook、MQTT、AI 分析、通知和工单。
 - **AI Copilot**：提供自然语言问答界面，用于分析能耗、告警和设备健康状态。
+- **用户权限与 Demo 模式**：支持登录、注册、后台审核用户角色，并提供 Demo 账户用于演示；Demo 账户的修改只保存在前端会话，不写入后端数据库，也不会下发设备控制命令。
 - **报表管理**：提供工业运营报表入口，用于管理、下载或发送报告。
 - **系统设置**：支持白标名称、时区、通知渠道、Bark、邮件、Webhook 和用户管理。
 - **主题与语言**：内置浅色/深色主题和中英文语言状态。
@@ -197,6 +204,7 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 | Devices | `/devices` | 设备资产管理、标签筛选、设备新增编辑和详情查看。 |
 | Workflows | `/workflows` | 创建、启用、禁用和编辑自动化工作流。 |
 | Analytics | `/analytics` | 创建和查看自定义运营图表。 |
+| Raw Data | `/raw-data` | 查询 HTTP Push、设备专属 API Path 和 MQTT Subscriber 写入的原始遥测数据。 |
 | Alerts | `/alerts` | 查看告警、确认告警、创建工单。 |
 | Reports | `/reports` | 管理运营报告。 |
 | AI Insights | `/ai-insights` | 通过 AI Copilot 查询运营问题。 |
@@ -276,6 +284,12 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 
 ## 使用说明
 
+### Demo 演示账户
+
+登录页内置 Demo 账户：`demo@factory.com / demo123`。
+
+Demo 角色用于体验系统界面和配置流程。该账户产生的看板、设备、工作流、设置等修改只保存在当前前端会话中，不会同步保存到后端 PostgreSQL 数据库；控制中心也不会向后端或真实设备下发控制命令。
+
 ### 查看运营总览
 
 进入首页后可以查看核心 KPI、实时功率趋势和 AI 运维建议。Overview 页面中的组件支持拖拽和缩放，也可以通过 **Add Widget** 添加 Analytics 中创建的图表。
@@ -287,6 +301,16 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 ### 创建分析图表
 
 进入 **Analytics** 页面，点击 **Add Chart**，填写图表名称，选择数据源和图表类型。创建后的图表可以在 Analytics 页面查看，也可以添加到 Overview 看板。
+
+### 查询原始数据
+
+进入 **Raw Data** 页面后，可以按设备、metric、数据来源、时间范围和返回条数查询 `telemetry_messages` 中保存的原始遥测 payload。查询结果会显示接收时间、设备、来源、Topic 和 metrics 摘要，点击任意记录可查看完整 JSON，也可以导出当前查询结果。
+
+后端查询接口为：
+
+```text
+GET /api/telemetry?deviceId=AIR-COMP-001&metric=pressure&source=mqtt&from=2026-06-01T00:00:00.000Z&to=2026-06-07T23:59:59.000Z&limit=200
+```
 
 ### 配置自动化工作流
 

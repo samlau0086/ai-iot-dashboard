@@ -978,6 +978,7 @@ const ingestTelemetryPayload = async (payload, source = 'http') => {
 
     accepted.push({
       ...message,
+      source,
       received_at: new Date().toISOString(),
     });
   }
@@ -1419,30 +1420,56 @@ app.post('*', async (req, res, next) => {
 app.get('/api/telemetry', async (req, res) => {
   try {
     const since = typeof req.query.since === 'string' ? req.query.since : '';
+    const deviceId = typeof req.query.deviceId === 'string' ? req.query.deviceId.trim() : '';
+    const metric = typeof req.query.metric === 'string' ? req.query.metric.trim() : '';
+    const source = typeof req.query.source === 'string' ? req.query.source.trim() : '';
+    const from = typeof req.query.from === 'string' ? req.query.from.trim() : '';
+    const to = typeof req.query.to === 'string' ? req.query.to.trim() : '';
+    const limit = Math.max(1, Math.min(Number(req.query.limit || (since ? 500 : 100)), 1000));
     let messages;
 
     if (db) {
-      const result = since
-        ? await queryDb(
-          `SELECT payload || jsonb_build_object('received_at', received_at, 'mqtt_topic', topic) AS message
-           FROM telemetry_messages
-           WHERE received_at > $1::timestamptz
-           ORDER BY received_at ASC
-           LIMIT 500`,
-          [since]
-        )
-        : await queryDb(
-          `SELECT payload || jsonb_build_object('received_at', received_at, 'mqtt_topic', topic) AS message
-           FROM telemetry_messages
-           ORDER BY received_at DESC
-           LIMIT 100`
-        );
+      const where = [];
+      const values = [];
+      const addParam = (value) => {
+        values.push(value);
+        return `$${values.length}`;
+      };
+
+      if (since) where.push(`received_at > ${addParam(since)}::timestamptz`);
+      if (from) where.push(`received_at >= ${addParam(from)}::timestamptz`);
+      if (to) where.push(`received_at <= ${addParam(to)}::timestamptz`);
+      if (deviceId) where.push(`device_id = ${addParam(deviceId)}`);
+      if (source) where.push(`source ILIKE ${addParam(`%${source}%`)}`);
+      if (metric) where.push(`metrics ? ${addParam(metric)}`);
+
+      const limitParam = addParam(limit);
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const orderDirection = since ? 'ASC' : 'DESC';
+      const result = await queryDb(
+        `SELECT id, device_id, topic, source, payload, metrics, received_at,
+                payload || jsonb_build_object(
+                  'received_at', received_at,
+                  'mqtt_topic', topic,
+                  'source', source
+                ) AS message
+         FROM telemetry_messages
+         ${whereSql}
+         ORDER BY received_at ${orderDirection}
+         LIMIT ${limitParam}`,
+        values
+      );
       messages = result.rows.map((row) => row.message);
       if (!since) messages.reverse();
     } else {
-      messages = since
-        ? telemetryMessages.filter((message) => message.received_at > since)
-        : telemetryMessages.slice(-100);
+      messages = telemetryMessages
+        .filter((message) => !since || message.received_at > since)
+        .filter((message) => !from || message.received_at >= from)
+        .filter((message) => !to || message.received_at <= to)
+        .filter((message) => !deviceId || (message.device_id || message.deviceId || message.id) === deviceId)
+        .filter((message) => !source || String(message.source || '').toLowerCase().includes(source.toLowerCase()))
+        .filter((message) => !metric || Object.prototype.hasOwnProperty.call(message.metrics || {}, metric))
+        .slice(-limit);
     }
 
     res.status(200).json({messages});
