@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { MoreVertical, Edit2, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../lib/store';
@@ -9,17 +9,37 @@ import { getDeviceIcon } from '../lib/icons';
 import { Link } from 'react-router-dom';
 
 export function Devices() {
-  const { language, devices } = useAppStore();
+  const { language, devices, sites, activeSiteId, setActiveSite } = useAppStore();
   const t = translations[language];
 
   const [activeView, setActiveView] = useState<'list' | 'form'>('list');
   const [editingDeviceId, setEditingDeviceId] = useState<string | undefined>(undefined);
   const [deletingDeviceId, setDeletingDeviceId] = useState<string | null>(null);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || 'All');
   const [selectedTag, setSelectedTag] = useState<string>('All');
 
-  const uniqueTags = ['All', ...Array.from(new Set(devices.flatMap(d => d.tags || [])))].filter(Boolean);
-  const filteredDevices = devices.filter(d => selectedTag === 'All' || d.tags?.includes(selectedTag));
+  const siteOptions = [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants' }, ...sites];
+  const siteScopedDevices = devices.filter((device) => (
+    selectedSiteId === 'All'
+    || device.siteId === selectedSiteId
+    || sites.find((site) => site.id === selectedSiteId)?.tags?.some((tag) => device.tags?.includes(tag))
+  ));
+  const uniqueTags = ['All', ...Array.from(new Set(siteScopedDevices.flatMap(d => d.tags || [])))].filter(Boolean);
+  const filteredDevices = siteScopedDevices.filter(d => selectedTag === 'All' || d.tags?.includes(selectedTag));
+
+  const handleSiteSelect = (siteId: string) => {
+    setSelectedSiteId(siteId);
+    setSelectedTag('All');
+    if (siteId !== 'All') setActiveSite(siteId);
+  };
+
+  useEffect(() => {
+    if (!activeSiteId || selectedSiteId === 'All' || selectedSiteId === activeSiteId) return;
+
+    setSelectedSiteId(activeSiteId);
+    setSelectedTag('All');
+  }, [activeSiteId, selectedSiteId]);
 
   const handleCreate = () => {
     setEditingDeviceId(undefined);
@@ -66,7 +86,37 @@ export function Devices() {
         </div>
       </div>
       
-      <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-2 -mt-2">
+      <div className="space-y-3 -mt-2">
+        <div>
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Sites</p>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {siteOptions.map((site) => (
+              <button
+                key={site.id}
+                type="button"
+                onClick={() => handleSiteSelect(site.id)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border transition-colors whitespace-nowrap",
+                  selectedSiteId === site.id
+                    ? "bg-slate-800 text-white border-slate-800 dark:bg-slate-200 dark:text-slate-900 dark:border-slate-200 shadow-sm"
+                    : "bg-white dark:bg-[#1c2128] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800"
+                )}
+              >
+                <span>{site.name}</span>
+                {site.id !== 'All' && (
+                  <span className={cn(
+                    "text-[10px] font-normal",
+                    selectedSiteId === site.id ? "text-slate-300 dark:text-slate-600" : "text-slate-400"
+                  )}>{site.tenantName}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Tags</p>
+          <div className="flex items-center gap-2 overflow-x-auto pb-2">
         {uniqueTags.map(tag => (
           <button
             key={tag}
@@ -81,6 +131,8 @@ export function Devices() {
             {tag}
           </button>
         ))}
+          </div>
+        </div>
       </div>
 
       <div className="space-y-3 pb-6 md:hidden">
