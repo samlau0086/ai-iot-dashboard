@@ -270,8 +270,23 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
   const deleteNode = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setDraft({ ...draft, nodes: draft.nodes.filter(n => n.id !== id) });
-    if (selectedNodeId === id) setSelectedNodeId(null);
+    const targetNode = draft.nodes.find((node) => node.id === id);
+    const idsToDelete = new Set<string>([id]);
+
+    if (targetNode?.type === 'condition' && ['if', 'elif', 'else'].includes(targetNode.config.type)) {
+      if (targetNode.config.type === 'if') {
+        branchGroups.forEach((branch) => {
+          idsToDelete.add(branch.condition.id);
+          branch.nodes.forEach((item) => idsToDelete.add(item.node.id));
+        });
+      } else {
+        const branch = branchGroups.find((item) => item.condition.id === id);
+        branch?.nodes.forEach((item) => idsToDelete.add(item.node.id));
+      }
+    }
+
+    setDraft({ ...draft, nodes: draft.nodes.filter((node) => !idsToDelete.has(node.id)) });
+    if (selectedNodeId && idsToDelete.has(selectedNodeId)) setSelectedNodeId(null);
   };
 
   const renderNodeCard = (node: WorkflowNode) => {
@@ -360,21 +375,53 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     );
   };
 
+  const renderBranchBrace = (direction: 'down' | 'up') => {
+    if (branchGroups.length < 2) return null;
+
+    const width = Math.max(520, branchGroups.length * 320 + (branchGroups.length - 1) * 80);
+    const mid = width / 2;
+    const isDown = direction === 'down';
+
+    return (
+      <svg
+        width={width}
+        height="42"
+        viewBox={`0 0 ${width} 42`}
+        className="pointer-events-none shrink-0 overflow-visible text-slate-300 dark:text-slate-600"
+        aria-hidden="true"
+      >
+        <path
+          d={isDown
+            ? `M ${mid} 0 L ${mid} 12 Q ${mid} 22 ${mid - 22} 22 L 42 22 Q 18 22 18 40 M ${mid} 12 Q ${mid} 22 ${mid + 22} 22 L ${width - 42} 22 Q ${width - 18} 22 ${width - 18} 40`
+            : `M ${mid} 42 L ${mid} 30 Q ${mid} 20 ${mid - 22} 20 L 42 20 Q 18 20 18 2 M ${mid} 30 Q ${mid} 20 ${mid + 22} 20 L ${width - 42} 20 Q ${width - 18} 20 ${width - 18} 2`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  };
+
   const renderBranchChain = () => (
-    <div className="mb-8 flex w-full min-w-max items-start justify-center overflow-x-auto px-4 py-2">
-      {branchGroups.map((branch, index) => {
-        const nextBranch = branchGroups[index + 1];
-        const connectorAllowedTypes = hasElseBranch ? ['elif'] : ['elif', 'else'];
-        const isLastBranch = index === branchGroups.length - 1;
-        const canAppendBranch = isLastBranch && branch.condition.config.type !== 'else';
-        return (
-          <React.Fragment key={branch.condition.id}>
-            {renderBranchColumn(branch)}
-            {nextBranch && renderBranchConnector(nextBranch.index, connectorAllowedTypes)}
-            {canAppendBranch && renderBranchConnector(branch.endIndex, connectorAllowedTypes)}
-          </React.Fragment>
-        );
-      })}
+    <div className="mb-8 flex w-full min-w-max flex-col items-center overflow-x-auto px-4 py-2">
+      {renderBranchBrace('down')}
+      <div className="flex items-start justify-center">
+        {branchGroups.map((branch, index) => {
+          const nextBranch = branchGroups[index + 1];
+          const connectorAllowedTypes = hasElseBranch ? ['elif'] : ['elif', 'else'];
+          const isLastBranch = index === branchGroups.length - 1;
+          const canAppendBranch = isLastBranch && branch.condition.config.type !== 'else';
+          return (
+            <React.Fragment key={branch.condition.id}>
+              {renderBranchColumn(branch)}
+              {nextBranch && renderBranchConnector(nextBranch.index, connectorAllowedTypes)}
+              {canAppendBranch && renderBranchConnector(branch.endIndex, connectorAllowedTypes)}
+            </React.Fragment>
+          );
+        })}
+      </div>
+      {renderBranchBrace('up')}
     </div>
   );
 
