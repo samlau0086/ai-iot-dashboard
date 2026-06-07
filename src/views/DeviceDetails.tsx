@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
-import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio } from 'lucide-react';
+import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2 } from 'lucide-react';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
+import { DeviceForm } from '../components/DeviceForm';
 
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
@@ -13,6 +14,7 @@ export function DeviceDetails() {
   const t = translations[language];
 
   const device = devices.find(d => d.id === id);
+  const [isEditing, setIsEditing] = useState(false);
 
   // States for controls
   const [controlValues, setControlValues] = useState<Record<string, any>>({
@@ -32,6 +34,10 @@ export function DeviceDetails() {
         </button>
       </div>
     );
+  }
+
+  if (isEditing) {
+    return <DeviceForm deviceId={device.id} onClose={() => setIsEditing(false)} />;
   }
 
   const IconComp = getDeviceIcon(device.icon);
@@ -171,7 +177,7 @@ export function DeviceDetails() {
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <div className="flex-1 flex items-center justify-between">
+        <div className="flex-1 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="h-12 w-12 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center">
               <IconComp className="h-6 w-6 text-slate-500 dark:text-slate-400" />
@@ -191,6 +197,14 @@ export function DeviceDetails() {
               <p className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-1">ID: {device.id}</p>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setIsEditing(true)}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 hover:text-orange-600 dark:border-slate-700 dark:bg-[#1c2128] dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-orange-400"
+          >
+            <Edit2 className="h-4 w-4" />
+            {t.devices.editDevice}
+          </button>
         </div>
       </div>
 
