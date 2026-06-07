@@ -545,6 +545,37 @@ const parseConditionExpression = (expression) => {
 const conditionMatchesEvent = (condition, event) => {
   const config = condition.config || {};
 
+  if (config.type === 'else') {
+    return true;
+  }
+
+  if (config.type === 'if' || config.type === 'elif') {
+    const eventDeviceId = event.deviceId || event.message?.device_id || event.message?.deviceId || event.message?.id;
+    if (!matchesDeviceFilter(config.device, eventDeviceId, event.device)) return false;
+
+    if (config.status && event.message?.status !== config.status && event.device?.status !== config.status) {
+      return false;
+    }
+
+    if (config.start || config.end) {
+      const now = new Date();
+      const minutes = now.getHours() * 60 + now.getMinutes();
+      const parseMinutes = (value, fallback) => {
+        const [hour, minute] = String(value || fallback).split(':').map(Number);
+        return (Number.isFinite(hour) ? hour : 0) * 60 + (Number.isFinite(minute) ? minute : 0);
+      };
+      const start = parseMinutes(config.start, '00:00');
+      const end = parseMinutes(config.end, '23:59');
+      const inWindow = start <= end ? minutes >= start && minutes <= end : minutes >= start || minutes <= end;
+      if (!inWindow) return false;
+    }
+
+    if (!config.metric) return true;
+    const metricValue = getMetricValue(event, config.metric);
+    if (metricValue === undefined) return false;
+    return compareValues(metricValue, config.condition || '>', config.value);
+  }
+
   if (config.type === 'time_window') {
     const now = new Date();
     const minutes = now.getHours() * 60 + now.getMinutes();
@@ -830,9 +861,88 @@ const executeWorkflowAction = async (workflow, action, event) => {
 
 const executeWorkflow = async (workflow, trigger, event) => {
   const startedAt = new Date().toISOString();
-  const conditions = workflow.nodes.filter((node) => node.type === 'condition');
-  const actions = workflow.nodes.filter((node) => node.type === 'action');
+  const branchTypes = new Set(['if', 'elif', 'else']);
+  const nonTriggerNodes = workflow.nodes.filter((node) => node.type !== 'trigger');
+  const branchConditions = nonTriggerNodes.filter((node) => node.type === 'condition' && branchTypes.has(node.config?.type));
   const steps = [];
+
+  if (branchConditions.length > 0) {
+    let selectedBranch = null;
+    let selectedActions = [];
+
+    for (const condition of branchConditions) {
+      const passed = conditionMatchesEvent(condition, event);
+      steps.push({
+        nodeId: condition.id,
+        type: condition.config?.type || 'condition',
+        status: passed ? 'success' : 'skipped',
+        output: passed ? 'Branch matched' : 'Branch did not match event',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      });
+
+      if (passed) {
+        selectedBranch = condition;
+        const branchStart = workflow.nodes.findIndex((node) => node.id === condition.id);
+        const nextBranchOffset = workflow.nodes.slice(branchStart + 1).findIndex((node) => (
+          node.type === 'condition' && branchTypes.has(node.config?.type)
+        ));
+        const branchEnd = nextBranchOffset === -1 ? workflow.nodes.length : branchStart + 1 + nextBranchOffset;
+        selectedActions = workflow.nodes.slice(branchStart + 1, branchEnd).filter((node) => node.type === 'action');
+        break;
+      }
+    }
+
+    if (!selectedBranch) {
+      const finishedAt = new Date().toISOString();
+      await persistWorkflowRun({
+        id: createId('wfr'),
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        triggerType: trigger.config?.type || 'unknown',
+        eventSource: event.source || event.type,
+        status: 'skipped',
+        event,
+        steps,
+        startedAt,
+        finishedAt,
+      });
+      return;
+    }
+
+    for (const action of selectedActions) {
+      try {
+        steps.push(await executeWorkflowAction(workflow, action, event));
+      } catch (error) {
+        steps.push({
+          nodeId: action.id,
+          type: action.config?.type || 'action',
+          status: 'failed',
+          output: error.message,
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    const finishedAt = new Date().toISOString();
+    await persistWorkflowRun({
+      id: createId('wfr'),
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      triggerType: trigger.config?.type || 'unknown',
+      eventSource: event.source || event.type,
+      status: steps.some((step) => step.status === 'failed') ? 'failed' : 'success',
+      event,
+      steps,
+      startedAt,
+      finishedAt,
+    });
+    return;
+  }
+
+  const conditions = nonTriggerNodes.filter((node) => node.type === 'condition');
+  const actions = nonTriggerNodes.filter((node) => node.type === 'action');
 
   for (const condition of conditions) {
     const passed = conditionMatchesEvent(condition, event);
@@ -898,11 +1008,9 @@ const dispatchWorkflowEvent = async (event) => {
 
   await Promise.all(enabledWorkflows.map(async (workflow) => {
     const triggers = workflow.nodes.filter((node) => node.type === 'trigger');
-    const matchedTriggers = triggers.filter((trigger) => triggerMatchesEvent(trigger, event));
+    const matchedTrigger = triggers.find((trigger) => triggerMatchesEvent(trigger, event));
 
-    for (const trigger of matchedTriggers) {
-      await executeWorkflow(workflow, trigger, event);
-    }
+    if (matchedTrigger) await executeWorkflow(workflow, matchedTrigger, event);
   }));
 };
 
@@ -916,19 +1024,19 @@ const runScheduledWorkflows = async () => {
   const enabledWorkflows = workflows.filter((workflow) => workflow?.enabled);
 
   for (const workflow of enabledWorkflows) {
-    const scheduleTriggers = workflow.nodes.filter((node) => (
+    const scheduleTrigger = workflow.nodes.find((node) => (
       node.type === 'trigger'
       && node.config?.type === 'schedule'
       && cronMatchesNow(node.config?.crontab, now)
     ));
 
-    for (const trigger of scheduleTriggers) {
-      await executeWorkflow(workflow, trigger, {
+    if (scheduleTrigger) {
+      await executeWorkflow(workflow, scheduleTrigger, {
         type: 'schedule',
         source: 'schedule',
         workflowId: workflow.id,
         scheduledAt: now.toISOString(),
-        crontab: trigger.config?.crontab,
+        crontab: scheduleTrigger.config?.crontab,
       });
     }
   }
@@ -1663,10 +1771,8 @@ app.post('/api/workflow-webhooks/:workflowId/:token', async (req, res) => {
     const workflows = await getDashboardWorkflows();
     const targetWorkflow = workflows.find((workflow) => workflow.id === workflowId);
     if (targetWorkflow?.enabled) {
-      const triggers = targetWorkflow.nodes.filter((node) => node.type === 'trigger' && triggerMatchesEvent(node, event));
-      for (const trigger of triggers) {
-        await executeWorkflow(targetWorkflow, trigger, event);
-      }
+      const trigger = targetWorkflow.nodes.find((node) => node.type === 'trigger' && triggerMatchesEvent(node, event));
+      if (trigger) await executeWorkflow(targetWorkflow, trigger, event);
     }
 
     res.status(202).json({accepted: true, workflowId});

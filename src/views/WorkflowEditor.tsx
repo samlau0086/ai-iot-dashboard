@@ -29,6 +29,9 @@ const getActionIcon = (type: string) => {
     case 'alert': return <AlertTriangle className="h-5 w-5 text-amber-500" />;
     case 'schedule': return <Clock className="h-5 w-5 text-blue-500" />;
     case 'ai': return <BrainCircuit className="h-5 w-5 text-orange-600" />;
+    case 'if': return <GitBranch className="h-5 w-5 text-indigo-500" />;
+    case 'elif': return <GitCommit className="h-5 w-5 text-indigo-500" />;
+    case 'else': return <GitBranch className="h-5 w-5 text-slate-500" />;
     case 'logic_and': return <GitCommit className="h-5 w-5 text-purple-500" />;
     case 'logic_or': return <GitBranch className="h-5 w-5 text-purple-500" />;
     case 'check_state': return <Settings2 className="h-5 w-5 text-indigo-500" />;
@@ -59,6 +62,9 @@ const defaultConfigs: Record<string, any> = {
   delay: { duration: '60s' },
   mqtt_publish: { target: '', topic: 'control/device', payload: '{"cmd":"stop"}' },
   notification: { message: 'Alert triggered!' },
+  if: { device: '', metric: 'temperature', condition: '>', value: 10 },
+  elif: { device: '', metric: 'power', condition: '>', value: 1000 },
+  else: {},
   logic_and: { preconditions: 'temp > 30, humidity < 50' },
   logic_or: { preconditions: 'door_open == true, motion_detected == true' },
   check_state: { device: '', status: 'open' },
@@ -157,20 +163,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const triggerNodes = draft.nodes.filter(n => n.type === 'trigger');
   const otherNodes = draft.nodes.filter(n => n.type !== 'trigger');
 
-  const logicNodeIndex = otherNodes.findIndex(n => n.type === 'condition' && ['logic_and', 'logic_or'].includes(n.config.type));
-  const hasLogicNode = logicNodeIndex !== -1;
-  const logicType = hasLogicNode ? otherNodes[logicNodeIndex].config.type : null;
-
   const isTriggerOnly = showSelector.isTriggerSelect || (showSelector.insertIndex === 0 && triggerNodes.length === 0);
   const isAfterTriggers = showSelector.insertIndex === triggerNodes.length;
-  const showConditions = isAfterTriggers && !showSelector.actionGroupId;
+  const showConditions = !isTriggerOnly && !showSelector.actionGroupId;
 
-  const availableConditionTypes = Object.keys(t.workflows.conditionTypes).filter(type => {
-    if (['logic_and', 'logic_or'].includes(type)) {
-       return !hasLogicNode;
-    }
-    return true;
-  });
+  const availableConditionTypes = Object.keys(t.workflows.conditionTypes);
 
   const otherNodeGroups: any[] = [];
   let currentIndex = triggerNodes.length;
@@ -254,6 +251,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const isTrigger = node.type === 'trigger';
     const isCondition = node.type === 'condition';
     const isLogic = isCondition && ['logic_and', 'logic_or'].includes(node.config.type);
+    const isBranch = isCondition && ['if', 'elif', 'else'].includes(node.config.type);
 
     return (
       <div 
@@ -279,7 +277,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               {getActionLabel(node.config.type)}
             </h4>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
-              {isTrigger ? "Trigger" : isCondition ? "Condition" : "Action"} • {Object.keys(node.config).filter(k => k !== 'type').length} params
+              {isTrigger ? "Trigger" : isBranch ? "Branch" : isCondition ? "Condition" : "Action"} - {Object.keys(node.config).filter(k => k !== 'type').length} params
             </p>
           </div>
         </div>
@@ -351,54 +349,39 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
           {triggerNodes.length > 0 && (
             <div className="flex flex-col items-center">
               <div className="flex items-center gap-4 relative z-10 w-full justify-center">
-                {hasLogicNode && (
-                  <button 
-                    onClick={() => setShowSelector({ show: true, insertIndex: 0, isTriggerSelect: true })} 
-                    className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-orange-500 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-500/10 transition-colors shrink-0"
-                  >
-                    <Plus className="h-5 w-5 text-slate-400" />
-                  </button>
-                )}
+                <button
+                  onClick={() => setShowSelector({ show: true, insertIndex: 0, isTriggerSelect: true })}
+                  className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-orange-500 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-500/10 transition-colors shrink-0"
+                  title="Add trigger. Any trigger can start this workflow."
+                >
+                  <Plus className="h-5 w-5 text-slate-400" />
+                </button>
                 
                 {triggerNodes.map(node => renderNodeCard(node))}
 
-                {hasLogicNode && (
-                  <button 
-                    onClick={() => setShowSelector({ show: true, insertIndex: triggerNodes.length, isTriggerSelect: true })} 
-                    className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-orange-500 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-500/10 transition-colors shrink-0"
-                  >
-                    <Plus className="h-5 w-5 text-slate-400" />
-                  </button>
-                )}
+                <button
+                  onClick={() => setShowSelector({ show: true, insertIndex: triggerNodes.length, isTriggerSelect: true })}
+                  className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-orange-500 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-500/10 transition-colors shrink-0"
+                  title="Add trigger. Any trigger can start this workflow."
+                >
+                  <Plus className="h-5 w-5 text-slate-400" />
+                </button>
               </div>
 
-              {otherNodes.length > 0 && otherNodes[0].type === 'condition' && ['logic_and', 'logic_or'].includes(otherNodes[0].config.type) ? (
-                <div className="flex flex-col items-center mt-2 relative w-full">
-                  {triggerNodes.length > 1 ? (
-                    <svg height="40" style={{ width: `${(triggerNodes.length - 1) * 336}px`, overflow: 'visible' }} className="text-slate-300 dark:text-slate-600 relative z-0">
-                      <path d={`M 0 0 L 0 15 Q 0 20 10 20 L ${(triggerNodes.length - 1) * 336 / 2 - 10} 20 Q ${(triggerNodes.length - 1) * 336 / 2} 20 ${(triggerNodes.length - 1) * 336 / 2} 25 L ${(triggerNodes.length - 1) * 336 / 2} 40 M ${(triggerNodes.length - 1) * 336} 0 L ${(triggerNodes.length - 1) * 336} 15 Q ${(triggerNodes.length - 1) * 336} 20 ${(triggerNodes.length - 1) * 336 - 10} 20 L ${(triggerNodes.length - 1) * 336 / 2 + 10} 20 Q ${(triggerNodes.length - 1) * 336 / 2} 20 ${(triggerNodes.length - 1) * 336 / 2} 25`} fill="none" stroke="currentColor" strokeWidth="2" />
-                      {triggerNodes.length > 2 && Array.from({ length: triggerNodes.length - 2 }).map((_, i) => (
-                        <line key={i} x1={(i + 1) * 336} y1="0" x2={(i + 1) * 336} y2="20" stroke="currentColor" strokeWidth="2" />
-                      ))}
-                    </svg>
-                  ) : (
-                    <div className="w-px h-10 bg-slate-300 dark:bg-slate-600" />
-                  )}
-                  <ArrowDown className="absolute -bottom-2 left-1/2 -translate-x-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
+              <div className="mt-3 rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-medium text-orange-700 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-300">
+                Any trigger starts the workflow
+              </div>
+              <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
+                  <button 
+                    onClick={() => setShowSelector({ show: true, insertIndex: triggerNodes.length })}
+                    className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
                 </div>
-              ) : (
-                <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
-                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
-                    <button 
-                      onClick={() => setShowSelector({ show: true, insertIndex: triggerNodes.length })}
-                      className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
-                    >
-                      <Plus className="h-3 w-3" />
-                    </button>
-                  </div>
-                  <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
-                </div>
-              )}
+                <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
+              </div>
             </div>
           )}
 
@@ -545,7 +528,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                     {Object.entries(node.config).map(([key, value]) => {
                       if (key === 'type') return null;
                       
-                      const isDeviceSelect = (key === 'device' && node.type === 'trigger') || 
+                      const isDeviceSelect = (key === 'device' && (node.type === 'trigger' || ['if', 'elif'].includes(node.config.type))) ||
                                              (key === 'target' && (node.config.type === 'start_backup' || node.config.type === 'stop_device' || node.config.type === 'mqtt_publish')) ||
                                              (key === 'device' && node.config.type === 'check_state');
 

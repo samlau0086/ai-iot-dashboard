@@ -124,10 +124,9 @@ export const translations = {
         mqtt_message: 'MQTT Message',
       },
       conditionTypes: {
-        logic_and: 'Match ALL (AND)',
-        logic_or: 'Match ANY (OR)',
-        check_state: 'Check Device State',
-        time_window: 'Time Window',
+        if: 'IF',
+        elif: 'ELIF',
+        else: 'ELSE',
       },
       actionTypes: {
         whatsapp: 'Send WhatsApp',
@@ -295,10 +294,9 @@ export const translations = {
         mqtt_message: 'MQTT 消息接收',
       },
       conditionTypes: {
-        logic_and: '满足所有 (AND)',
-        logic_or: '满足任一 (OR)',
-        check_state: '检查设备状态',
-        time_window: '时间窗口',
+        if: 'IF 条件',
+        elif: 'ELIF 条件',
+        else: 'ELSE 分支',
       },
       actionTypes: {
         whatsapp: '发送 WhatsApp',

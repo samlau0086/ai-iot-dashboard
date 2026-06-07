@@ -41,6 +41,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 移动端布局已改为 App-like shell，包含移动端顶部栏、底部导航和设备卡片列表。
 - [x] Demo 账户角色已完成：内置 `demo@factory.com / demo123`，Demo 修改仅保存在前端会话中，不写入后端数据库，也不会对设备控制生效。
 - [x] 原始数据查询已完成：支持按设备、metric、来源、时间范围和 limit 查询遥测原始 payload，并支持 JSON 导出。
+- [x] 工作流条件节点已调整为 IF / ELIF / ELSE 分支语义；多个 Trigger 采用任一触发即可进入后续流程。
 - [ ] 下一阶段重点：指标筛选、时间范围分析、设备对比、控制连接器、AI Copilot 真实能力接入。
 
 ### V1: Energy Monitoring MVP
@@ -125,6 +126,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 
 - [x] Workflow 页面基础结构
 - [x] Trigger / Condition / Action 概念建模
+- [x] 多 Trigger 任一触发执行
+- [x] IF / ELIF / ELSE 条件分支执行模型
 - [x] 设备离线、指标阈值、告警、定时、AI、Webhook、MQTT 等触发类型占位
 - [x] 通知、工单、Webhook、报告、AI 分析等动作类型占位
 - [x] 后端工作流执行器
@@ -314,7 +317,7 @@ GET /api/telemetry?deviceId=AIR-COMP-001&metric=pressure&source=mqtt&from=2026-0
 
 ### 配置自动化工作流
 
-进入 **Workflows** 页面，点击 **Create Workflow** 创建流程。工作流由触发器、条件和动作组成，可用于自动响应设备离线、指标超限、告警产生、计划任务、MQTT 消息或 AI 异常检测。
+进入 **Workflows** 页面，点击 **Create Workflow** 创建流程。工作流由触发器、IF / ELIF / ELSE 条件分支和动作组成，可用于自动响应设备离线、指标超限、告警产生、计划任务、MQTT 消息或 AI 异常检测。一个工作流可以配置多个 Trigger，任意一个 Trigger 被触发后都会进入后续条件分支；IF / ELIF / ELSE 会按顺序匹配，系统只执行第一个匹配分支下的 actions。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 
@@ -322,7 +325,7 @@ GET /api/telemetry?deviceId=AIR-COMP-001&metric=pressure&source=mqtt&from=2026-0
 
 - HTTP Push、设备专属 API Path 和 MQTT Subscriber 收到遥测后，会触发启用状态的工作流。
 - 已支持 `threshold`、`offline`、`alert`、`mqtt_message`、`webhook`、`schedule` 触发类型。
-- 已支持 `logic_and`、`logic_or`、`check_state`、`time_window` 等基础条件判断。
+- 已支持 IF / ELIF / ELSE 条件分支；Trigger 触发后会按顺序匹配分支，只执行第一个匹配分支下的 actions。
 - `webhook` 动作会由后端真实 POST 到目标 URL；`mqtt_publish`、`start_backup`、`stop_device` 会写入控制中心命令日志；`email`、`whatsapp`、`notification`、`ticket`、`report`、`ai_analyze` 会先写入执行步骤，作为后续真实连接器的队列记录。
 - 执行历史可通过 `GET /api/workflow-runs` 查看，也可以用 `GET /api/workflow-runs?workflowId=wf-xxx&limit=50` 查看单个工作流。
 

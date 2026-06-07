@@ -37,6 +37,9 @@ export function Workflows() {
       case 'schedule': return <Clock className="h-4 w-4 text-blue-500" />;
       case 'ai': return <BrainCircuit className="h-4 w-4 text-orange-600" />;
       // conditions
+      case 'if': return <GitBranch className="h-4 w-4 text-indigo-500" />;
+      case 'elif': return <GitCommit className="h-4 w-4 text-indigo-500" />;
+      case 'else': return <GitBranch className="h-4 w-4 text-slate-500" />;
       case 'logic_and': return <GitCommit className="h-4 w-4 text-purple-500" />;
       case 'logic_or': return <GitBranch className="h-4 w-4 text-purple-500" />;
       case 'check_state': return <Settings2 className="h-4 w-4 text-indigo-500" />;
