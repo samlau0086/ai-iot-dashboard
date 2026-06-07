@@ -22,6 +22,7 @@ type SnapGuide = {
 };
 
 type WidgetDisplayMode = NonNullable<OverviewWidget['displayMode']>;
+type WidgetRuleState = 'normal' | 'warning' | 'critical' | 'noData';
 
 const KPI_WIDGETS: { id: string; key: OverviewKpiKey; x: number }[] = [
   { id: 'kpi-total-devices', key: 'totalDevices', x: 0 },
@@ -93,6 +94,59 @@ const averageMetric = (devices: any[], metric: string) => {
   return values.reduce((total, value) => total + value, 0) / values.length;
 };
 
+const parseOptionalNumber = (value: string) => {
+  if (value.trim() === '') return undefined;
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const getWidgetPrecision = (widget: OverviewWidget) => {
+  const precision = Number(widget.precision);
+  if (!Number.isFinite(precision)) return 1;
+
+  return clamp(Math.round(precision), 0, 6);
+};
+
+const normalizePrecision = (value: number) => {
+  if (!Number.isFinite(value)) return 1;
+
+  return clamp(Math.round(value), 0, 6);
+};
+
+const formatWidgetValue = (value: number, widget: OverviewWidget) => {
+  if (!Number.isFinite(value)) return 'No Data';
+
+  const formatted = value.toLocaleString(undefined, {
+    minimumFractionDigits: getWidgetPrecision(widget),
+    maximumFractionDigits: getWidgetPrecision(widget),
+  });
+
+  return widget.unit ? `${formatted} ${widget.unit}` : formatted;
+};
+
+const getWidgetRuleState = (value: number, widget: OverviewWidget): WidgetRuleState => {
+  if (!Number.isFinite(value)) return 'noData';
+
+  const direction = widget.thresholds?.direction || 'above';
+  const warning = widget.thresholds?.warning;
+  const critical = widget.thresholds?.critical;
+
+  if (direction === 'below') {
+    if (critical !== undefined && value <= critical) return 'critical';
+    if (warning !== undefined && value <= warning) return 'warning';
+    return 'normal';
+  }
+
+  if (critical !== undefined && value >= critical) return 'critical';
+  if (warning !== undefined && value >= warning) return 'warning';
+  return 'normal';
+};
+
+const getWidgetRuleColor = (widget: OverviewWidget, state: WidgetRuleState) => {
+  return widget.colorRules?.[state] || DEFAULT_WIDGET_COLORS[state];
+};
+
 const createWidgetId = (prefix: string) => `${prefix}_${Date.now()}_${Math.round(Math.random() * 10000)}`;
 const WIDGET_DISPLAY_OPTIONS: { value: WidgetDisplayMode; label: string }[] = [
   { value: 'number', label: 'Number' },
@@ -104,6 +158,12 @@ const WIDGET_DISPLAY_OPTIONS: { value: WidgetDisplayMode; label: string }[] = [
   { value: 'donut', label: 'Donut' },
 ];
 const getDisplayModeLabel = (mode?: WidgetDisplayMode) => WIDGET_DISPLAY_OPTIONS.find((option) => option.value === mode)?.label || 'Number';
+const DEFAULT_WIDGET_COLORS: Record<WidgetRuleState, string> = {
+  normal: '#10b981',
+  warning: '#f59e0b',
+  critical: '#ef4444',
+  noData: '#94a3b8',
+};
 
 const collides = (a: any, b: any) => {
   if (a.i === b.i) return false;
@@ -179,6 +239,15 @@ export function Overview() {
   const [builderMetricKey, setBuilderMetricKey] = useState('power');
   const [builderIconId, setBuilderIconId] = useState('activity');
   const [builderDeviceIds, setBuilderDeviceIds] = useState<string[]>([]);
+  const [builderUnit, setBuilderUnit] = useState('');
+  const [builderPrecision, setBuilderPrecision] = useState(1);
+  const [builderThresholdDirection, setBuilderThresholdDirection] = useState<'above' | 'below'>('above');
+  const [builderWarningThreshold, setBuilderWarningThreshold] = useState('');
+  const [builderCriticalThreshold, setBuilderCriticalThreshold] = useState('');
+  const [builderNormalColor, setBuilderNormalColor] = useState(DEFAULT_WIDGET_COLORS.normal);
+  const [builderWarningColor, setBuilderWarningColor] = useState(DEFAULT_WIDGET_COLORS.warning);
+  const [builderCriticalColor, setBuilderCriticalColor] = useState(DEFAULT_WIDGET_COLORS.critical);
+  const [builderNoDataColor, setBuilderNoDataColor] = useState(DEFAULT_WIDGET_COLORS.noData);
   const isTemplateEditing = templateEditorMode !== null;
   const dashboardDropRef = useRef<HTMLDivElement | null>(null);
   const isGridInteractingRef = useRef(false);
@@ -435,6 +504,12 @@ export function Overview() {
   const activeTemplate = dashboardTemplates.find((template) => template.id === activeDashboardTemplateId) || dashboardTemplates[0];
   const selectedTemplateId = activeTemplate?.id || '';
   const configWidget = overviewWidgets.find((widget) => widget.id === configWidgetId) || null;
+  const builderColorFields: { label: string; value: string; setValue: React.Dispatch<React.SetStateAction<string>> }[] = [
+    { label: 'Normal', value: builderNormalColor, setValue: setBuilderNormalColor },
+    { label: 'Warning', value: builderWarningColor, setValue: setBuilderWarningColor },
+    { label: 'Critical', value: builderCriticalColor, setValue: setBuilderCriticalColor },
+    { label: 'No Data', value: builderNoDataColor, setValue: setBuilderNoDataColor },
+  ];
 
   const getWidgetDevices = (widget: OverviewWidget) => {
     if (widget.deviceIds?.length) {
@@ -483,6 +558,15 @@ export function Overview() {
     setBuilderMetricKey(builderMetricOptions[0] || tagMetricOptions[0] || 'power');
     setBuilderIconId('activity');
     setBuilderDeviceIds([]);
+    setBuilderUnit('');
+    setBuilderPrecision(1);
+    setBuilderThresholdDirection('above');
+    setBuilderWarningThreshold('');
+    setBuilderCriticalThreshold('');
+    setBuilderNormalColor(DEFAULT_WIDGET_COLORS.normal);
+    setBuilderWarningColor(DEFAULT_WIDGET_COLORS.warning);
+    setBuilderCriticalColor(DEFAULT_WIDGET_COLORS.critical);
+    setBuilderNoDataColor(DEFAULT_WIDGET_COLORS.noData);
   };
 
   const openWidgetBuilder = (widget?: OverviewWidget) => {
@@ -493,6 +577,15 @@ export function Overview() {
       setBuilderMetricKey(widget.metricKey || tagMetricOptions[0] || 'power');
       setBuilderIconId(widget.iconId || 'activity');
       setBuilderDeviceIds(widget.deviceIds ? [...widget.deviceIds] : []);
+      setBuilderUnit(widget.unit || '');
+      setBuilderPrecision(getWidgetPrecision(widget));
+      setBuilderThresholdDirection(widget.thresholds?.direction || 'above');
+      setBuilderWarningThreshold(widget.thresholds?.warning !== undefined ? String(widget.thresholds.warning) : '');
+      setBuilderCriticalThreshold(widget.thresholds?.critical !== undefined ? String(widget.thresholds.critical) : '');
+      setBuilderNormalColor(widget.colorRules?.normal || DEFAULT_WIDGET_COLORS.normal);
+      setBuilderWarningColor(widget.colorRules?.warning || DEFAULT_WIDGET_COLORS.warning);
+      setBuilderCriticalColor(widget.colorRules?.critical || DEFAULT_WIDGET_COLORS.critical);
+      setBuilderNoDataColor(widget.colorRules?.noData || DEFAULT_WIDGET_COLORS.noData);
     } else {
       resetWidgetBuilder();
     }
@@ -519,6 +612,19 @@ export function Overview() {
       metricKey: builderMetricKey,
       iconId: builderIconId,
       deviceIds: builderDeviceIds,
+      unit: builderUnit.trim() || undefined,
+      precision: normalizePrecision(builderPrecision),
+      thresholds: {
+        direction: builderThresholdDirection,
+        warning: parseOptionalNumber(builderWarningThreshold),
+        critical: parseOptionalNumber(builderCriticalThreshold),
+      },
+      colorRules: {
+        normal: builderNormalColor,
+        warning: builderWarningColor,
+        critical: builderCriticalColor,
+        noData: builderNoDataColor,
+      },
     };
 
     if (editingLibraryWidgetId) {
@@ -881,20 +987,30 @@ export function Overview() {
     const title = getWidgetTitle(widget);
     const Icon = IOT_ICONS[widget.iconId || 'activity'] || Activity;
     const displayMode = widget.displayMode || 'number';
-    const value = sumMetric(targetDevices, metricKey);
-    const averageValue = averageMetric(targetDevices, metricKey);
-    const baseline = averageValue || value || 1;
+    const hasMetricValues = targetDevices.some((device) => Number.isFinite(Number(device.metrics?.[metricKey])));
+    const value = hasMetricValues ? sumMetric(targetDevices, metricKey) : Number.NaN;
+    const averageValue = hasMetricValues ? averageMetric(targetDevices, metricKey) : Number.NaN;
+    const displayValue = displayMode === 'number' || displayMode === 'bar' || displayMode === 'donut' ? value : averageValue;
+    const ruleState = getWidgetRuleState(displayValue, widget);
+    const ruleColor = getWidgetRuleColor(widget, ruleState);
+    const baseline = (Number.isFinite(averageValue) && averageValue) || (Number.isFinite(value) && value) || 1;
     const trendData = deriveEnergyTrendData(targetDevices, metricKey).map((point, index) => ({
       time: point.time,
       value: point.value || Number((baseline * (0.72 + index * 0.09)).toFixed(1)),
     }));
-    const deviceMetricData = targetDevices.map((device) => ({
-      name: device.name,
-      value: Number(device.metrics?.[metricKey]) || 0,
-    }));
-    const chartData = deviceMetricData.length ? deviceMetricData : [{ name: metricKey, value }];
-    const statusLevel = averageValue > 80 ? 'Warning' : averageValue > 0 ? 'Normal' : 'No Data';
-    const gaugeValue = Math.max(0, Math.min(100, averageValue || value));
+    const deviceMetricData = targetDevices
+      .map((device) => ({
+        name: device.name,
+        value: Number(device.metrics?.[metricKey]),
+      }))
+      .filter((item) => Number.isFinite(item.value));
+    const chartData = deviceMetricData.length ? deviceMetricData : [{ name: metricKey, value: Number.isFinite(value) ? value : 0 }];
+    const statusValue = Number.isFinite(averageValue) ? averageValue : value;
+    const statusState = getWidgetRuleState(statusValue, widget);
+    const statusLevel = statusState === 'critical' ? 'Critical' : statusState === 'warning' ? 'Warning' : statusState === 'normal' ? 'Normal' : 'No Data';
+    const statusColor = getWidgetRuleColor(widget, statusState);
+    const hasGaugeValue = Number.isFinite(averageValue) || Number.isFinite(value);
+    const gaugeValue = hasGaugeValue ? Math.max(0, Math.min(100, averageValue || value)) : 0;
 
     if (displayMode === 'line' || displayMode === 'area') {
       return (
@@ -913,7 +1029,7 @@ export function Overview() {
                 <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10, fontFamily: 'monospace'}} dy={10} />
                 <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10, fontFamily: 'monospace'}} />
                 <Tooltip contentStyle={{ borderRadius: '8px', border: `1px solid ${tooltipBorder}`, backgroundColor: tooltipBg, color: tooltipColor }} />
-                <Area type="monotone" dataKey="value" stroke="#ea580c" strokeWidth={2} fill="#ea580c" fillOpacity={displayMode === 'area' ? 0.24 : 0} name={metricKey} />
+                <Area type="monotone" dataKey="value" stroke={ruleColor} strokeWidth={2} fill={ruleColor} fillOpacity={displayMode === 'area' ? 0.24 : 0} name={metricKey} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -938,7 +1054,7 @@ export function Overview() {
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10, fontFamily: 'monospace'}} />
                 <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10, fontFamily: 'monospace'}} />
                 <Tooltip contentStyle={{ borderRadius: '8px', border: `1px solid ${tooltipBorder}`, backgroundColor: tooltipBg, color: tooltipColor }} />
-                <Bar dataKey="value" fill="#ea580c" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="value" fill={ruleColor} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -961,7 +1077,7 @@ export function Overview() {
               <PieChart>
                 <Pie data={chartData} dataKey="value" nameKey="name" innerRadius="58%" outerRadius="82%" paddingAngle={2}>
                   {chartData.map((entry, index) => (
-                    <Cell key={entry.name} fill={['#ea580c', '#3b82f6', '#10b981', '#64748b'][index % 4]} />
+                    <Cell key={entry.name} fill={index === 0 ? ruleColor : ['#3b82f6', '#10b981', '#64748b', '#8b5cf6'][index % 4]} />
                   ))}
                 </Pie>
                 <Tooltip contentStyle={{ borderRadius: '8px', border: `1px solid ${tooltipBorder}`, backgroundColor: tooltipBg, color: tooltipColor }} />
@@ -981,12 +1097,12 @@ export function Overview() {
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
               <p className="truncate text-xs font-medium uppercase tracking-wider text-slate-500 mb-2">{title}</p>
-              <p className="text-2xl font-mono font-bold text-slate-900 dark:text-white">{gaugeValue.toFixed(1)}%</p>
+              <p className="text-2xl font-mono font-bold text-slate-900 dark:text-white">{formatWidgetValue(hasGaugeValue ? gaugeValue : Number.NaN, widget)}</p>
               <p className="mt-1 truncate text-[10px] font-mono text-slate-400">{metricKey}</p>
             </div>
-            <div className="relative h-20 w-20 shrink-0 rounded-full" style={{ background: `conic-gradient(#ea580c ${gaugeValue * 3.6}deg, ${isDark ? '#334155' : '#e2e8f0'} 0deg)` }}>
+            <div className="relative h-20 w-20 shrink-0 rounded-full" style={{ background: `conic-gradient(${ruleColor} ${gaugeValue * 3.6}deg, ${isDark ? '#334155' : '#e2e8f0'} 0deg)` }}>
               <div className="absolute inset-3 rounded-full bg-white dark:bg-[#1c2128] flex items-center justify-center">
-                <Icon className="h-5 w-5 text-orange-500" />
+                <Icon className="h-5 w-5" style={{ color: ruleColor }} />
               </div>
             </div>
           </div>
@@ -1003,16 +1119,10 @@ export function Overview() {
           <div className="flex items-center justify-between">
             <div className="min-w-0">
               <p className="truncate text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">{title}</p>
-              <p className={cn(
-                "mt-1 text-2xl font-mono font-bold truncate",
-                statusLevel === 'Warning' ? "text-amber-500" : statusLevel === 'Normal' ? "text-emerald-500" : "text-slate-400"
-              )}>{statusLevel}</p>
-              <p className="mt-1 truncate text-[10px] font-mono text-slate-400">{metricKey}: {averageValue.toFixed(1)}</p>
+              <p className="mt-1 truncate text-2xl font-mono font-bold" style={{ color: statusColor }}>{statusLevel}</p>
+              <p className="mt-1 truncate text-[10px] font-mono text-slate-400">{metricKey}: {formatWidgetValue(statusValue, widget)}</p>
             </div>
-            <span className={cn(
-              "h-4 w-4 rounded-full shrink-0",
-              statusLevel === 'Warning' ? "bg-amber-500" : statusLevel === 'Normal' ? "bg-emerald-500" : "bg-slate-400"
-            )} />
+            <span className="h-4 w-4 shrink-0 rounded-full" style={{ backgroundColor: statusColor }} />
           </div>
         </div>
       );
@@ -1029,10 +1139,10 @@ export function Overview() {
         <div className="flex items-center justify-between">
           <div className="min-w-0">
             <p className="truncate text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">{title}</p>
-            <p className="mt-1 text-2xl xl:text-3xl font-mono font-bold text-slate-900 dark:text-white truncate">{Number(value.toFixed(1)).toLocaleString()}</p>
+            <p className="mt-1 truncate text-2xl font-mono font-bold xl:text-3xl" style={{ color: ruleColor }}>{formatWidgetValue(value, widget)}</p>
             <p className="mt-1 truncate text-[10px] font-mono text-slate-400">{metricKey}</p>
           </div>
-          <div className="rounded p-2 text-orange-600 dark:text-orange-500 shrink-0">
+          <div className="shrink-0 rounded p-2" style={{ color: ruleColor }}>
             <Icon className="h-5 w-5 xl:h-6 xl:w-6" aria-hidden="true" />
           </div>
         </div>
@@ -1293,6 +1403,72 @@ export function Overview() {
               </button>
             </div>
           </div>
+          <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4 dark:border-slate-800 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[120px_110px_130px_1fr]">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Unit</label>
+              <input
+                value={builderUnit}
+                onChange={(event) => setBuilderUnit(event.target.value)}
+                placeholder="kWh, bar, deg C"
+                className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Precision</label>
+              <input
+                type="number"
+                min={0}
+                max={6}
+                value={builderPrecision}
+                onChange={(event) => setBuilderPrecision(Number(event.target.value))}
+                className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Threshold</label>
+              <select
+                value={builderThresholdDirection}
+                onChange={(event) => setBuilderThresholdDirection(event.target.value as 'above' | 'below')}
+                className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              >
+                <option value="above">Above is bad</option>
+                <option value="below">Below is bad</option>
+              </select>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Warning value</label>
+                <input
+                  type="number"
+                  value={builderWarningThreshold}
+                  onChange={(event) => setBuilderWarningThreshold(event.target.value)}
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Critical value</label>
+                <input
+                  type="number"
+                  value={builderCriticalThreshold}
+                  onChange={(event) => setBuilderCriticalThreshold(event.target.value)}
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {builderColorFields.map((field) => (
+              <label key={field.label} className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
+                <span>{field.label}</span>
+                <input
+                  type="color"
+                  value={field.value}
+                  onChange={(event) => field.setValue(event.target.value)}
+                  className="h-7 w-10 rounded border border-slate-300 bg-transparent p-0 dark:border-slate-700"
+                />
+              </label>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1396,6 +1572,78 @@ export function Overview() {
               <X className="h-4 w-4" />
             </button>
           </div>
+          {configWidget.type === 'custom' && (
+            <div className="mt-4 space-y-3 border-t border-orange-100 pt-4 dark:border-orange-500/20">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Unit</label>
+                  <input
+                    value={configWidget.unit || ''}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { unit: event.target.value.trim() || undefined })}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Precision</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={6}
+                    value={getWidgetPrecision(configWidget)}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { precision: normalizePrecision(Number(event.target.value)) })}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Threshold</label>
+                  <select
+                    value={configWidget.thresholds?.direction || 'above'}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, direction: event.target.value as 'above' | 'below' } })}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  >
+                    <option value="above">Above is bad</option>
+                    <option value="below">Below is bad</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Warning</label>
+                  <input
+                    type="number"
+                    value={configWidget.thresholds?.warning ?? ''}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, warning: parseOptionalNumber(event.target.value) } })}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Critical</label>
+                  <input
+                    type="number"
+                    value={configWidget.thresholds?.critical ?? ''}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, critical: parseOptionalNumber(event.target.value) } })}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {([
+                  ['Normal', 'normal'],
+                  ['Warning', 'warning'],
+                  ['Critical', 'critical'],
+                  ['No Data', 'noData'],
+                ] as const).map(([label, key]) => (
+                  <label key={key} className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
+                    <span>{label}</span>
+                    <input
+                      type="color"
+                      value={configWidget.colorRules?.[key] || DEFAULT_WIDGET_COLORS[key]}
+                      onChange={(event) => updateOverviewWidget(configWidget.id, { colorRules: { ...configWidget.colorRules, [key]: event.target.value } })}
+                      className="h-7 w-10 rounded border border-slate-300 bg-transparent p-0 dark:border-slate-700"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -65,6 +65,19 @@ export interface OverviewWidget {
   iconId?: string;
   kpiKey?: OverviewKpiKey;
   chartId?: string;
+  unit?: string;
+  precision?: number;
+  thresholds?: {
+    direction?: 'above' | 'below';
+    warning?: number;
+    critical?: number;
+  };
+  colorRules?: {
+    normal?: string;
+    warning?: string;
+    critical?: string;
+    noData?: string;
+  };
 }
 
 export interface DashboardTemplate {
@@ -106,6 +119,8 @@ const cloneLayout = (layout: any[]) => layout.map((item) => ({ ...item }));
 const cloneWidgets = (widgets: OverviewWidget[]) => widgets.map((widget) => ({
   ...widget,
   deviceIds: widget.deviceIds ? [...widget.deviceIds] : undefined,
+  thresholds: widget.thresholds ? { ...widget.thresholds } : undefined,
+  colorRules: widget.colorRules ? { ...widget.colorRules } : undefined,
 }));
 const DEFAULT_CHARTS: ChartConfig[] = [
   { id: '1', title: 'Weekly Consumption', type: 'bar', dataSource: 'energy' },
