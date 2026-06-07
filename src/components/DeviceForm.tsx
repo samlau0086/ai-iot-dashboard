@@ -567,6 +567,18 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
               />
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional telemetry topic used by the MQTT/WebSocket bridge.</p>
              </div>
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">MQTT Command Topic</label>
+              <input
+                type="text"
+                name="commandTopic"
+                value={configData.commandTopic || ''}
+                onChange={handleConfigChange}
+                placeholder="factory-a/air-compressor-1/command"
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional command topic. If empty, the backend derives one from MQTT Topic or External Device ID.</p>
+             </div>
              {renderConfigFields()}
            </div>
         </div>

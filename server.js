@@ -280,6 +280,13 @@ const createMqttSubscribePacket = (runtime, topics) => {
   return createMqttPacket(0x82, Buffer.concat([packetIdBuffer, ...subscriptions]));
 };
 
+const createMqttPublishPacket = (topic, payload) => {
+  return createMqttPacket(0x30, Buffer.concat([
+    encodeMqttString(topic),
+    Buffer.from(String(payload)),
+  ]));
+};
+
 const sanitizeHttpChannel = (channel) => ({
   id: String(channel.id || createId('http')),
   name: String(channel.name || 'HTTP Push'),
@@ -628,6 +635,101 @@ const persistDeviceControlCommand = async (command) => {
   );
 };
 
+const updateDeviceControlCommand = async (commandId, patch) => {
+  const updatedAt = new Date().toISOString();
+  const applyPatch = (command) => ({...command, ...patch, updatedAt});
+  const index = deviceControlCommands.findIndex((command) => command.id === commandId);
+  let nextCommand = null;
+
+  if (index >= 0) {
+    nextCommand = applyPatch(deviceControlCommands[index]);
+    deviceControlCommands[index] = nextCommand;
+  }
+
+  if (db) {
+    const result = await queryDb(
+      `UPDATE device_control_commands
+       SET status = COALESCE($2, status),
+           result = COALESCE($3, result),
+           updated_at = $4::timestamptz
+       WHERE id = $1
+       RETURNING id, device_id AS "deviceId", device_name AS "deviceName", command, parameters,
+                 requested_by AS "requestedBy", requested_by_role AS "requestedByRole", source,
+                 status, result, created_at AS "createdAt", updated_at AS "updatedAt"`,
+      [commandId, patch.status || null, patch.result || null, updatedAt]
+    );
+    nextCommand = result.rows[0] || nextCommand;
+  }
+
+  return nextCommand;
+};
+
+const getDeviceCommandTopic = (device) => {
+  const explicitTopic = device?.config?.commandTopic || device?.config?.mqttCommandTopic;
+  if (explicitTopic) return String(explicitTopic).trim();
+
+  const telemetryTopic = device?.config?.mqttTopic;
+  if (telemetryTopic) {
+    return `${String(telemetryTopic).replace(/\/telemetry\/?$/, '').replace(/\/+$/, '')}/command`;
+  }
+
+  const externalId = device?.config?.externalDeviceId || device?.id;
+  return externalId ? `devices/${externalId}/command` : '';
+};
+
+const publicDeviceCommandPayload = (command) => ({
+  command_id: command.id,
+  device_id: command.deviceId,
+  command: command.command,
+  parameters: command.parameters || {},
+  requested_by: command.requestedBy,
+  source: command.source,
+  timestamp: command.createdAt,
+});
+
+const publishDeviceCommandToMqtt = async (command, device) => {
+  const topic = getDeviceCommandTopic(device);
+  if (!topic) {
+    return {ok: false, message: 'No MQTT command topic configured.'};
+  }
+
+  const runtime = Array.from(mqttRuntimes.values()).find((item) => (
+    item.config.enabled
+    && item.socket
+    && item.status?.state === 'connected'
+  ));
+
+  if (!runtime) {
+    return {ok: false, message: 'No connected MQTT subscriber socket is available for command publish.'};
+  }
+
+  runtime.socket.write(createMqttPublishPacket(topic, JSON.stringify(publicDeviceCommandPayload(command))));
+  return {ok: true, message: `Published to MQTT topic ${topic}`};
+};
+
+const dispatchDeviceControlCommand = async (command, device) => {
+  if (!device || command.status === 'rejected') return command;
+
+  const protocol = String(device.config?.protocol || '').toLowerCase();
+  const dataSource = String(device.config?.dataSource || '').toLowerCase();
+  const hasMqttRoute = dataSource === 'mqtt' || protocol === 'mqtt' || Boolean(device.config?.mqttTopic || device.config?.commandTopic || device.config?.mqttCommandTopic);
+
+  if (hasMqttRoute) {
+    const publishResult = await publishDeviceCommandToMqtt(command, device);
+    if (publishResult.ok) {
+      return await updateDeviceControlCommand(command.id, {
+        status: 'sent',
+        result: `${publishResult.message}. Waiting for device ACK.`,
+      }) || command;
+    }
+  }
+
+  return await updateDeviceControlCommand(command.id, {
+    status: 'queued',
+    result: 'Queued for device polling. Gateway can fetch it from /api/device-commands/pending.',
+  }) || command;
+};
+
 const createDeviceControlCommand = async ({
   deviceId,
   command,
@@ -656,7 +758,7 @@ const createDeviceControlCommand = async ({
   };
 
   await persistDeviceControlCommand(normalizedCommand);
-  return normalizedCommand;
+  return await dispatchDeviceControlCommand(normalizedCommand, device);
 };
 
 const executeWorkflowAction = async (workflow, action, event) => {
@@ -1385,6 +1487,78 @@ app.get('/api/device-commands', async (req, res) => {
     res.status(200).json({commands});
   } catch (error) {
     res.status(500).json({error: error.message, commands: []});
+  }
+});
+
+app.get('/api/device-commands/pending', async (req, res) => {
+  try {
+    const isAuthorized = await validateIngestToken(req, 'command:pending');
+    if (!isAuthorized) {
+      res.status(401).json({error: 'invalid ingest token', commands: []});
+      return;
+    }
+
+    const deviceId = typeof req.query.deviceId === 'string' ? req.query.deviceId : '';
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 20), 100));
+
+    if (!deviceId) {
+      res.status(400).json({error: 'deviceId is required', commands: []});
+      return;
+    }
+
+    const device = await findDashboardDevice(deviceId);
+    if (!device) {
+      res.status(404).json({error: 'device not found', commands: []});
+      return;
+    }
+
+    if (db) {
+      const result = await queryDb(
+        `SELECT id, device_id AS "deviceId", device_name AS "deviceName", command, parameters,
+                requested_by AS "requestedBy", requested_by_role AS "requestedByRole", source,
+                status, result, created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM device_control_commands
+         WHERE device_id = $1 AND status = 'queued'
+         ORDER BY created_at ASC
+         LIMIT $2`,
+        [device.id, limit]
+      );
+      res.status(200).json({commands: result.rows.map(publicDeviceCommandPayload)});
+      return;
+    }
+
+    const commands = deviceControlCommands
+      .filter((command) => command.deviceId === device.id && command.status === 'queued')
+      .slice(-limit)
+      .reverse()
+      .map(publicDeviceCommandPayload);
+    res.status(200).json({commands});
+  } catch (error) {
+    res.status(500).json({error: error.message, commands: []});
+  }
+});
+
+app.post('/api/device-commands/:commandId/ack', async (req, res) => {
+  try {
+    const isAuthorized = await validateIngestToken(req, 'command:ack');
+    if (!isAuthorized) {
+      res.status(401).json({error: 'invalid ingest token'});
+      return;
+    }
+
+    const payload = req.body || {};
+    const status = ['success', 'failed', 'sent'].includes(payload.status) ? payload.status : 'success';
+    const result = payload.result || payload.message || `Device ACK: ${status}`;
+    const command = await updateDeviceControlCommand(req.params.commandId, {status, result});
+
+    if (!command) {
+      res.status(404).json({error: 'command not found'});
+      return;
+    }
+
+    res.status(200).json({command});
+  } catch (error) {
+    res.status(500).json({error: error.message});
   }
 });
 

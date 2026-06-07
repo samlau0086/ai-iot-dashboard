@@ -16,6 +16,8 @@ export interface DeviceConfig {
   dataSource?: 'api' | 'mqtt' | 'manual';
   apiPath?: string;
   mqttTopic?: string;
+  commandTopic?: string;
+  mqttCommandTopic?: string;
   metricMapping?: Record<string, string>;
 
   // Industrial protocol / edge gateway binding

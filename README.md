@@ -312,7 +312,30 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 - `set_speed`：下发速度百分比。
 - `set_parameter`：下发任意参数名和值。
 
-控制命令提交前需要勾选二次确认。后端会通过 `POST /api/device-commands` 记录命令、设备、参数、操作者、角色、来源和状态，并可通过 `GET /api/device-commands` 查询控制日志。当前版本已完成控制指令审计闭环；真实下发到 Modbus、MQTT、HTTP 网关、PLC 或其他现场协议连接器，会在后续控制连接器中接入。
+控制命令提交前需要勾选二次确认。后端会通过 `POST /api/device-commands` 记录命令、设备、参数、操作者、角色、来源和状态，并可通过 `GET /api/device-commands` 查询控制日志。
+
+当前支持两种下行方式：
+
+1. **MQTT Command Topic**：如果设备配置了 `MQTT Command Topic`，或可从 `MQTT Topic` 推导出 `{telemetry-topic-without-/telemetry}/command`，并且后端 MQTT Subscriber 已连接，控制命令会被 publish 到该 topic，状态变为 `sent`。
+2. **设备 / 网关主动拉取**：如果没有可用 MQTT 连接，命令会保持 `queued`，现场网关可通过 `GET /api/device-commands/pending?deviceId=DEVICE_ID` 拉取待执行命令，执行后通过 `POST /api/device-commands/{commandId}/ack` 回传结果。
+
+网关拉取 pending 命令示例：
+
+```bash
+curl "http://localhost:3006/api/device-commands/pending?deviceId=AIR-COMP-001" \
+  -H "x-iot-token: iot_generated_token"
+```
+
+设备 ACK 示例：
+
+```bash
+curl -X POST "http://localhost:3006/api/device-commands/cmd-xxx/ack" \
+  -H "Content-Type: application/json" \
+  -H "x-iot-token: iot_generated_token" \
+  -d '{"status":"success","message":"Command executed by gateway"}'
+```
+
+Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboard 负责生成命令、下发到 MQTT 或 pending queue，网关负责写线圈、写寄存器、发 CAN Frame 或调用设备私有协议。
 
 ### 处理告警
 
