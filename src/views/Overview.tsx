@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal, LayoutGrid } from 'lucide-react';
+import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { useAppStore } from '../lib/store';
-import type { DashboardTemplate, OverviewKpiKey, OverviewWidget } from '../lib/store';
+import type { OverviewKpiKey, OverviewWidget } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { Responsive, WidthProvider } from 'react-grid-layout/legacy';
 import { ChartRenderer } from '../components/ChartRenderer';
@@ -67,17 +67,6 @@ const findNearestGuide = (value: number, guides: number[], min: number, max: num
   });
 
   return nearest;
-};
-
-const getTagTemplateId = (tag: string) => {
-  const normalizedTag = tag.toLowerCase();
-
-  if (normalizedTag.includes('solar')) return 'solar-monitoring';
-  if (normalizedTag.includes('cold')) return 'cold-storage';
-  if (normalizedTag.includes('pump')) return 'water-pump';
-  if (normalizedTag.includes('compressor')) return 'air-compressor';
-
-  return 'factory-energy';
 };
 
 const sumMetric = (devices: any[], metric: string) => {
@@ -353,9 +342,6 @@ export function Overview() {
     overviewWidgets,
     overviewWidgetLibrary,
     overviewLayout,
-    dashboardTemplates,
-    activeDashboardTemplateId,
-    tagDashboardTemplateMap,
     sites,
     activeSiteId,
     setActiveSite,
@@ -367,18 +353,10 @@ export function Overview() {
     addOverviewWidgetLibraryItem,
     updateOverviewWidgetLibraryItem,
     removeOverviewWidgetLibraryItem,
-    applyDashboardTemplate,
-    setTagDashboardTemplate,
-    addDashboardTemplate,
-    updateDashboardTemplate,
-    deleteDashboardTemplate,
   } = useAppStore();
   const t = translations[language];
   const [showWidgetBuilder, setShowWidgetBuilder] = useState(false);
   const [activeSnapGuide, setActiveSnapGuide] = useState<SnapGuide>({});
-  const [templateEditorMode, setTemplateEditorMode] = useState<'new' | 'edit' | null>(null);
-  const [templateName, setTemplateName] = useState('');
-  const [templateDescription, setTemplateDescription] = useState('');
   const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || 'factory-a');
   const [configWidgetId, setConfigWidgetId] = useState<string | null>(null);
   const [editingLibraryWidgetId, setEditingLibraryWidgetId] = useState<string | null>(null);
@@ -397,7 +375,6 @@ export function Overview() {
   const [builderWarningColor, setBuilderWarningColor] = useState(DEFAULT_WIDGET_COLORS.warning);
   const [builderCriticalColor, setBuilderCriticalColor] = useState(DEFAULT_WIDGET_COLORS.critical);
   const [builderNoDataColor, setBuilderNoDataColor] = useState(DEFAULT_WIDGET_COLORS.noData);
-  const isTemplateEditing = templateEditorMode !== null;
   const dashboardDropRef = useRef<HTMLDivElement | null>(null);
   const isGridInteractingRef = useRef(false);
 
@@ -555,12 +532,12 @@ export function Overview() {
   }, [overviewLayout, overviewWidgets, updateOverviewLayout, updateOverviewWidgets]);
 
   useEffect(() => {
-    if (!isTemplateEditing || !showWidgetBuilder) return;
+    if (!showWidgetBuilder) return;
     if (builderMetricOptions.length === 0) return;
     if (builderMetricOptions.includes(builderMetricKey)) return;
 
     setBuilderMetricKey(builderMetricOptions[0]);
-  }, [builderMetricKey, builderMetricOptions, isTemplateEditing, showWidgetBuilder]);
+  }, [builderMetricKey, builderMetricOptions, showWidgetBuilder]);
 
   const isDark = theme === 'dark';
   const cartesianGridStroke = isDark ? '#334155' : '#e2e8f0';
@@ -667,8 +644,6 @@ export function Overview() {
     updateSnapGuide({});
   };
 
-  const activeTemplate = dashboardTemplates.find((template) => template.id === activeDashboardTemplateId) || dashboardTemplates[0];
-  const selectedTemplateId = activeTemplate?.id || '';
   const configWidget = overviewWidgets.find((widget) => widget.id === configWidgetId) || null;
   const builderColorFields: { label: string; value: string; setValue: React.Dispatch<React.SetStateAction<string>> }[] = [
     { label: 'Normal', value: builderNormalColor, setValue: setBuilderNormalColor },
@@ -866,142 +841,11 @@ export function Overview() {
     setDraggingLibraryWidgetId(null);
   };
 
-  const getWidgetLayoutSize = (widget: OverviewWidget) => {
-    if (widget.type === 'kpi') return { w: 3, h: 2, minW: 2, minH: 2 };
-    if (widget.type === 'trend' || widget.type === 'chart' || widget.type === 'ai') return { w: 4, h: 5, minW: 3, minH: 3 };
-    if (widget.type === 'custom') {
-      const mode = widget.displayMode || 'number';
-      if (['line', 'area', 'bar', 'donut'].includes(mode)) return { w: 4, h: 4, minW: 3, minH: 3 };
-      return { w: 3, h: 2, minW: 2, minH: 2 };
-    }
-
-    return { w: 3, h: 2, minW: 2, minH: 2 };
-  };
-
-  const sortWidgetsForAutoLayout = (widgets: OverviewWidget[]) => {
-    const priority = (widget: OverviewWidget) => {
-      if (widget.type === 'kpi') return 0;
-      if (widget.type === 'custom' && ['number', 'gauge', 'status'].includes(widget.displayMode || 'number')) return 1;
-      if (widget.type === 'trend' || widget.type === 'chart') return 2;
-      if (widget.type === 'custom') return 3;
-      if (widget.type === 'ai') return 4;
-      return 5;
-    };
-
-    return [...widgets].sort((first, second) => priority(first) - priority(second));
-  };
-
-  const autoArrangeWidgets = () => {
-    let x = 0;
-    let y = 0;
-    let rowHeight = 0;
-
-    const nextLayout = sortWidgetsForAutoLayout(overviewWidgets).map((widget) => {
-      const size = getWidgetLayoutSize(widget);
-
-      if (x + size.w > GRID_COLS) {
-        x = 0;
-        y += rowHeight;
-        rowHeight = 0;
-      }
-
-      const item = {
-        i: widget.id,
-        x,
-        y,
-        ...size,
-      };
-
-      x += size.w;
-      rowHeight = Math.max(rowHeight, size.h);
-
-      return item;
-    });
-
-    updateOverviewLayout(nextLayout);
-    setActiveSnapGuide({});
-  };
-
   const handleSiteSelect = (siteId: string) => {
     setSelectedSiteId(siteId);
     if (siteId !== 'All') setActiveSite(siteId);
-
-    const site = sites.find((item) => item.id === siteId);
-    const templateHint = [site?.id, site?.type, site?.name, ...(site?.tags || [])].filter(Boolean).join(' ');
-    const templateId = tagDashboardTemplateMap[siteId] || getTagTemplateId(templateHint || siteId);
-    if (dashboardTemplates.some((template) => template.id === templateId)) {
-      applyDashboardTemplate(templateId);
-    }
-
-    closeTemplateEditor();
-  };
-
-  const openNewTemplate = () => {
-    setTemplateEditorMode('new');
-    setTemplateName('Custom Monitoring');
-    setTemplateDescription('Custom dashboard template.');
-  };
-
-  const openEditTemplate = () => {
-    if (!activeTemplate) return;
-
-    setTemplateEditorMode('edit');
-    setTemplateName(activeTemplate.name);
-    setTemplateDescription(activeTemplate.description);
-  };
-
-  const closeTemplateEditor = () => {
-    setTemplateEditorMode(null);
-    setTemplateName('');
-    setTemplateDescription('');
     setConfigWidgetId(null);
     setShowWidgetBuilder(false);
-  };
-
-  const buildTemplateFromCurrentDashboard = (id: string, name: string, description: string): DashboardTemplate => ({
-    id,
-    name: name.trim() || 'Untitled Monitoring',
-    description: description.trim(),
-    layout: overviewLayout.map((item) => ({ ...item })),
-    widgets: overviewWidgets.map((widget) => ({ ...widget, deviceIds: widget.deviceIds ? [...widget.deviceIds] : undefined })),
-  });
-
-  const saveTemplate = () => {
-    if (templateEditorMode === 'new') {
-      const template = buildTemplateFromCurrentDashboard(`custom-${Date.now()}`, templateName, templateDescription);
-      addDashboardTemplate(template);
-      if (selectedSiteId !== 'All') {
-        setTagDashboardTemplate(selectedSiteId, template.id);
-      }
-      closeTemplateEditor();
-      return;
-    }
-
-    if (templateEditorMode === 'edit' && activeTemplate) {
-      const template = buildTemplateFromCurrentDashboard(activeTemplate.id, templateName, templateDescription);
-      updateDashboardTemplate(template);
-      if (selectedSiteId !== 'All') {
-        setTagDashboardTemplate(selectedSiteId, template.id);
-      }
-      closeTemplateEditor();
-      return;
-    }
-
-    if (activeTemplate) {
-      const template = buildTemplateFromCurrentDashboard(activeTemplate.id, activeTemplate.name, activeTemplate.description);
-      updateDashboardTemplate(template);
-      if (selectedSiteId !== 'All') {
-        setTagDashboardTemplate(selectedSiteId, template.id);
-      }
-    }
-  };
-
-  const handleTemplateDelete = () => {
-    if (!activeTemplate) return;
-    if (!window.confirm(`Delete template "${activeTemplate.name}"?`)) return;
-
-    deleteDashboardTemplate(activeTemplate.id);
-    closeTemplateEditor();
   };
 
   const handleAddChart = (chart: any) => {
@@ -1379,118 +1223,32 @@ export function Overview() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-start justify-end gap-2">
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] p-2 shadow-sm">
-            <select
-              value={selectedTemplateId}
-              onChange={(event) => {
-                applyDashboardTemplate(event.target.value);
-                closeTemplateEditor();
-              }}
-              className="h-9 min-w-[240px] rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-700 dark:text-slate-300 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-            >
-              {dashboardTemplates.map((template) => (
-                <option key={template.id} value={template.id}>{template.name}</option>
-              ))}
-            </select>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              if (showWidgetBuilder) {
+                setShowWidgetBuilder(false);
+                resetWidgetBuilder();
+                return;
+              }
 
-            <button
-              type="button"
-              onClick={openNewTemplate}
-              className="inline-flex h-9 items-center gap-1.5 rounded border border-slate-300 dark:border-slate-700 px-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
-            >
-              <Plus className="h-4 w-4" />
-              New
-            </button>
-            <button
-              type="button"
-              onClick={openEditTemplate}
-              className="inline-flex h-9 items-center gap-1.5 rounded border border-slate-300 dark:border-slate-700 px-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
-            >
-              <Pencil className="h-4 w-4" />
-              Edit
-            </button>
-            <button
-              type="button"
-              onClick={saveTemplate}
-              className="inline-flex h-9 items-center gap-1.5 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500"
-            >
-              <Save className="h-4 w-4" />
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={handleTemplateDelete}
-              className="inline-flex h-9 items-center justify-center rounded border border-slate-300 dark:border-slate-700 px-2.5 text-slate-500 hover:border-red-300 hover:text-red-600 dark:text-slate-400 dark:hover:border-red-500/50 dark:hover:text-red-400"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-
-          {isTemplateEditing && (
-            <div className="flex flex-wrap items-center gap-2 pt-2">
-              <button
-                type="button"
-                onClick={autoArrangeWidgets}
-                className="inline-flex h-9 items-center gap-x-2 rounded border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1c2128] dark:text-slate-300 dark:hover:bg-slate-800/80"
-              >
-                <LayoutGrid className="-ml-0.5 h-4 w-4" aria-hidden="true" />
-                Auto Layout
-              </button>
-              <button
-                type="button"
-                onClick={() => openWidgetBuilder()}
-                className="inline-flex h-9 items-center gap-x-2 rounded border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1c2128] dark:text-slate-300 dark:hover:bg-slate-800/80"
-              >
-                <Plus className="-ml-0.5 h-4 w-4" aria-hidden="true" />
-                Add Widget
-              </button>
-            </div>
-          )}
+              openWidgetBuilder();
+            }}
+            className={cn(
+              "inline-flex h-9 items-center gap-x-2 rounded border px-3 text-sm font-semibold shadow-sm transition-colors",
+              showWidgetBuilder
+                ? "border-orange-500 bg-orange-600 text-white hover:bg-orange-500"
+                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1c2128] dark:text-slate-300 dark:hover:bg-slate-800/80"
+            )}
+          >
+            <Plus className="-ml-0.5 h-4 w-4" aria-hidden="true" />
+            Add Widget
+          </button>
         </div>
       </div>
 
-      {templateEditorMode && (
-        <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] p-4 shadow-sm">
-          <div className="grid gap-3 lg:grid-cols-[minmax(220px,320px)_1fr_auto] lg:items-end">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Template name</label>
-              <input
-                value={templateName}
-                onChange={(event) => setTemplateName(event.target.value)}
-                className="mt-1 h-10 w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Description</label>
-              <input
-                value={templateDescription}
-                onChange={(event) => setTemplateDescription(event.target.value)}
-                className="mt-1 h-10 w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-              />
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={saveTemplate}
-                className="inline-flex h-10 items-center gap-1.5 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500"
-              >
-                <Save className="h-4 w-4" />
-                Save
-              </button>
-              <button
-                type="button"
-                onClick={closeTemplateEditor}
-                className="inline-flex h-10 items-center justify-center rounded border border-slate-300 dark:border-slate-700 px-3 text-slate-500 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isTemplateEditing && showWidgetBuilder && (
+      {showWidgetBuilder && (
         <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] p-4 shadow-sm">
           <div className="grid gap-4 xl:grid-cols-[minmax(220px,320px)_180px_180px_1fr_auto] xl:items-end">
             <div>
@@ -1667,7 +1425,7 @@ export function Overview() {
         </div>
       )}
 
-      {isTemplateEditing && (
+      {showWidgetBuilder && (
         <div className="space-y-4">
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -1762,7 +1520,7 @@ export function Overview() {
         </div>
       )}
 
-      {isTemplateEditing && configWidget && (
+      {configWidget && (
         <div className="rounded-lg border border-orange-200 dark:border-orange-500/30 bg-white dark:bg-[#1c2128] p-4 shadow-sm">
           <div className="grid gap-4 xl:grid-cols-[minmax(220px,360px)_1fr_auto] xl:items-start">
             <div>
@@ -1925,8 +1683,8 @@ export function Overview() {
           onResizeStart={handleResizeStart}
           onResizeStop={handleResizeStop}
           {...({ draggableHandle: ".draggable-handle" } as any)}
-          isResizable={isTemplateEditing}
-          isDraggable={isTemplateEditing}
+          isResizable={true}
+          isDraggable={true}
           resizeHandles={['se']}
           preventCollision={true}
           compactType={null}
@@ -1934,32 +1692,30 @@ export function Overview() {
         >
           {overviewWidgets.map(widget => (
             <div key={widget.id} className="relative">
-              {isTemplateEditing && (
-                <div className="absolute right-2 top-2 z-30 flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setConfigWidgetId(widget.id)}
-                    className={cn(
-                      "inline-flex h-7 w-7 items-center justify-center rounded border shadow-sm",
-                      configWidgetId === widget.id
-                        ? "border-orange-500 bg-orange-500 text-white"
-                        : "border-slate-200 bg-white text-slate-500 hover:text-orange-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
-                    )}
-                  >
-                    <SlidersHorizontal className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      removeOverviewWidget(widget.id);
-                      if (configWidgetId === widget.id) setConfigWidgetId(null);
-                    }}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 shadow-sm hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-red-500/50 dark:hover:text-red-400"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
+              <div className="absolute right-2 top-2 z-30 flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setConfigWidgetId(widget.id)}
+                  className={cn(
+                    "inline-flex h-7 w-7 items-center justify-center rounded border shadow-sm",
+                    configWidgetId === widget.id
+                      ? "border-orange-500 bg-orange-500 text-white"
+                      : "border-slate-200 bg-white text-slate-500 hover:text-orange-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
+                  )}
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    removeOverviewWidget(widget.id);
+                    if (configWidgetId === widget.id) setConfigWidgetId(null);
+                  }}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 shadow-sm hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-red-500/50 dark:hover:text-red-400"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
               {renderWidgetBody(widget)}
             </div>
           ))}
