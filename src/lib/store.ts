@@ -33,6 +33,8 @@ export interface ChartConfig {
   title: string;
   type: 'bar' | 'pie' | 'line';
   dataSource: 'energy' | 'devices' | 'alerts' | 'solar' | 'coldStorage' | 'waterPump' | 'airCompressor';
+  deviceIds?: string[];
+  metricKey?: string;
 }
 
 export type OverviewKpiKey =

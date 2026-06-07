@@ -65,6 +65,27 @@ const averageMetric = (devices: Device[], metric: string) => {
 const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
   const fallbackData = chartProfiles[chartConf.dataSource] || [];
   if (!devices || devices.length === 0) return fallbackData;
+  const boundMetric = chartConf.metricKey;
+
+  if (boundMetric) {
+    const deviceMetricData = devices
+      .map((device) => {
+        const value = Number(device.metrics?.[boundMetric]) || 0;
+        return { name: device.name, value, A: value };
+      })
+      .filter((item) => item.value !== 0);
+
+    if (chartConf.type === 'pie' || chartConf.type === 'bar') {
+      return deviceMetricData.length ? deviceMetricData : [{ name: boundMetric, value: 0, A: 0 }];
+    }
+
+    const totalValue = deviceMetricData.reduce((total, item) => total + item.value, 0);
+    const factor = Math.max(totalValue / 600, 0.2);
+    return fallbackData.map((item) => ({
+      ...item,
+      A: Number((item.A * factor).toFixed(1)),
+    }));
+  }
 
   if (chartConf.dataSource === 'devices') {
     return [
@@ -75,7 +96,8 @@ const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
   }
 
   if (chartConf.dataSource === 'energy') {
-    const factor = Math.max(sumMetric(devices, 'energy_today') / 600, 0.2);
+    const metric = boundMetric || 'energy_today';
+    const factor = Math.max(sumMetric(devices, metric) / 600, 0.2);
     return fallbackData.map((item) => ({
       ...item,
       A: Math.round(item.A * factor),
@@ -89,7 +111,7 @@ const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
     waterPump: 'pressure',
     airCompressor: 'pressure',
   };
-  const metric = metricBySource[chartConf.dataSource];
+  const metric = boundMetric || metricBySource[chartConf.dataSource];
   if (!metric) return fallbackData;
 
   const averageValue = averageMetric(devices, metric);
