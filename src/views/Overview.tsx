@@ -653,6 +653,19 @@ export function Overview() {
   ];
   const widgetPresetCategories = Array.from(new Set(WIDGET_PRESET_LIBRARY.map((preset) => preset.category)));
 
+  useEffect(() => {
+    if (!configWidget) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setConfigWidgetId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [configWidget]);
+
   const getWidgetDevices = (widget: OverviewWidget) => {
     if (widget.deviceIds?.length) {
       const selectedDeviceIds = new Set(widget.deviceIds);
@@ -1521,8 +1534,32 @@ export function Overview() {
       )}
 
       {configWidget && (
-        <div className="rounded-lg border border-orange-200 dark:border-orange-500/30 bg-white dark:bg-[#1c2128] p-4 shadow-sm">
-          <div className="grid gap-4 xl:grid-cols-[minmax(220px,360px)_1fr_auto] xl:items-start">
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Widget configuration"
+          onClick={() => setConfigWidgetId(null)}
+        >
+          <div
+            className="max-h-[88vh] w-full max-w-5xl overflow-y-auto rounded-lg border border-orange-200 bg-white p-4 shadow-2xl dark:border-orange-500/30 dark:bg-[#1c2128]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Widget Configuration</h2>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{getWidgetTitle(configWidget)}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfigWidgetId(null)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded border border-slate-300 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                aria-label="Close widget configuration"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(220px,360px)_1fr] xl:items-start">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Widget title</label>
               <input
@@ -1562,13 +1599,6 @@ export function Overview() {
                 )}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setConfigWidgetId(null)}
-              className="inline-flex h-10 items-center justify-center rounded border border-slate-300 dark:border-slate-700 px-3 text-slate-500 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800"
-            >
-              <X className="h-4 w-4" />
-            </button>
           </div>
           {configWidget.type === 'custom' && (
             <div className="mt-4 space-y-3 border-t border-orange-100 pt-4 dark:border-orange-500/20">
@@ -1642,6 +1672,7 @@ export function Overview() {
               </div>
             </div>
           )}
+          </div>
         </div>
       )}
 
