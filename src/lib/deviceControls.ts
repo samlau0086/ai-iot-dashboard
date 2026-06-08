@@ -22,6 +22,8 @@ export type DeviceControlDefinition = {
   valueType: DeviceControlValueType;
   parameterKey?: string;
   defaultValue?: string | number | boolean;
+  toggleOnValue?: string | number | boolean;
+  toggleOffValue?: string | number | boolean;
   options?: Array<{ value: string; label: string }>;
   fields?: Array<{ key: string; label: string; valueType: 'text' | 'number' | 'select'; defaultValue?: string | number | boolean; options?: Array<{ value: string; label: string }>; unit?: string }>;
   min?: number;
@@ -154,7 +156,13 @@ export const buildControlParameters = (
 ) => {
   if (definition.valueType === 'none') return {};
   if (definition.valueType === 'toggle') {
-    return { [definition.parameterKey || definition.id]: Boolean(controlValues[definition.id]) };
+    const isOn = Boolean(controlValues[definition.id]);
+    const hasMappedValues = definition.toggleOnValue !== undefined || definition.toggleOffValue !== undefined;
+    return {
+      [definition.parameterKey || definition.id]: hasMappedValues
+        ? (isOn ? definition.toggleOnValue : definition.toggleOffValue)
+        : isOn,
+    };
   }
   if (definition.valueType === 'parameter_group') {
     return (definition.fields || []).reduce<Record<string, any>>((acc, field) => {

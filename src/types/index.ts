@@ -28,6 +28,8 @@ export interface DeviceConfig {
     valueType: 'none' | 'toggle' | 'select' | 'slider' | 'range' | 'number' | 'text' | 'parameter_group';
     parameterKey?: string;
     defaultValue?: string | number | boolean;
+    toggleOnValue?: string | number | boolean;
+    toggleOffValue?: string | number | boolean;
     options?: Array<{ value: string; label: string }>;
     fields?: Array<{ key: string; label: string; valueType: 'text' | 'number' | 'select'; defaultValue?: string | number | boolean; options?: Array<{ value: string; label: string }>; unit?: string }>;
     min?: number;

@@ -133,6 +133,27 @@ export function DeviceDetails() {
   const saveControlDraft = () => {
     if (!controlDraft) return;
     let nextDraft = { ...controlDraft };
+    const parseToggleMappedValue = (value: unknown) => {
+      const rawValue = String(value ?? '').trim();
+      if (!rawValue) return undefined;
+      if (rawValue === 'true') return true;
+      if (rawValue === 'false') return false;
+      const numericValue = Number(rawValue);
+      return Number.isFinite(numericValue) && rawValue !== '' ? numericValue : rawValue;
+    };
+    if (nextDraft.valueType === 'toggle') {
+      nextDraft = {
+        ...nextDraft,
+        toggleOnValue: parseToggleMappedValue(nextDraft.toggleOnValue),
+        toggleOffValue: parseToggleMappedValue(nextDraft.toggleOffValue),
+      };
+    } else {
+      nextDraft = {
+        ...nextDraft,
+        toggleOnValue: undefined,
+        toggleOffValue: undefined,
+      };
+    }
     if (nextDraft.valueType === 'select') {
       nextDraft = {
         ...nextDraft,
@@ -766,6 +787,28 @@ export function DeviceDetails() {
                   className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                 />
               </div>
+              {controlDraft.valueType === 'toggle' && (
+                <div className="grid grid-cols-2 gap-3 sm:col-span-2">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">ON Value</label>
+                    <input
+                      value={String(controlDraft.toggleOnValue ?? '')}
+                      onChange={(event) => setControlDraft((current) => current ? { ...current, toggleOnValue: event.target.value } : current)}
+                      placeholder="true / 1 / ON / open"
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">OFF Value</label>
+                    <input
+                      value={String(controlDraft.toggleOffValue ?? '')}
+                      onChange={(event) => setControlDraft((current) => current ? { ...current, toggleOffValue: event.target.value } : current)}
+                      placeholder="false / 0 / OFF / close"
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    />
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Unit</label>
                 <input
