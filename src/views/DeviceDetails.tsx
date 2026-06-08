@@ -538,20 +538,35 @@ export function DeviceDetails() {
                       )}
 
                       {control.valueType === 'toggle' && (
-                        <label className="mt-4 flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950">
+                        <div className="mt-4 flex items-center justify-between gap-3 rounded border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950">
                           <span className="text-slate-600 dark:text-slate-300">{control.parameterKey || control.id}</span>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(controlValues[control.id])}
+                          <button
+                            type="button"
                             disabled={!canControl || submittingControlId === control.id}
-                            onChange={(event) => {
-                              const nextControlValues = { ...controlValues, [control.id]: event.target.checked };
+                            onClick={() => {
+                              const nextValue = !Boolean(controlValues[control.id]);
+                              const nextControlValues = { ...controlValues, [control.id]: nextValue };
                               setControlValues(nextControlValues);
                               submitDeviceControl(control.id, nextControlValues);
                             }}
-                            className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
-                          />
-                        </label>
+                            className={cn(
+                              "relative inline-flex h-10 w-24 shrink-0 items-center rounded-full border-2 px-2 font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                              Boolean(controlValues[control.id])
+                                ? "justify-start border-slate-950 bg-slate-950 text-white dark:border-orange-500 dark:bg-orange-600"
+                                : "justify-end border-slate-950 bg-white text-slate-950 dark:border-slate-400 dark:bg-slate-950 dark:text-white"
+                            )}
+                          >
+                            <span className="z-10 text-sm">{Boolean(controlValues[control.id]) ? 'ON' : 'OFF'}</span>
+                            <span
+                              className={cn(
+                                "absolute top-1 h-7 w-7 rounded-full transition-all",
+                                Boolean(controlValues[control.id])
+                                  ? "right-1 bg-white"
+                                  : "left-1 bg-slate-950 dark:bg-white"
+                              )}
+                            />
+                          </button>
+                        </div>
                       )}
 
                       {(control.valueType === 'range' || control.valueType === 'slider') && (
