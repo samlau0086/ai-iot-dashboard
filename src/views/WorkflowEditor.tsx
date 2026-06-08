@@ -8,6 +8,7 @@ import {
   GitBranch, GitCommit, Settings2, Timer, ChevronDown, Radio, Wifi, Bell
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
 
 interface WorkflowEditorProps {
   workflowId: string;
@@ -21,6 +22,7 @@ const getActionIcon = (type: string) => {
     case 'ticket': return <Ticket className="h-5 w-5 text-purple-500" />;
     case 'start_backup': return <Power className="h-5 w-5 text-orange-500" />;
     case 'stop_device': return <PowerOff className="h-5 w-5 text-red-500" />;
+    case 'device_control': return <Settings2 className="h-5 w-5 text-orange-500" />;
     case 'webhook': return <Globe className="h-5 w-5 text-indigo-500" />;
     case 'report': return <FileText className="h-5 w-5 text-slate-500" />;
     case 'ai_analyze': return <BrainCircuit className="h-5 w-5 text-orange-600" />;
@@ -40,6 +42,7 @@ const getActionIcon = (type: string) => {
     case 'mqtt_message': return <Radio className="h-5 w-5 text-sky-500" />;
     case 'mqtt_publish': return <Wifi className="h-5 w-5 text-sky-600" />;
     case 'notification': return <Bell className="h-5 w-5 text-yellow-500" />;
+    case 'debug': return <Activity className="h-5 w-5 text-lime-500" />;
     default: return <Zap className="h-5 w-5 text-slate-400" />;
   }
 };
@@ -57,11 +60,13 @@ const defaultConfigs: Record<string, any> = {
   ticket: { priority: 'high', assignee: 'maintenance' },
   start_backup: { target: '' },
   stop_device: { target: '' },
+  device_control: { device: '', controlId: '', value: '', parameterName: '', parameters: {} },
   report: { frequency: 'weekly', recipient: 'manager@factory.com' },
   ai_analyze: { prompt: 'Analyze possible causes for the event.' },
   delay: { duration: '60s' },
   mqtt_publish: { target: '', topic: 'control/device', payload: '{"cmd":"stop"}' },
   notification: { message: 'Alert triggered!' },
+  debug: { expression: '', label: 'Debug snapshot' },
   if: { device: '', metric: 'temperature', condition: '>', value: 10 },
   elif: { device: '', metric: 'power', condition: '>', value: 1000 },
   else: {},
@@ -390,6 +395,36 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
   const getActionLabel = (type: string) => {
     return (t.workflows.actionTypes as any)[type] || (t.workflows.conditionTypes as any)[type] || (t.workflows.triggerTypes as any)[type] || type;
+  };
+
+  const updateNodeConfig = (nodeId: string, patch: Record<string, any>) => {
+    const newNodes = draft.nodes.map(n =>
+      n.id === nodeId ? { ...n, config: { ...n.config, ...patch } } : n
+    );
+    setDraft({ ...draft, nodes: newNodes });
+  };
+
+  const buildWorkflowControlPatch = (deviceId: string, controlId?: string) => {
+    const device = devices.find((item) => item.id === deviceId);
+    const controls = getDeviceControlDefinitions(device);
+    const control = controls.find((item) => item.id === controlId) || controls[0];
+    if (!control) return { device: deviceId, controlId: '', value: '', parameterName: '', parameters: {} };
+
+    const valueKey = control.valueType === 'parameter_group'
+      ? ''
+      : control.id;
+    const controlValues = control.valueType === 'parameter_group'
+      ? Object.fromEntries((control.fields || []).map((field) => [`${control.id}.${field.key}`, field.defaultValue ?? '']))
+      : { [control.id]: control.defaultValue ?? (control.valueType === 'toggle' ? true : '') };
+    const parameters = buildControlParameters(control, controlValues, 'parameter');
+
+    return {
+      device: deviceId,
+      controlId: control.id,
+      value: valueKey ? controlValues[valueKey] : '',
+      parameterName: control.id === 'set_parameter' ? 'parameter' : '',
+      parameters,
+    };
   };
 
   const addNode = (type: string, isTrigger: boolean, isCondition: boolean = false) => {
@@ -952,7 +987,153 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
                   <div className="space-y-4">
                     <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Configuration</label>
+                    {node.config.type === 'device_control' ? (() => {
+                      const selectedDevice = devices.find((device) => device.id === node.config.device);
+                      const controlDefinitions = getDeviceControlDefinitions(selectedDevice);
+                      const selectedControl = controlDefinitions.find((control) => control.id === node.config.controlId) || controlDefinitions[0];
+                      const controlValue = node.config.value ?? selectedControl?.defaultValue ?? '';
+                      const parameterValues = node.config.parameters || {};
+
+                      const updateControlValue = (value: any) => {
+                        if (!selectedControl) return;
+                        const controlValues = selectedControl.valueType === 'parameter_group'
+                          ? Object.fromEntries((selectedControl.fields || []).map((field) => [
+                            `${selectedControl.id}.${field.key}`,
+                            field.key in parameterValues ? parameterValues[field.key] : field.defaultValue ?? '',
+                          ]))
+                          : { [selectedControl.id]: value };
+                        const parameters = selectedControl.valueType === 'parameter_group'
+                          ? Object.fromEntries((selectedControl.fields || []).map((field) => [
+                            field.key,
+                            controlValues[`${selectedControl.id}.${field.key}`],
+                          ]))
+                          : buildControlParameters(selectedControl, controlValues, node.config.parameterName || 'parameter');
+
+                        updateNodeConfig(node.id, { value, parameters });
+                      };
+
+                      return (
+                        <div className="space-y-4 rounded-lg border border-orange-200 bg-orange-50/50 p-3 dark:border-orange-500/20 dark:bg-orange-500/5">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Device</label>
+                            <DeviceSelect
+                              value={node.config.device || ''}
+                              onChange={(deviceId) => updateNodeConfig(node.id, buildWorkflowControlPatch(deviceId))}
+                              devices={devices}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Control Action</label>
+                            <select
+                              value={selectedControl?.id || ''}
+                              disabled={!selectedDevice || controlDefinitions.length === 0}
+                              onChange={(event) => updateNodeConfig(node.id, buildWorkflowControlPatch(node.config.device, event.target.value))}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            >
+                              {controlDefinitions.map((control) => (
+                                <option key={control.id} value={control.id}>{control.label}</option>
+                              ))}
+                              {controlDefinitions.length === 0 && <option value="">No controls available</option>}
+                            </select>
+                          </div>
+
+                          {selectedControl && selectedControl.valueType === 'toggle' && (
+                            <label className="flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+                              <span className="text-slate-700 dark:text-slate-300">{selectedControl.parameterKey || selectedControl.id}</span>
+                              <select
+                                value={String(Boolean(controlValue))}
+                                onChange={(event) => updateControlValue(event.target.value === 'true')}
+                                className="rounded border-0 bg-transparent text-sm font-semibold text-orange-600 focus:ring-0 dark:text-orange-400"
+                              >
+                                <option value="true">ON</option>
+                                <option value="false">OFF</option>
+                              </select>
+                            </label>
+                          )}
+
+                          {selectedControl && ['select'].includes(selectedControl.valueType) && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{selectedControl.label}</label>
+                              <select
+                                value={String(controlValue)}
+                                onChange={(event) => updateControlValue(event.target.value)}
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              >
+                                {selectedControl.options?.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          {selectedControl && ['slider', 'range', 'number'].includes(selectedControl.valueType) && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{selectedControl.label}</label>
+                              <input
+                                type="number"
+                                min={selectedControl.min}
+                                max={selectedControl.max}
+                                step={selectedControl.step ?? 1}
+                                value={controlValue}
+                                onChange={(event) => updateControlValue(Number(event.target.value))}
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                            </div>
+                          )}
+
+                          {selectedControl && selectedControl.valueType === 'text' && (
+                            <div className="space-y-3">
+                              {selectedControl.id === 'set_parameter' && (
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Parameter Name</label>
+                                  <input
+                                    value={node.config.parameterName || ''}
+                                    onChange={(event) => updateNodeConfig(node.id, { parameterName: event.target.value })}
+                                    className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                  />
+                                </div>
+                              )}
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{selectedControl.label}</label>
+                                <input
+                                  value={controlValue}
+                                  onChange={(event) => updateControlValue(event.target.value)}
+                                  className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {selectedControl && selectedControl.valueType === 'parameter_group' && (
+                            <div className="space-y-3">
+                              {(selectedControl.fields || []).map((field) => (
+                                <div key={field.key}>
+                                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{field.label}</label>
+                                  <input
+                                    type={field.valueType === 'number' ? 'number' : 'text'}
+                                    value={parameterValues[field.key] ?? field.defaultValue ?? ''}
+                                    onChange={(event) => {
+                                      const nextParameters = { ...parameterValues, [field.key]: field.valueType === 'number' ? Number(event.target.value) : event.target.value };
+                                      updateNodeConfig(node.id, { parameters: nextParameters });
+                                    }}
+                                    className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {selectedControl && selectedControl.valueType === 'none' && (
+                            <div className="rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                              This action has no extra parameters and will execute directly when the workflow reaches this node.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })() : null}
                     {Object.entries(node.config).map(([key, value]) => {
+                      if (node.config.type === 'device_control') return null;
                       if (key === 'type') return null;
                       
                       const isDeviceSelect = (key === 'device' && (node.type === 'trigger' || ['if', 'elif'].includes(node.config.type))) ||

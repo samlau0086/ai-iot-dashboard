@@ -1068,6 +1068,22 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
     return {...baseStep, status: 'queued', output: `Delay requested: ${config.duration || '60s'}`};
   }
 
+  if (config.type === 'debug') {
+    const expression = String(config.expression || '').trim();
+    const resolved = expression ? resolveWorkflowValue(expression, context) : context;
+    return {
+      ...baseStep,
+      status: 'success',
+      output: {
+        label: config.label || 'Debug snapshot',
+        expression: expression || '$',
+        resolved,
+        context,
+        event,
+      },
+    };
+  }
+
   if (config.type === 'mqtt_publish') {
     const command = await createDeviceControlCommand({
       deviceId: config.target || event.deviceId || event.device?.id,
@@ -1078,6 +1094,20 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
       source: `workflow:${workflow.id}`,
     });
     return {...baseStep, status: command.status, output: {commandId: command.id, command: command.command, status: command.status, result: command.result}};
+  }
+
+  if (config.type === 'device_control') {
+    const command = await createDeviceControlCommand({
+      deviceId: config.device || config.target || event.deviceId || event.device?.id,
+      command: config.controlId || config.command || 'device_control',
+      parameters: config.parameters && typeof config.parameters === 'object'
+        ? config.parameters
+        : {value: config.value},
+      requestedBy: `Workflow: ${workflow.name}`,
+      requestedByRole: 'Workflow',
+      source: `workflow:${workflow.id}`,
+    });
+    return {...baseStep, status: command.status, output: {commandId: command.id, command: command.command, status: command.status, result: command.result, parameters: command.parameters}};
   }
 
   if (config.type === 'start_backup' || config.type === 'stop_device') {
