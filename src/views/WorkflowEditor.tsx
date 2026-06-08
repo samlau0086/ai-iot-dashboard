@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore, Workflow, WorkflowEdge, WorkflowNode } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
@@ -190,6 +190,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     allowedConditionTypes?: string[];
   }>({ show: false, insertIndex: 0 });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [liveMode, setLiveMode] = useState(false);
+  const [liveState, setLiveState] = useState<any>(null);
+  const [liveNodeId, setLiveNodeId] = useState<string | null>(null);
+  const lastLiveRunKeyRef = useRef('');
+  const liveReplayTimersRef = useRef<number[]>([]);
 
   const triggerNodes = draft.nodes.filter(n => n.type === 'trigger');
   const otherNodes = draft.nodes.filter(n => n.type !== 'trigger');
@@ -296,6 +301,71 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       if (existing) setDraft(existing);
     }
   }, [workflowId, workflows, isNew]);
+
+  useEffect(() => {
+    return () => {
+      liveReplayTimersRef.current.forEach(window.clearTimeout);
+      liveReplayTimersRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!liveMode) {
+      liveReplayTimersRef.current.forEach(window.clearTimeout);
+      liveReplayTimersRef.current = [];
+      setLiveState(null);
+      setLiveNodeId(null);
+      return;
+    }
+
+    let stopped = false;
+    const loadLiveState = async () => {
+      try {
+        const response = await fetch(`/api/workflow-live/${draft.id}`);
+        const payload = await response.json();
+        if (stopped) return;
+
+        const live = payload.live || null;
+        setLiveState(live);
+        if (!live) {
+          setLiveNodeId(null);
+          return;
+        }
+
+        if (live.status === 'running' && live.currentNodeId) {
+          liveReplayTimersRef.current.forEach(window.clearTimeout);
+          liveReplayTimersRef.current = [];
+          lastLiveRunKeyRef.current = live.runId || '';
+          setLiveNodeId(live.currentNodeId);
+          return;
+        }
+
+        const steps = Array.isArray(live.steps) ? live.steps : [];
+        const runKey = `${live.runId || ''}:${live.finishedAt || live.updatedAt || ''}:${steps.length}`;
+        if (steps.length > 0 && runKey !== lastLiveRunKeyRef.current) {
+          lastLiveRunKeyRef.current = runKey;
+          liveReplayTimersRef.current.forEach(window.clearTimeout);
+          liveReplayTimersRef.current = [];
+          steps.forEach((step: any, index: number) => {
+            const timer = window.setTimeout(() => setLiveNodeId(step.nodeId), index * 450);
+            liveReplayTimersRef.current.push(timer);
+          });
+          const clearTimer = window.setTimeout(() => setLiveNodeId(null), steps.length * 450 + 900);
+          liveReplayTimersRef.current.push(clearTimer);
+        }
+      } catch {
+        if (!stopped) setLiveState(null);
+      }
+    };
+
+    loadLiveState();
+    const timer = window.setInterval(loadLiveState, 1000);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [liveMode, draft.id]);
 
   const buildWorkflowEdges = () => {
     const edges: WorkflowEdge[] = [];
@@ -505,7 +575,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
           isSelected ? "border-orange-500 ring-4 ring-orange-500/10 shadow-orange-500/10" : isTrigger ? "border-slate-200 dark:border-slate-700" : isCondition ? "border-indigo-200 dark:border-indigo-900/50" : "border-slate-200 dark:border-slate-700",
           isTrigger && !isSelected && "border-orange-200 dark:border-orange-900/50",
           isCondition && !isSelected && !isLogic && "border-indigo-200 dark:border-indigo-900/50",
-          isLogic && !isSelected && "border-purple-300 dark:border-purple-800"
+          isLogic && !isSelected && "border-purple-300 dark:border-purple-800",
+          liveMode && liveNodeId === node.id && "workflow-live-node border-emerald-400 dark:border-emerald-400 shadow-emerald-500/20"
         )}
       >
         <div className="flex items-center gap-4 min-w-0">
@@ -752,6 +823,28 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </div>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto justify-end shrink-0">
+            {liveMode && (
+              <span className="hidden md:inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
+                {liveState?.status === 'running'
+                  ? `Running${liveState?.currentNodeId ? `: ${draft.nodes.find((node) => node.id === liveState.currentNodeId)?.name || liveState.currentNodeId}` : ''}`
+                  : liveState?.status
+                    ? `Last run: ${liveState.status}`
+                    : 'Waiting for trigger'}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setLiveMode((value) => !value)}
+              className={cn(
+                "px-3 py-1.5 rounded-md border text-sm font-medium flex items-center gap-2 transition-colors",
+                liveMode
+                  ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+                  : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+              )}
+            >
+              <Activity className="h-4 w-4" />
+              Live
+            </button>
             <button
               onClick={() => setDraft({ ...draft, enabled: !draft.enabled })}
               className={cn(

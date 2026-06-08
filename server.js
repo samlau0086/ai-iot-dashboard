@@ -21,6 +21,7 @@ const databaseSsl = process.env.DATABASE_SSL === 'true' ? {rejectUnauthorized: f
 const db = databaseUrl ? new Pool({connectionString: databaseUrl, ssl: databaseSsl}) : null;
 const telemetryMessages = [];
 const workflowRuns = [];
+const workflowLiveStates = new Map();
 const deviceControlCommands = [];
 const maxTelemetryMessages = Number(process.env.IOT_TELEMETRY_BUFFER_SIZE || 500);
 const maxWorkflowRuns = Number(process.env.WORKFLOW_RUN_BUFFER_SIZE || 500);
@@ -743,6 +744,46 @@ const persistWorkflowRun = async (run) => {
   );
 };
 
+const updateWorkflowLiveState = (workflow, patch) => {
+  const current = workflowLiveStates.get(workflow.id) || {
+    runId: createId('live'),
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    status: 'running',
+    currentNodeId: null,
+    steps: [],
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const next = {
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  workflowLiveStates.set(workflow.id, next);
+  return next;
+};
+
+const appendWorkflowLiveStep = (workflow, step) => {
+  const current = workflowLiveStates.get(workflow.id);
+  const steps = [...(current?.steps || []), step].slice(-200);
+  updateWorkflowLiveState(workflow, {
+    steps,
+    currentNodeId: step.nodeId,
+    status: step.status === 'failed' ? 'failed' : 'running',
+  });
+};
+
+const completeWorkflowLiveState = (workflow, status, steps) => {
+  const current = workflowLiveStates.get(workflow.id);
+  updateWorkflowLiveState(workflow, {
+    status,
+    currentNodeId: null,
+    steps: steps || current?.steps || [],
+    finishedAt: new Date().toISOString(),
+  });
+};
+
 const persistDeviceControlCommand = async (command) => {
   deviceControlCommands.unshift(command);
   if (deviceControlCommands.length > maxDeviceControlCommands) {
@@ -1146,6 +1187,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
 
   const persistResult = async (status) => {
     const finishedAt = new Date().toISOString();
+    completeWorkflowLiveState(workflow, status, steps);
     await persistWorkflowRun({
       id: createId('wfr'),
       workflowId: workflow.id,
@@ -1163,14 +1205,17 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
   while (currentNode && guard < 200) {
     guard++;
     if (visited.has(currentNode.id)) {
-      steps.push({
+      const step = {
         nodeId: currentNode.id,
+        nodeName: nodeNamesById.get(currentNode.id) || normalizeWorkflowNodeName(currentNode, currentNode.id),
         type: currentNode.config?.type || currentNode.type,
         status: 'failed',
         output: 'Workflow graph cycle detected.',
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
-      });
+      };
+      steps.push(step);
+      appendWorkflowLiveStep(workflow, step);
       await persistResult('failed');
       return;
     }
@@ -1178,6 +1223,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
 
     const outgoing = outgoingEdges.get(currentNode.id) || [];
     const nodeName = nodeNamesById.get(currentNode.id) || normalizeWorkflowNodeName(currentNode, currentNode.id);
+    updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: currentNode.id});
 
     if (currentNode.type === 'trigger') {
       const input = createWorkflowNodeInput(currentNode, event, context);
@@ -1188,6 +1234,15 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
         status: 'success',
         input,
         output: event,
+      });
+      appendWorkflowLiveStep(workflow, {
+        nodeId: currentNode.id,
+        nodeName,
+        type: currentNode.config?.type || 'trigger',
+        status: 'success',
+        output: 'Trigger matched',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
       });
       const nextEdge = outgoing.find((edge) => edge.type === 'next') || outgoing[0];
       currentNode = nodesById.get(nextEdge?.target);
@@ -1213,6 +1268,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
       };
       steps.push(step);
       recordWorkflowNodeResult(context, nodeName, step);
+      appendWorkflowLiveStep(workflow, step);
 
       const nextEdge = passed
         ? outgoing.find((edge) => edge.type === 'true' || edge.type === 'next')
@@ -1232,6 +1288,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
         const step = await executeWorkflowAction(workflow, currentNode, event, context, nodeName);
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
+        appendWorkflowLiveStep(workflow, step);
       } catch (error) {
         const input = createWorkflowNodeInput(currentNode, event, context);
         const step = {
@@ -1246,6 +1303,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
         };
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
+        appendWorkflowLiveStep(workflow, step);
       }
 
       const nextEdge = outgoing.find((edge) => edge.type === 'next' || edge.type === 'continue');
@@ -1257,14 +1315,17 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
   }
 
   if (guard >= 200) {
-    steps.push({
+    const step = {
       nodeId: currentNode?.id || 'workflow',
+      nodeName: currentNode ? nodeNamesById.get(currentNode.id) || normalizeWorkflowNodeName(currentNode, currentNode.id) : 'workflow',
       type: 'workflow',
       status: 'failed',
       output: 'Workflow graph execution exceeded step limit.',
       startedAt: new Date().toISOString(),
       finishedAt: new Date().toISOString(),
-    });
+    };
+    steps.push(step);
+    appendWorkflowLiveStep(workflow, step);
     await persistResult('failed');
     return;
   }
@@ -1274,6 +1335,16 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
 
 const executeWorkflow = async (workflow, trigger, event) => {
   const startedAt = new Date().toISOString();
+  updateWorkflowLiveState(workflow, {
+    runId: createId('live'),
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    status: 'running',
+    currentNodeId: trigger.id,
+    steps: [],
+    startedAt,
+    finishedAt: undefined,
+  });
   if (Array.isArray(workflow.edges) && workflow.edges.length > 0) {
     await executeWorkflowWithEdges(workflow, trigger, event, startedAt);
     return;
@@ -1293,6 +1364,15 @@ const executeWorkflow = async (workflow, trigger, event) => {
     status: 'success',
     input: createWorkflowNodeInput(trigger, event, context),
     output: event,
+  });
+  appendWorkflowLiveStep(workflow, {
+    nodeId: trigger.id,
+    nodeName: triggerName,
+    type: trigger.config?.type || 'trigger',
+    status: 'success',
+    output: 'Trigger matched',
+    startedAt,
+    finishedAt: new Date().toISOString(),
   });
 
   if (branchConditions.length > 0) {
@@ -1337,6 +1417,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
 
         const matchedBranch = branches.find(({condition}) => {
           const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
+          updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: condition.id});
           const input = createWorkflowNodeInput(condition, event, context);
           const passed = conditionMatchesEvent(condition, event, context);
           const step = {
@@ -1351,11 +1432,13 @@ const executeWorkflow = async (workflow, trigger, event) => {
           };
           steps.push(step);
           recordWorkflowNodeResult(context, nodeName, step);
+          appendWorkflowLiveStep(workflow, step);
           return passed;
         });
 
         if (!matchedBranch) {
           const finishedAt = new Date().toISOString();
+          completeWorkflowLiveState(workflow, 'skipped', steps);
           await persistWorkflowRun({
             id: createId('wfr'),
             workflowId: workflow.id,
@@ -1377,6 +1460,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
 
       if (node.type === 'condition') {
         const nodeName = nodeNamesById.get(node.id) || normalizeWorkflowNodeName(node, node.id);
+        updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: node.id});
         const input = createWorkflowNodeInput(node, event, context);
         const passed = conditionMatchesEvent(node, event, context);
         const step = {
@@ -1391,8 +1475,10 @@ const executeWorkflow = async (workflow, trigger, event) => {
         };
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
+        appendWorkflowLiveStep(workflow, step);
         if (!passed) {
           const finishedAt = new Date().toISOString();
+          completeWorkflowLiveState(workflow, 'skipped', steps);
           await persistWorkflowRun({
             id: createId('wfr'),
             workflowId: workflow.id,
@@ -1420,11 +1506,14 @@ const executeWorkflow = async (workflow, trigger, event) => {
     for (const action of selectedActions) {
       try {
         const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
+        updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
         const step = await executeWorkflowAction(workflow, action, event, context, nodeName);
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
+        appendWorkflowLiveStep(workflow, step);
       } catch (error) {
         const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
+        updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
         const input = createWorkflowNodeInput(action, event, context);
         const step = {
           nodeId: action.id,
@@ -1438,10 +1527,12 @@ const executeWorkflow = async (workflow, trigger, event) => {
         };
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
+        appendWorkflowLiveStep(workflow, step);
       }
     }
 
     const finishedAt = new Date().toISOString();
+    completeWorkflowLiveState(workflow, steps.some((step) => step.status === 'failed') ? 'failed' : 'success', steps);
     await persistWorkflowRun({
       id: createId('wfr'),
       workflowId: workflow.id,
@@ -1462,6 +1553,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
 
   for (const condition of conditions) {
     const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
+    updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: condition.id});
     const input = createWorkflowNodeInput(condition, event, context);
     const passed = conditionMatchesEvent(condition, event, context);
     const step = {
@@ -1476,8 +1568,10 @@ const executeWorkflow = async (workflow, trigger, event) => {
     };
     steps.push(step);
     recordWorkflowNodeResult(context, nodeName, step);
+    appendWorkflowLiveStep(workflow, step);
     if (!passed) {
       const finishedAt = new Date().toISOString();
+      completeWorkflowLiveState(workflow, 'skipped', steps);
       await persistWorkflowRun({
         id: createId('wfr'),
         workflowId: workflow.id,
@@ -1497,11 +1591,14 @@ const executeWorkflow = async (workflow, trigger, event) => {
   for (const action of actions) {
     try {
       const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
+      updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
       const step = await executeWorkflowAction(workflow, action, event, context, nodeName);
       steps.push(step);
       recordWorkflowNodeResult(context, nodeName, step);
+      appendWorkflowLiveStep(workflow, step);
     } catch (error) {
       const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
+      updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
       const input = createWorkflowNodeInput(action, event, context);
       const step = {
         nodeId: action.id,
@@ -1515,10 +1612,12 @@ const executeWorkflow = async (workflow, trigger, event) => {
       };
       steps.push(step);
       recordWorkflowNodeResult(context, nodeName, step);
+      appendWorkflowLiveStep(workflow, step);
     }
   }
 
   const finishedAt = new Date().toISOString();
+  completeWorkflowLiveState(workflow, steps.some((step) => step.status === 'failed') ? 'failed' : 'success', steps);
   await persistWorkflowRun({
     id: createId('wfr'),
     workflowId: workflow.id,
@@ -2414,6 +2513,28 @@ app.get('/api/workflow-runs', async (req, res) => {
     res.status(200).json({runs});
   } catch (error) {
     res.status(500).json({error: error.message, runs: []});
+  }
+});
+
+app.get('/api/workflow-live/:workflowId', async (req, res) => {
+  try {
+    const state = workflowLiveStates.get(req.params.workflowId);
+    if (!state) {
+      res.status(200).json({live: null});
+      return;
+    }
+
+    const lastTouched = Date.parse(state.updatedAt || state.finishedAt || state.startedAt || '');
+    const age = Number.isFinite(lastTouched) ? Date.now() - lastTouched : 0;
+    if (state.status !== 'running' && age > 30000) {
+      workflowLiveStates.delete(req.params.workflowId);
+      res.status(200).json({live: null});
+      return;
+    }
+
+    res.status(200).json({live: state});
+  } catch (error) {
+    res.status(500).json({error: error.message, live: null});
   }
 });
 
