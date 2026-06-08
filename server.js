@@ -1035,6 +1035,50 @@ const stringifyReferenceValue = (value) => {
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
 };
 
+const parseJsonConfig = (value, fallback) => {
+  if (value && typeof value === 'object') return value;
+  if (typeof value !== 'string' || !value.trim()) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+};
+
+const setObjectPath = (target, pathExpression, value) => {
+  const keys = String(pathExpression || '').split('.').filter(Boolean);
+  if (keys.length === 0) return value;
+  let current = target;
+  keys.forEach((key, index) => {
+    if (index === keys.length - 1) {
+      current[key] = value;
+      return;
+    }
+    if (!current[key] || typeof current[key] !== 'object') current[key] = {};
+    current = current[key];
+  });
+  return target;
+};
+
+const unitConverters = {
+  'C:F': (value) => value * 9 / 5 + 32,
+  'F:C': (value) => (value - 32) * 5 / 9,
+  'C:K': (value) => value + 273.15,
+  'K:C': (value) => value - 273.15,
+  'W:kW': (value) => value / 1000,
+  'kW:W': (value) => value * 1000,
+  'Wh:kWh': (value) => value / 1000,
+  'kWh:Wh': (value) => value * 1000,
+  'bar:psi': (value) => value * 14.5038,
+  'psi:bar': (value) => value / 14.5038,
+};
+
+const getWorkflowScopedValue = (pathExpression, scope) => {
+  const referenceValue = resolveWorkflowReference(pathExpression, scope.context || {});
+  if (referenceValue !== undefined) return referenceValue;
+  return getObjectPath(scope, pathExpression);
+};
+
 const resolveWorkflowValue = (value, context) => {
   if (typeof value === 'string') {
     const wholeReference = resolveWorkflowReference(value, context);
@@ -1123,6 +1167,127 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
         event,
       },
     };
+  }
+
+  if (config.type === 'set') {
+    const assignments = parseJsonConfig(config.assignments, {});
+    const base = config.mergeMode === 'replace' ? {} : {
+      ...(event.message && typeof event.message === 'object' ? event.message : {}),
+      ...(event.payload && typeof event.payload === 'object' ? event.payload : {}),
+    };
+    Object.entries(assignments).forEach(([pathExpression, assignmentValue]) => {
+      setObjectPath(base, pathExpression, resolveWorkflowValue(assignmentValue, context));
+    });
+    return {...baseStep, output: base};
+  }
+
+  if (config.type === 'function') {
+    try {
+      const runner = new Function('input', 'event', 'context', 'config', `return (async () => { ${String(config.code || '')} })();`);
+      const output = await runner(input, event, context, config);
+      return {...baseStep, output};
+    } catch (error) {
+      return {...baseStep, status: 'failed', output: `Function error: ${error.message}`};
+    }
+  }
+
+  if (config.type === 'switch') {
+    const scope = {input, event, context, config};
+    const value = getWorkflowScopedValue(config.property, scope);
+    const rules = parseJsonConfig(config.rules, []);
+    const matched = (Array.isArray(rules) ? rules : []).filter((rule) => (
+      compareValues(value, rule.condition || rule.operator || '==', rule.value)
+    ));
+    return {
+      ...baseStep,
+      status: matched.length > 0 ? 'success' : 'skipped',
+      output: {property: config.property, value, matched},
+    };
+  }
+
+  if (config.type === 'http_request') {
+    if (!config.url || !String(config.url).startsWith('http')) {
+      return {...baseStep, status: 'skipped', output: 'HTTP Request requires an http/https url.'};
+    }
+    const headers = parseJsonConfig(config.headers, {'content-type': 'application/json'});
+    const rawBody = config.body ? resolveWorkflowValue(config.body, context) : undefined;
+    const bodyValue = typeof rawBody === 'string' ? parseJsonConfig(rawBody, rawBody) : rawBody;
+    const response = await fetch(config.url, {
+      method: config.method || 'POST',
+      headers,
+      body: ['GET', 'HEAD'].includes(String(config.method || 'POST').toUpperCase())
+        ? undefined
+        : (typeof bodyValue === 'string' ? bodyValue : JSON.stringify(bodyValue ?? {workflow: workflow.id, event})),
+    });
+    const text = await response.text();
+    return {
+      ...baseStep,
+      status: response.ok ? 'success' : 'failed',
+      finishedAt: new Date().toISOString(),
+      output: {
+        status: response.status,
+        ok: response.ok,
+        body: parseJsonConfig(text, text),
+      },
+    };
+  }
+
+  if (config.type === 'metric_mapper') {
+    const mappings = parseJsonConfig(config.mappings, {});
+    const source = event.message && typeof event.message === 'object'
+      ? event.message
+      : event.payload && typeof event.payload === 'object'
+        ? event.payload
+        : {};
+    const output = {};
+    Object.entries(source).forEach(([key, value]) => {
+      output[mappings[key] || key] = value;
+    });
+    return {...baseStep, output};
+  }
+
+  if (config.type === 'unit_convert') {
+    const scope = {input, event, context, config};
+    const rawValue = getWorkflowScopedValue(config.metric, scope);
+    const numericValue = Number(rawValue);
+    const converterKey = `${config.from}:${config.to}`;
+    const converter = unitConverters[converterKey];
+    if (!Number.isFinite(numericValue) || !converter) {
+      return {...baseStep, status: 'skipped', output: {metric: config.metric, value: rawValue, message: `No converter for ${converterKey}`}};
+    }
+    const converted = Number(converter(numericValue).toFixed(4));
+    return {...baseStep, output: {metric: config.metric, from: config.from, to: config.to, value: converted}};
+  }
+
+  if (config.type === 'command_confirm') {
+    const commandId = config.commandId || event.commandId;
+    const command = deviceControlCommands.find((item) => item.id === commandId);
+    return {
+      ...baseStep,
+      status: command?.status === 'sent' ? 'success' : 'queued',
+      output: command
+        ? {commandId: command.id, status: command.status, result: command.result}
+        : {commandId, status: 'pending', timeout: config.timeout || '30s'},
+    };
+  }
+
+  if (config.type === 'retry') {
+    return {...baseStep, status: 'queued', output: {attempts: Number(config.attempts || 3), interval: config.interval || '10s'}};
+  }
+
+  if (config.type === 'error_catch') {
+    const failedNodes = Object.entries(context)
+      .filter(([, item]) => item?.status === 'failed')
+      .map(([name, item]) => ({name, nodeId: item.nodeId, output: item.output}));
+    return {
+      ...baseStep,
+      status: failedNodes.length > 0 ? 'success' : 'skipped',
+      output: {failedNodes, fallbackMessage: config.fallbackMessage || ''},
+    };
+  }
+
+  if (config.type === 'stop_workflow') {
+    return {...baseStep, status: 'stopped', output: config.reason || 'Stopped by workflow node'};
   }
 
   if (config.type === 'mqtt_publish') {
@@ -1289,6 +1454,10 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
         appendWorkflowLiveStep(workflow, step);
+        if (step.status === 'stopped') {
+          await persistResult('stopped');
+          return;
+        }
       } catch (error) {
         const input = createWorkflowNodeInput(currentNode, event, context);
         const step = {
@@ -1330,7 +1499,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
     return;
   }
 
-  await persistResult(steps.some((step) => step.status === 'failed') ? 'failed' : 'success');
+  await persistResult(steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success');
 };
 
 const executeWorkflow = async (workflow, trigger, event) => {
@@ -1511,6 +1680,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
         appendWorkflowLiveStep(workflow, step);
+        if (step.status === 'stopped') break;
       } catch (error) {
         const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
         updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
@@ -1532,14 +1702,14 @@ const executeWorkflow = async (workflow, trigger, event) => {
     }
 
     const finishedAt = new Date().toISOString();
-    completeWorkflowLiveState(workflow, steps.some((step) => step.status === 'failed') ? 'failed' : 'success', steps);
+    completeWorkflowLiveState(workflow, steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success', steps);
     await persistWorkflowRun({
       id: createId('wfr'),
       workflowId: workflow.id,
       workflowName: workflow.name,
       triggerType: trigger.config?.type || 'unknown',
       eventSource: event.source || event.type,
-      status: steps.some((step) => step.status === 'failed') ? 'failed' : 'success',
+      status: steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success',
       event,
       steps,
       startedAt,
@@ -1596,6 +1766,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
       steps.push(step);
       recordWorkflowNodeResult(context, nodeName, step);
       appendWorkflowLiveStep(workflow, step);
+      if (step.status === 'stopped') break;
     } catch (error) {
       const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
       updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
@@ -1617,14 +1788,14 @@ const executeWorkflow = async (workflow, trigger, event) => {
   }
 
   const finishedAt = new Date().toISOString();
-  completeWorkflowLiveState(workflow, steps.some((step) => step.status === 'failed') ? 'failed' : 'success', steps);
+  completeWorkflowLiveState(workflow, steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success', steps);
   await persistWorkflowRun({
     id: createId('wfr'),
     workflowId: workflow.id,
     workflowName: workflow.name,
     triggerType: trigger.config?.type || 'unknown',
     eventSource: event.source || event.type,
-    status: steps.some((step) => step.status === 'failed') ? 'failed' : 'success',
+    status: steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success',
     event,
     steps,
     startedAt,

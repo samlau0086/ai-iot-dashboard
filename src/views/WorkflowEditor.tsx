@@ -5,7 +5,8 @@ import {
   ArrowLeft, Plus, Save, Trash2, Play, Square,
   MessageCircle, Mail, Ticket, Power, Globe, FileText, BrainCircuit,
   Activity, Clock, Zap, PowerOff, ArrowDown, X, AlertTriangle, Settings,
-  GitBranch, GitCommit, Settings2, Timer, ChevronDown, Radio, Wifi, Bell
+  GitBranch, GitCommit, Settings2, Timer, ChevronDown, Radio, Wifi, Bell,
+  Code2, Shuffle, Ruler, Database, Repeat2, Ban, Braces, Route
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
@@ -43,6 +44,16 @@ const getActionIcon = (type: string) => {
     case 'mqtt_publish': return <Wifi className="h-5 w-5 text-sky-600" />;
     case 'notification': return <Bell className="h-5 w-5 text-yellow-500" />;
     case 'debug': return <Activity className="h-5 w-5 text-lime-500" />;
+    case 'set': return <Braces className="h-5 w-5 text-emerald-500" />;
+    case 'function': return <Code2 className="h-5 w-5 text-violet-500" />;
+    case 'switch': return <Route className="h-5 w-5 text-indigo-500" />;
+    case 'http_request': return <Globe className="h-5 w-5 text-blue-500" />;
+    case 'metric_mapper': return <Shuffle className="h-5 w-5 text-cyan-500" />;
+    case 'unit_convert': return <Ruler className="h-5 w-5 text-amber-500" />;
+    case 'command_confirm': return <Activity className="h-5 w-5 text-emerald-500" />;
+    case 'retry': return <Repeat2 className="h-5 w-5 text-orange-500" />;
+    case 'error_catch': return <Database className="h-5 w-5 text-red-500" />;
+    case 'stop_workflow': return <Ban className="h-5 w-5 text-red-500" />;
     default: return <Zap className="h-5 w-5 text-slate-400" />;
   }
 };
@@ -67,6 +78,16 @@ const defaultConfigs: Record<string, any> = {
   mqtt_publish: { target: '', topic: 'control/device', payload: '{"cmd":"stop"}' },
   notification: { message: 'Alert triggered!' },
   debug: { expression: '', label: 'Debug snapshot' },
+  set: { assignments: '{\n  "payload.status": "processed"\n}', mergeMode: 'merge' },
+  function: { code: 'return { ...input.event, processedAt: new Date().toISOString() };' },
+  switch: { property: 'event.message.status', rules: '[\n  { "label": "warning", "condition": "==", "value": "warning" }\n]' },
+  http_request: { method: 'POST', url: 'https://example.com/webhook', headers: '{"content-type":"application/json"}', body: '{"event":"$.debug.output"}' },
+  metric_mapper: { mappings: '{\n  "temp": "temperature",\n  "pwr": "power"\n}' },
+  unit_convert: { metric: 'event.message.temperature', from: 'F', to: 'C' },
+  command_confirm: { device: '', commandId: '$.device_control.output.commandId', timeout: '30s' },
+  retry: { attempts: 3, interval: '10s' },
+  error_catch: { fromNode: '', fallbackMessage: 'Workflow branch failed' },
+  stop_workflow: { reason: 'Stopped by workflow node' },
   if: { device: '', metric: 'temperature', condition: '>', value: 10 },
   elif: { device: '', metric: 'power', condition: '>', value: 1000 },
   else: {},
@@ -74,6 +95,14 @@ const defaultConfigs: Record<string, any> = {
   logic_or: { preconditions: 'door_open == true, motion_detected == true' },
   check_state: { device: '', status: 'open' },
   time_window: { start: '22:00', end: '06:00' },
+};
+
+const multilineConfigKeys = new Set(['assignments', 'code', 'rules', 'headers', 'body', 'mappings', 'payload', 'expression']);
+const selectConfigOptions: Record<string, string[]> = {
+  method: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  mergeMode: ['merge', 'replace'],
+  from: ['C', 'F', 'K', 'W', 'kW', 'Wh', 'kWh', 'bar', 'psi'],
+  to: ['C', 'F', 'K', 'W', 'kW', 'Wh', 'kWh', 'bar', 'psi'],
 };
 
 const createWebhookEndpoint = (workflowId: string) => {
@@ -1295,7 +1324,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       if (node.config.type === 'device_control') return null;
                       if (key === 'type') return null;
                       
-                      const isDeviceSelect = (key === 'device' && (node.type === 'trigger' || ['if', 'elif'].includes(node.config.type))) ||
+                      const isDeviceSelect = (key === 'device' && (node.type === 'trigger' || ['if', 'elif'].includes(node.config.type) || node.config.type === 'command_confirm')) ||
                                              (key === 'target' && (node.config.type === 'start_backup' || node.config.type === 'stop_device' || node.config.type === 'mqtt_publish')) ||
                                              (key === 'device' && node.config.type === 'check_state');
 
@@ -1320,6 +1349,46 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                           </div>
                         );
                       }
+
+                      if (selectConfigOptions[key]) {
+                        return (
+                          <div key={key}>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 capitalize">
+                              {key.replace('_', ' ')}
+                            </label>
+                            <select
+                              value={String(value)}
+                              onChange={(event) => updateNodeConfig(node.id, { [key]: event.target.value })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            >
+                              {selectConfigOptions[key].map((option) => (
+                                <option key={option} value={option}>{option}</option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      }
+
+                      if (multilineConfigKeys.has(key)) {
+                        return (
+                          <div key={key}>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 capitalize">
+                              {key.replace('_', ' ')}
+                            </label>
+                            <textarea
+                              value={String(value ?? '')}
+                              rows={key === 'code' ? 8 : 5}
+                              onChange={(event) => updateNodeConfig(node.id, { [key]: event.target.value })}
+                              className="block w-full resize-y rounded-md border-0 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-orange-600 dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            />
+                            {key === 'code' && (
+                              <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                                Available variables: input, event, context, config. Return the node output.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      }
                       
                       return (
                         <div key={key}>
@@ -1327,13 +1396,14 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                             {key === 'expectedContent' ? 'Match Content' : key.replace('_', ' ')}
                           </label>
                           <input 
-                            type="text" 
-                            value={value as string}
+                            type={typeof value === 'number' ? 'number' : 'text'}
+                            value={value as string | number}
                             readOnly={node.type === 'trigger' && node.config.type === 'webhook' && key === 'endpoint'}
                             onChange={(e) => {
+                              const nextValue = typeof value === 'number' ? Number(e.target.value) : e.target.value;
                               const newNodes = draft.nodes.map(n => 
                                 n.id === node.id 
-                                  ? { ...n, config: { ...n.config, [key]: e.target.value } }
+                                  ? { ...n, config: { ...n.config, [key]: nextValue } }
                                   : n
                               );
                               setDraft({ ...draft, nodes: newNodes });
