@@ -96,6 +96,18 @@ const CONTROL_ICONS: Record<string, any> = {
   wind: Wind,
 };
 
+export const CONTROL_ICON_OPTIONS = [
+  { id: 'send', label: 'Send' },
+  { id: 'power', label: 'Power On' },
+  { id: 'power_off', label: 'Power Off' },
+  { id: 'restart', label: 'Restart' },
+  { id: 'refresh', label: 'Refresh / Sync' },
+  { id: 'settings', label: 'Settings' },
+  { id: 'sliders', label: 'Sliders' },
+  { id: 'gauge', label: 'Gauge' },
+  { id: 'wind', label: 'Air / Drain' },
+];
+
 export const resolveControlIcon = (definition: DeviceControlDefinition) => (
   definition.icon || CONTROL_ICONS[definition.iconId || ''] || Send
 );

@@ -76,11 +76,11 @@ export function ControlCenter() {
     loadCommands();
   }, []);
 
-  const submitCommand = async () => {
-    if (!selectedDevice || !canControl || !confirmChecked) return;
+  const submitCommand = async (nextControlValues = controlValues, forceSubmit = false) => {
+    if (!selectedDevice || !canControl || (!confirmChecked && !forceSubmit)) return;
     const definition = commandOptions.find((option) => option.id === selectedCommand);
     if (!definition) return;
-    const parameters = buildControlParameters(definition, controlValues, parameterName);
+    const parameters = buildControlParameters(definition, nextControlValues, parameterName);
 
     setIsSubmitting(true);
     setMessage('');
@@ -108,7 +108,7 @@ export function ControlCenter() {
             ...(selectedDevice.config || {}),
             controlState: {
               ...(selectedDevice.config?.controlState || {}),
-              ...buildControlStatePatch(definition, controlValues, parameters),
+              ...buildControlStatePatch(definition, nextControlValues, parameters),
             },
           },
         });
@@ -241,7 +241,12 @@ export function ControlCenter() {
                 <input
                   type="checkbox"
                   checked={Boolean(controlValues[selectedOption.id])}
-                  onChange={(event) => setControlValues((current) => ({ ...current, [selectedOption.id]: event.target.checked }))}
+                  disabled={!selectedDevice || !canControl || isSubmitting}
+                  onChange={(event) => {
+                    const nextControlValues = { ...controlValues, [selectedOption.id]: event.target.checked };
+                    setControlValues(nextControlValues);
+                    submitCommand(nextControlValues, true);
+                  }}
                   className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
                 />
               </label>
@@ -308,20 +313,24 @@ export function ControlCenter() {
               </div>
             )}
 
-            <label className="flex items-start gap-3 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-              <input type="checkbox" checked={confirmChecked} onChange={(event) => setConfirmChecked(event.target.checked)} className="mt-0.5 h-4 w-4 rounded border-amber-300 text-orange-600 focus:ring-orange-500" />
-              <span>I confirm this command may affect live industrial equipment and should be recorded in the control log.</span>
-            </label>
+            {selectedOption?.valueType !== 'toggle' && (
+              <label className="flex items-start gap-3 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                <input type="checkbox" checked={confirmChecked} onChange={(event) => setConfirmChecked(event.target.checked)} className="mt-0.5 h-4 w-4 rounded border-amber-300 text-orange-600 focus:ring-orange-500" />
+                <span>I confirm this command may affect live industrial equipment and should be recorded in the control log.</span>
+              </label>
+            )}
 
-            <button
-              type="button"
-              onClick={submitCommand}
-              disabled={!selectedDevice || !canControl || !confirmChecked || isSubmitting}
-              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded bg-orange-600 px-4 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
-            >
-              <Play className="h-4 w-4" />
-              {isSubmitting ? 'Submitting...' : 'Submit Command'}
-            </button>
+            {selectedOption?.valueType !== 'toggle' && (
+              <button
+                type="button"
+                onClick={() => submitCommand()}
+                disabled={!selectedDevice || !canControl || !confirmChecked || isSubmitting}
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded bg-orange-600 px-4 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
+              >
+                <Play className="h-4 w-4" />
+                {isSubmitting ? 'Submitting...' : 'Submit Command'}
+              </button>
+            )}
 
             {message && (
               <p className="text-sm text-slate-500 dark:text-slate-400">{message}</p>
