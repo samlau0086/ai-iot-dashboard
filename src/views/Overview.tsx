@@ -12,6 +12,7 @@ import { deriveAlertsFromDevices, deriveEnergyTrendData } from '../lib/derivedDa
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
+const GRID_COLS_BY_BREAKPOINT = { lg: 12, md: 12, sm: 6, xs: 2, xxs: 1 };
 const GRID_ROW_HEIGHT = 80;
 const GRID_MARGIN: [number, number] = [16, 16];
 const SNAP_THRESHOLD = 1;
@@ -333,6 +334,58 @@ const layoutsEqual = (first: any[], second: any[]) => {
   });
 };
 
+const getResponsiveWidgetWidth = (item: any, cols: number) => {
+  if (cols <= 2) return cols;
+  if (cols <= 6) return item.w >= 6 ? cols : Math.min(3, cols);
+  return item.w;
+};
+
+const getInitialOverviewBreakpoint = (): keyof typeof GRID_COLS_BY_BREAKPOINT => {
+  if (typeof window === 'undefined') return 'lg';
+  if (window.innerWidth < 480) return 'xxs';
+  if (window.innerWidth < 768) return 'xs';
+  if (window.innerWidth < 996) return 'sm';
+  if (window.innerWidth < 1200) return 'md';
+  return 'lg';
+};
+
+const createResponsiveLayout = (layout: any[], cols: number) => {
+  if (cols >= GRID_COLS) return layout.map((item) => ({ ...item }));
+
+  const sortedLayout = layout
+    .map((item) => ({ ...item }))
+    .sort((first, second) => (first.y - second.y) || (first.x - second.x));
+  let cursorX = 0;
+  let cursorY = 0;
+  let rowHeight = 0;
+
+  return sortedLayout.map((item) => {
+    const width = getResponsiveWidgetWidth(item, cols);
+    const height = Math.max(Number(item.h) || 2, Number(item.minH) || 2);
+
+    if (cursorX + width > cols) {
+      cursorX = 0;
+      cursorY += rowHeight;
+      rowHeight = 0;
+    }
+
+    const nextItem = {
+      ...item,
+      x: cursorX,
+      y: cursorY,
+      w: width,
+      h: height,
+      minW: Math.min(Number(item.minW) || 1, width),
+      maxW: cols,
+    };
+
+    cursorX += width;
+    rowHeight = Math.max(rowHeight, height);
+
+    return nextItem;
+  });
+};
+
 export function Overview() {
   const {
     language,
@@ -376,6 +429,7 @@ export function Overview() {
   const [builderWarningColor, setBuilderWarningColor] = useState(DEFAULT_WIDGET_COLORS.warning);
   const [builderCriticalColor, setBuilderCriticalColor] = useState(DEFAULT_WIDGET_COLORS.critical);
   const [builderNoDataColor, setBuilderNoDataColor] = useState(DEFAULT_WIDGET_COLORS.noData);
+  const [currentBreakpoint, setCurrentBreakpoint] = useState<keyof typeof GRID_COLS_BY_BREAKPOINT>(getInitialOverviewBreakpoint);
   const dashboardDropRef = useRef<HTMLDivElement | null>(null);
   const isGridInteractingRef = useRef(false);
   const activeOverviewDashboard = overviewDashboardsBySite[selectedSiteId] || {
@@ -421,8 +475,13 @@ export function Overview() {
   }, [overviewLayout]);
 
   const gridLayouts = useMemo(() => ({
-    lg: overviewLayout.map((item) => ({ ...item })),
+    lg: createResponsiveLayout(overviewLayout, GRID_COLS_BY_BREAKPOINT.lg),
+    md: createResponsiveLayout(overviewLayout, GRID_COLS_BY_BREAKPOINT.md),
+    sm: createResponsiveLayout(overviewLayout, GRID_COLS_BY_BREAKPOINT.sm),
+    xs: createResponsiveLayout(overviewLayout, GRID_COLS_BY_BREAKPOINT.xs),
+    xxs: createResponsiveLayout(overviewLayout, GRID_COLS_BY_BREAKPOINT.xxs),
   }), [overviewLayout]);
+  const isDesktopGrid = currentBreakpoint === 'lg' || currentBreakpoint === 'md';
 
   const siteFilters = useMemo(() => [
     { id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] },
@@ -555,6 +614,7 @@ export function Overview() {
   const tooltipColor = isDark ? '#cbd5e1' : '#334155';
 
   const onLayoutChange = (currentLayout: any[]) => {
+    if (!isDesktopGrid) return;
     if (isGridInteractingRef.current) return;
     if (layoutsEqual(currentLayout, overviewLayout)) return;
 
@@ -562,10 +622,12 @@ export function Overview() {
   };
 
   const handleDragStart = () => {
+    if (!isDesktopGrid) return;
     isGridInteractingRef.current = true;
   };
 
   const handleDrag = (_layout: any[], _oldItem: any, newItem: any, _placeholder: any) => {
+    if (!isDesktopGrid) return;
     const guides = snapGuides[newItem.i];
     if (!guides) {
       updateSnapGuide({});
@@ -623,6 +685,7 @@ export function Overview() {
   };
 
   const handleDragStop = (layout: any[], _oldItem: any, newItem: any) => {
+    if (!isDesktopGrid) return;
     const nextLayout = snapLayoutItem(layout.map((item) => ({ ...item })), { ...newItem });
 
     if (!layoutsEqual(nextLayout, overviewLayout)) {
@@ -634,11 +697,13 @@ export function Overview() {
   };
 
   const handleResizeStart = () => {
+    if (!isDesktopGrid) return;
     isGridInteractingRef.current = true;
     clearSnapGuide();
   };
 
   const handleResizeStop = (layout: any[]) => {
+    if (!isDesktopGrid) return;
     const nextLayout = layout.map((item) => ({ ...item }));
 
     if (!layoutsEqual(nextLayout, overviewLayout)) {
@@ -1715,11 +1780,15 @@ export function Overview() {
           )}
         </div>
         <ResponsiveGridLayout
-          className="layout"
+          className={cn("layout", !isDesktopGrid && "overview-mobile-layout")}
           layouts={gridLayouts}
           breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
-          cols={{ lg: 12, md: 12, sm: 12, xs: 12, xxs: 12 }}
+          cols={GRID_COLS_BY_BREAKPOINT}
           rowHeight={GRID_ROW_HEIGHT}
+          onBreakpointChange={(breakpoint) => {
+            setCurrentBreakpoint((breakpoint as keyof typeof GRID_COLS_BY_BREAKPOINT) || 'lg');
+            clearSnapGuide();
+          }}
           onLayoutChange={onLayoutChange}
           onDragStart={handleDragStart}
           onDrag={handleDrag}
@@ -1727,8 +1796,8 @@ export function Overview() {
           onResizeStart={handleResizeStart}
           onResizeStop={handleResizeStop}
           {...({ draggableHandle: ".draggable-handle" } as any)}
-          isResizable={true}
-          isDraggable={true}
+          isResizable={isDesktopGrid}
+          isDraggable={isDesktopGrid}
           resizeHandles={['se']}
           preventCollision={true}
           compactType={null}

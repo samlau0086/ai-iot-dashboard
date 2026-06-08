@@ -80,7 +80,9 @@ const defaultConfigs: Record<string, any> = {
   debug: { expression: '', label: 'Debug snapshot' },
   set: { assignments: '{\n  "payload.status": "processed"\n}', mergeMode: 'merge' },
   function: { code: 'return { ...input.event, processedAt: new Date().toISOString() };' },
-  switch: { property: 'event.message.status', rules: '[\n  { "label": "warning", "condition": "==", "value": "warning" }\n]' },
+  switch: { property: 'event.message.status', condition: '==', value: 'warning' },
+  case: { property: 'event.message.status', condition: '==', value: 'normal' },
+  default: {},
   http_request: { method: 'POST', url: 'https://example.com/webhook', headers: '{"content-type":"application/json"}', body: '{"event":"$.debug.output"}' },
   metric_mapper: { mappings: '{\n  "temp": "temperature",\n  "pwr": "power"\n}' },
   unit_convert: { metric: 'event.message.temperature', from: 'F', to: 'C' },
@@ -233,8 +235,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const showConditions = !isTriggerOnly && !showSelector.actionGroupId;
 
   const availableConditionTypes = Object.keys(t.workflows.conditionTypes);
-  const branchConditionTypes = new Set(['if', 'elif', 'else']);
-  const conditionTypesForSelector = showSelector.allowedConditionTypes || availableConditionTypes;
+  const branchConditionTypes = new Set(['if', 'elif', 'else', 'switch', 'case', 'default']);
+  const branchRootTypes = new Set(['if', 'switch']);
+  const terminalBranchTypes = new Set(['else', 'default']);
+  const getBranchFamily = (type: string) => (['switch', 'case', 'default'].includes(type) ? 'switch' : 'if');
+  const conditionTypesForSelector = showSelector.allowedConditionTypes || availableConditionTypes.filter((type) => !['elif', 'else', 'case', 'default'].includes(type));
 
   type BranchGroup = { condition: WorkflowNode; index: number; nodes: Array<{ node: WorkflowNode; index: number }>; endIndex: number };
   type FlowItem = { type: 'branch_group'; branches: BranchGroup[]; startIndex: number; endIndex: number } | { type: 'nodes'; groups: any[] };
@@ -278,7 +283,12 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       ) {
         const condition = draft.nodes[flowIndex];
         const previousBranchType = branches[branches.length - 1]?.condition.config.type;
-        if (branches.length > 0 && (condition.config.type === 'if' || previousBranchType === 'else')) {
+        const rootFamily = getBranchFamily(branches[0]?.condition.config.type || condition.config.type);
+        const conditionFamily = getBranchFamily(condition.config.type);
+        if (
+          branches.length > 0
+          && (branchRootTypes.has(condition.config.type) || terminalBranchTypes.has(previousBranchType) || conditionFamily !== rootFamily)
+        ) {
           break;
         }
 
@@ -464,20 +474,20 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const namedNodes = draft.nodes.map((node) => {
       let nodeName = slugifyNodeName(node.name || node.config?.name || node.config?.type || node.id);
 
-      if (node.type === 'condition' && ['elif', 'else'].includes(node.config?.type)) {
+      if (node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config?.type)) {
         nodeName = currentBranchRootName || nodeName;
       }
 
       if (!nodeName) nodeName = node.id;
       const baseName = nodeName;
       let suffix = 2;
-      while (usedNames.has(nodeName) && !(node.type === 'condition' && ['elif', 'else'].includes(node.config?.type))) {
+      while (usedNames.has(nodeName) && !(node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config?.type))) {
         nodeName = `${baseName}_${suffix}`;
         suffix++;
       }
       usedNames.add(nodeName);
 
-      if (node.type === 'condition' && node.config?.type === 'if') {
+      if (node.type === 'condition' && branchRootTypes.has(node.config?.type)) {
         currentBranchRootName = nodeName;
       }
 
@@ -566,8 +576,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const targetNode = draft.nodes.find((node) => node.id === id);
     const idsToDelete = new Set<string>([id]);
 
-    if (targetNode?.type === 'condition' && ['if', 'elif', 'else'].includes(targetNode.config.type)) {
-      if (targetNode.config.type === 'if') {
+    if (targetNode?.type === 'condition' && branchConditionTypes.has(targetNode.config.type)) {
+      if (branchRootTypes.has(targetNode.config.type)) {
         const branchItem = flowItems.find((item): item is Extract<FlowItem, { type: 'branch_group' }> => (
           item.type === 'branch_group' && item.branches.some((branch) => branch.condition.id === id)
         ));
@@ -593,7 +603,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const isTrigger = node.type === 'trigger';
     const isCondition = node.type === 'condition';
     const isLogic = isCondition && ['logic_and', 'logic_or'].includes(node.config.type);
-    const isBranch = isCondition && ['if', 'elif', 'else'].includes(node.config.type);
+    const isBranch = isCondition && branchConditionTypes.has(node.config.type);
 
     return (
       <div 
@@ -620,7 +630,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               {getActionLabel(node.config.type)}
             </h4>
             <p className="text-[11px] text-orange-600 dark:text-orange-400 mt-0.5 truncate">
-              {node.type === 'condition' && ['elif', 'else'].includes(node.config.type)
+              {node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type)
                 ? `$.${getBranchRootName(node.id) || node.name || node.id}`
                 : `$.${node.name || node.id}`}
             </p>
@@ -709,7 +719,9 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   };
 
   const renderBranchChain = (branches: BranchGroup[], endIndex: number) => {
-    const groupHasElseBranch = branches.some((branch) => branch.condition.config.type === 'else');
+    const branchFamily = getBranchFamily(branches[0]?.condition.config.type || 'if');
+    const terminalType = branchFamily === 'switch' ? 'default' : 'else';
+    const groupHasTerminalBranch = branches.some((branch) => branch.condition.config.type === terminalType);
 
     return (
     <div className="mb-8 flex w-max min-w-full flex-col items-center px-4 py-2">
@@ -717,9 +729,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       <div className="flex items-start justify-center">
         {branches.map((branch, index) => {
           const nextBranch = branches[index + 1];
-          const connectorAllowedTypes = groupHasElseBranch ? ['elif'] : ['elif', 'else'];
+          const connectorAllowedTypes = branchFamily === 'switch'
+            ? (groupHasTerminalBranch ? ['case'] : ['case', 'default'])
+            : (groupHasTerminalBranch ? ['elif'] : ['elif', 'else']);
           const isLastBranch = index === branches.length - 1;
-          const canAppendBranch = isLastBranch && branch.condition.config.type !== 'else';
+          const canAppendBranch = isLastBranch && branch.condition.config.type !== terminalType;
           return (
             <React.Fragment key={branch.condition.id}>
               {renderBranchColumn(branch)}
@@ -734,7 +748,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
           <button
             type="button"
-            onClick={() => setShowSelector({ show: true, insertIndex: endIndex || draft.nodes.length, allowedConditionTypes: ['if'] })}
+            onClick={() => setShowSelector({ show: true, insertIndex: endIndex || draft.nodes.length, allowedConditionTypes: ['if', 'switch'] })}
             className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
             title="Add next node after branches"
           >
@@ -1073,9 +1087,9 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                 <div key={node.id} className="space-y-6">
                   <div>
                     <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Node Name</label>
-                    {node.type === 'condition' && ['elif', 'else'].includes(node.config.type) ? (
+                    {node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type) ? (
                       <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
-                        Uses IF group name: <span className="font-mono text-orange-600 dark:text-orange-400">$.{getBranchRootName(node.id) || node.name || node.id}</span>
+                        Uses branch group name: <span className="font-mono text-orange-600 dark:text-orange-400">$.{getBranchRootName(node.id) || node.name || node.id}</span>
                       </div>
                     ) : (
                       <input
@@ -1093,7 +1107,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       />
                     )}
                     <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
-                      Reference this node later with <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.input</span> or <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.output</span>.
+                      Reference this node later with <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.input</span> or <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.output</span>.
                     </p>
                   </div>
 
@@ -1442,7 +1456,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       {/* Node Selector Modal */}
       {showSelector.show && (
         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-[#1c2128] rounded-xl shadow-xl w-full max-w-lg border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden max-h-[90vh]">
+          <div className="bg-white dark:bg-[#1c2128] rounded-xl shadow-xl w-full max-w-5xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden max-h-[90vh]">
             <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900/50">
               <h3 className="font-semibold text-slate-900 dark:text-white">Choose Node</h3>
               <button 
@@ -1457,7 +1471,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               {isTriggerOnly ? (
                 <div>
                   <h4 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 px-1">{t.workflows.triggers}</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
                     {Object.keys(t.workflows.triggerTypes).map(type => (
                       <button
                         key={type}
@@ -1479,7 +1493,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                   {showConditions && (
                     <div>
                       <h4 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 px-1">{t.workflows.conditions}</h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
                         {conditionTypesForSelector.map(type => (
                           <button
                             key={type}
@@ -1500,7 +1514,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                   {!showSelector.branchOnly && (
                   <div>
                     <h4 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 px-1">{t.workflows.actions}</h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
                       {Object.keys(t.workflows.actionTypes).map(type => (
                         <button
                           key={type}

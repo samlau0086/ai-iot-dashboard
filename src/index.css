@@ -158,6 +158,15 @@ body {
   cursor: grabbing;
 }
 
+.overview-mobile-layout .draggable-handle,
+.overview-mobile-layout .react-resizable-handle {
+  display: none !important;
+}
+
+.overview-mobile-layout .react-grid-item {
+  touch-action: pan-y;
+}
+
 .workflow-live-node {
   position: relative;
   box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.45), 0 0 28px rgba(16, 185, 129, 0.28) !important;

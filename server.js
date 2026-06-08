@@ -654,8 +654,14 @@ const parseConditionExpression = (expression) => {
 const conditionMatchesEvent = (condition, event, context = {}) => {
   const config = resolveWorkflowValue(condition.config || {}, context);
 
-  if (config.type === 'else') {
+  if (config.type === 'else' || config.type === 'default') {
     return true;
+  }
+
+  if (config.type === 'switch' || config.type === 'case') {
+    const scope = {event, context, config};
+    const value = getWorkflowScopedValue(config.property || 'event.message.status', scope);
+    return compareValues(value, config.condition || '==', config.value);
   }
 
   if (config.type === 'if' || config.type === 'elif') {
@@ -988,23 +994,23 @@ const normalizeWorkflowNodeName = (node, fallback = 'node') => String(node?.name
 const buildWorkflowNodeNameMap = (workflow) => {
   const namesById = new Map();
   const usedNames = new Map();
-  let currentIfName = '';
+  let currentBranchName = '';
 
   for (const node of workflow.nodes || []) {
     let name = normalizeWorkflowNodeName(node, node.id);
 
-    if (node.type === 'condition' && ['elif', 'else'].includes(node.config?.type)) {
-      name = currentIfName || name;
+    if (node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config?.type)) {
+      name = currentBranchName || name;
     }
 
-    if (!(node.type === 'condition' && ['elif', 'else'].includes(node.config?.type))) {
+    if (!(node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config?.type))) {
       const count = usedNames.get(name) || 0;
       usedNames.set(name, count + 1);
       if (count > 0) name = `${name}_${count + 1}`;
     }
 
-    if (node.type === 'condition' && node.config?.type === 'if') {
-      currentIfName = name;
+    if (node.type === 'condition' && ['if', 'switch'].includes(node.config?.type)) {
+      currentBranchName = name;
     }
 
     namesById.set(node.id, name);
@@ -1519,7 +1525,10 @@ const executeWorkflow = async (workflow, trigger, event) => {
     return;
   }
 
-  const branchTypes = new Set(['if', 'elif', 'else']);
+  const branchTypes = new Set(['if', 'elif', 'else', 'switch', 'case', 'default']);
+  const branchRootTypes = new Set(['if', 'switch']);
+  const terminalBranchTypes = new Set(['else', 'default']);
+  const getBranchFamily = (type) => (['switch', 'case', 'default'].includes(type) ? 'switch' : 'if');
   const nonTriggerNodes = workflow.nodes.filter((node) => node.type !== 'trigger');
   const branchConditions = nonTriggerNodes.filter((node) => node.type === 'condition' && branchTypes.has(node.config?.type));
   const steps = [];
@@ -1565,7 +1574,12 @@ const executeWorkflow = async (workflow, trigger, event) => {
         ) {
           const condition = workflow.nodes[nodeIndex];
           const previousBranchType = branches[branches.length - 1]?.condition.config?.type;
-          if (branches.length > 0 && (condition.config?.type === 'if' || previousBranchType === 'else')) {
+          const rootFamily = getBranchFamily(branches[0]?.condition.config?.type || condition.config?.type);
+          const conditionFamily = getBranchFamily(condition.config?.type);
+          if (
+            branches.length > 0
+            && (branchRootTypes.has(condition.config?.type) || terminalBranchTypes.has(previousBranchType) || conditionFamily !== rootFamily)
+          ) {
             break;
           }
 
