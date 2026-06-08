@@ -74,22 +74,6 @@ const extractTelemetryMetrics = (message = {}) => {
 
   return metrics;
 };
-const applyMetricMapping = (metrics = {}, mapping = {}) => {
-  const mappedMetrics = {...metrics};
-  for (const [sourceKey, targetKey] of Object.entries(mapping || {})) {
-    if (!targetKey || mappedMetrics[sourceKey] === undefined) continue;
-    mappedMetrics[targetKey] = mappedMetrics[sourceKey];
-  }
-  return mappedMetrics;
-};
-const applyDeviceMetricMapping = (message, device) => {
-  const mapping = device?.config?.metricMapping || {};
-  if (!message?.metrics || Object.keys(mapping).length === 0) return message;
-  return {
-    ...message,
-    metrics: applyMetricMapping(message.metrics, mapping),
-  };
-};
 const createDefaultHttpChannels = () => [{
   id: 'http-default',
   name: 'Default HTTP Push',
@@ -1473,13 +1457,12 @@ const ingestTelemetryPayload = async (payload, source = 'http') => {
   await Promise.all(accepted.map(async (message) => {
     const deviceId = message.device_id || message.deviceId || message.id;
     const device = await findDashboardDevice(deviceId);
-    const mappedMessage = applyDeviceMetricMapping(message, device);
     await dispatchWorkflowEvent({
       type: 'telemetry',
       source,
       deviceId,
       device,
-      message: mappedMessage,
+      message,
       receivedAt: message.received_at,
     });
   }));

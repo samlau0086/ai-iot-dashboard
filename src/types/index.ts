@@ -20,6 +20,21 @@ export interface DeviceConfig {
   mqttCommandTopic?: string;
   metricMapping?: Record<string, string>;
   controlState?: Record<string, unknown>;
+  controlDefinitions?: Array<{
+    id: string;
+    label: string;
+    description: string;
+    iconId?: string;
+    valueType: 'none' | 'toggle' | 'select' | 'slider' | 'range' | 'number' | 'text' | 'parameter_group';
+    parameterKey?: string;
+    defaultValue?: string | number | boolean;
+    options?: Array<{ value: string; label: string }>;
+    fields?: Array<{ key: string; label: string; valueType: 'text' | 'number' | 'select'; defaultValue?: string | number | boolean; options?: Array<{ value: string; label: string }>; unit?: string }>;
+    min?: number;
+    max?: number;
+    step?: number;
+    unit?: string;
+  }>;
   mqttReceiveTemplate?: string;
   mqttCommandTemplate?: string;
 

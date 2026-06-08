@@ -235,7 +235,19 @@ export function ControlCenter() {
               </div>
             )}
 
-            {selectedOption?.valueType === 'range' && (
+            {selectedOption?.valueType === 'toggle' && (
+              <label className="flex items-center justify-between rounded border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-900/50">
+                <span className="font-medium text-slate-700 dark:text-slate-200">{selectedOption.label}</span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(controlValues[selectedOption.id])}
+                  onChange={(event) => setControlValues((current) => ({ ...current, [selectedOption.id]: event.target.checked }))}
+                  className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                />
+              </label>
+            )}
+
+            {(selectedOption?.valueType === 'range' || selectedOption?.valueType === 'slider') && (
               <div>
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{selectedOption.label}</label>
@@ -265,6 +277,34 @@ export function ControlCenter() {
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Value</label>
                   <input value={controlValues[selectedOption.id] ?? ''} onChange={(event) => setControlValues((current) => ({ ...current, [selectedOption.id]: event.target.value }))} placeholder="42" className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
                 </div>
+              </div>
+            )}
+
+            {selectedOption?.valueType === 'parameter_group' && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {selectedOption.fields?.map((field) => (
+                  <div key={field.key}>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{field.label}</label>
+                    {field.valueType === 'select' ? (
+                      <select
+                        value={controlValues[`${selectedOption.id}.${field.key}`] ?? field.defaultValue ?? ''}
+                        onChange={(event) => setControlValues((current) => ({ ...current, [`${selectedOption.id}.${field.key}`]: event.target.value }))}
+                        className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      >
+                        {field.options?.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={field.valueType === 'number' ? 'number' : 'text'}
+                        value={controlValues[`${selectedOption.id}.${field.key}`] ?? field.defaultValue ?? ''}
+                        onChange={(event) => setControlValues((current) => ({ ...current, [`${selectedOption.id}.${field.key}`]: field.valueType === 'number' ? Number(event.target.value) : event.target.value }))}
+                        className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      />
+                    )}
+                  </div>
+                ))}
               </div>
             )}
 

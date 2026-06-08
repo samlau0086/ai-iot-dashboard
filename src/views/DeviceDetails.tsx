@@ -2,11 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
-import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play } from 'lucide-react';
+import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play, Plus, Trash2, X } from 'lucide-react';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { DeviceForm } from '../components/DeviceForm';
-import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, isDeviceControllable } from '../lib/deviceControls';
+import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, sanitizeControlDefinition, type DeviceControlDefinition, type DeviceControlValueType } from '../lib/deviceControls';
 
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
@@ -21,8 +21,9 @@ export function DeviceDetails() {
   const [parameterNames, setParameterNames] = useState<Record<string, string>>({});
   const [controlMessage, setControlMessage] = useState('');
   const [submittingControlId, setSubmittingControlId] = useState('');
+  const [editingControl, setEditingControl] = useState<DeviceControlDefinition | null>(null);
+  const [controlDraft, setControlDraft] = useState<DeviceControlDefinition | null>(null);
   const controlDefinitions = getDeviceControlDefinitions(device);
-  const isControllable = isDeviceControllable(device);
   const canControl = currentUser?.role !== 'Demo' && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
 
   useEffect(() => {
@@ -100,6 +101,60 @@ export function DeviceDetails() {
     } finally {
       setSubmittingControlId('');
     }
+  };
+
+  const createControlDraft = (): DeviceControlDefinition => ({
+    id: `custom_${Date.now().toString(36)}`,
+    label: 'Custom Command',
+    description: 'Custom device control action.',
+    iconId: 'send',
+    valueType: 'none',
+    parameterKey: 'value',
+    defaultValue: '',
+    options: [],
+    fields: [],
+  });
+
+  const openControlEditor = (control?: DeviceControlDefinition) => {
+    const draft = control ? sanitizeControlDefinition(control) : createControlDraft();
+    setEditingControl(control || null);
+    setControlDraft({
+      ...draft,
+      options: draft.options || [],
+      fields: draft.fields || [],
+    });
+  };
+
+  const saveControlDraft = () => {
+    if (!controlDraft) return;
+    const currentDefinitions = controlDefinitions.map(sanitizeControlDefinition);
+    const nextDefinition = sanitizeControlDefinition(controlDraft);
+    const exists = editingControl && currentDefinitions.some((control) => control.id === editingControl.id);
+    const nextDefinitions = exists
+      ? currentDefinitions.map((control) => control.id === editingControl.id ? nextDefinition : control)
+      : [...currentDefinitions, nextDefinition];
+
+    updateDevice(device.id, {
+      config: {
+        ...(device.config || {}),
+        controlDefinitions: nextDefinitions,
+      },
+    });
+    setEditingControl(null);
+    setControlDraft(null);
+  };
+
+  const deleteControlDefinition = (controlId: string) => {
+    const nextDefinitions = controlDefinitions
+      .filter((control) => control.id !== controlId)
+      .map(sanitizeControlDefinition);
+
+    updateDevice(device.id, {
+      config: {
+        ...(device.config || {}),
+        controlDefinitions: nextDefinitions,
+      },
+    });
   };
 
   const metricValue = (key: string) => Number(device.metrics?.[key]) || 0;
@@ -192,52 +247,10 @@ export function DeviceDetails() {
   const primaryMetrics = primaryMetricKeys.filter((metric) => device.metrics?.[metric.key] !== undefined);
   const primaryMetricSet = new Set(primaryMetrics.map((metric) => metric.key));
   const secondaryMetrics = Object.entries(device.metrics || {}).filter(([key]) => !primaryMetricSet.has(key));
-  const commonMetricTargets = [
-    { key: 'power', label: 'Power Draw' },
-    { key: 'energy', label: 'Energy Today' },
-    { key: 'energy_today', label: 'Energy Today (Legacy)' },
-    { key: 'voltage', label: 'Voltage' },
-    { key: 'current', label: 'Current' },
-    { key: 'temperature', label: 'Temperature' },
-    { key: 'humidity', label: 'Humidity' },
-    { key: 'pressure', label: 'Pressure' },
-    { key: 'flow_rate', label: 'Flow Rate' },
-    { key: 'running_hours', label: 'Runtime' },
-    { key: 'signal', label: 'Signal' },
-    { key: 'battery', label: 'Battery' },
-    { key: 'cpu', label: 'CPU Load' },
-    { key: 'ram', label: 'Memory' },
-  ];
-  const metricTargetMap = new Map<string, { key: string; label: string }>();
-  primaryMetricKeys.forEach((metric) => metricTargetMap.set(metric.key, { key: metric.key, label: metric.label }));
-  commonMetricTargets.forEach((metric) => metricTargetMap.set(metric.key, metric));
-  Object.keys(device.metrics || {}).forEach((key) => metricTargetMap.set(key, { key, label: key }));
-  const metricTargetOptions = Array.from(metricTargetMap.values());
 
   const formatConfigValue = (value: unknown) => {
     if (value && typeof value === 'object') return JSON.stringify(value);
     return String(value);
-  };
-
-  const handleMetricMappingChange = (sourceKey: string, targetKey: string) => {
-    const currentMapping = device.config?.metricMapping || {};
-    const nextMapping = { ...currentMapping };
-    const nextMetrics = { ...device.metrics };
-
-    if (targetKey) {
-      nextMapping[sourceKey] = targetKey;
-      nextMetrics[targetKey] = Number(device.metrics[sourceKey]);
-    } else {
-      delete nextMapping[sourceKey];
-    }
-
-    updateDevice(device.id, {
-      metrics: nextMetrics,
-      config: {
-        ...(device.config || {}),
-        metricMapping: nextMapping,
-      },
-    });
   };
 
   const renderMetricCard = (metric: { key: string; label: string; icon: any }) => {
@@ -394,23 +407,11 @@ export function DeviceDetails() {
                     </div>
                     <div className="divide-y divide-slate-100 dark:divide-slate-800/70">
                       {secondaryMetrics.map(([key, value]) => (
-                        <div key={key} className="grid grid-cols-1 gap-3 px-4 py-3 text-xs font-mono sm:grid-cols-[1fr_auto_14rem] sm:items-center">
+                        <div key={key} className="flex items-center justify-between gap-3 px-4 py-3 text-xs font-mono">
                           <span className="min-w-0 truncate text-slate-500">{key}</span>
                           <span className="text-slate-900 dark:text-slate-300">
-                            {String(value)} {metricUnit(device.config?.metricMapping?.[key] || key)}
+                            {String(value)} {metricUnit(key)}
                           </span>
-                          <select
-                            value={device.config?.metricMapping?.[key] || ''}
-                            onChange={(event) => handleMetricMappingChange(key, event.target.value)}
-                            className="h-8 rounded-md border-slate-300 bg-white px-2 text-xs text-slate-700 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                          >
-                            <option value="">Unmapped</option>
-                            {metricTargetOptions
-                              .filter((metric) => metric.key !== key)
-                              .map((metric) => (
-                                <option key={metric.key} value={metric.key}>{metric.label} ({metric.key})</option>
-                              ))}
-                          </select>
                         </div>
                       ))}
                     </div>
@@ -437,17 +438,26 @@ export function DeviceDetails() {
             )}
           </div>
 
-          {isControllable && (
-            <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+          <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
               <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
                 <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white uppercase tracking-wider text-[11px] font-mono">
                   <Zap className="h-4 w-4" /> Remote Controls
                 </h3>
-                {!canControl && (
-                  <span className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
-                    Current role can view controls only.
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {!canControl && (
+                    <span className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                      Current role can view controls only.
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => openControlEditor()}
+                    className="inline-flex h-8 items-center gap-1.5 rounded border border-slate-300 px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Control
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -456,7 +466,25 @@ export function DeviceDetails() {
                   const currentValue = controlValues[control.id] ?? control.defaultValue ?? '';
 
                   return (
-                    <div key={control.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800/50 dark:bg-slate-900">
+                    <div key={control.id} className="group relative rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800/50 dark:bg-slate-900">
+                      <div className="pointer-events-none absolute right-3 top-3 flex translate-y-1 gap-1 opacity-0 transition-all group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
+                        <button
+                          type="button"
+                          onClick={() => openControlEditor(control)}
+                          className="rounded border border-slate-200 bg-white p-1.5 text-slate-500 shadow-sm hover:text-orange-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
+                          title="Edit control"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteControlDefinition(control.id)}
+                          className="rounded border border-slate-200 bg-white p-1.5 text-slate-500 shadow-sm hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
+                          title="Delete control"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-slate-900 dark:text-white">{control.label}</p>
@@ -479,7 +507,19 @@ export function DeviceDetails() {
                         </select>
                       )}
 
-                      {control.valueType === 'range' && (
+                      {control.valueType === 'toggle' && (
+                        <label className="mt-4 flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950">
+                          <span className="text-slate-600 dark:text-slate-300">{control.parameterKey || control.id}</span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(controlValues[control.id])}
+                            onChange={(event) => updateControl(control.id, event.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                          />
+                        </label>
+                      )}
+
+                      {(control.valueType === 'range' || control.valueType === 'slider') && (
                         <div className="mt-4">
                           <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
                             <span>{control.min ?? 0}</span>
@@ -530,6 +570,34 @@ export function DeviceDetails() {
                         </div>
                       )}
 
+                      {control.valueType === 'parameter_group' && (
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                          {control.fields?.map((field) => (
+                            <div key={field.key}>
+                              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-500">{field.label}</label>
+                              {field.valueType === 'select' ? (
+                                <select
+                                  value={controlValues[`${control.id}.${field.key}`] ?? field.defaultValue ?? ''}
+                                  onChange={(event) => updateControl(`${control.id}.${field.key}`, event.target.value)}
+                                  className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-sm text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                                >
+                                  {field.options?.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type={field.valueType === 'number' ? 'number' : 'text'}
+                                  value={controlValues[`${control.id}.${field.key}`] ?? field.defaultValue ?? ''}
+                                  onChange={(event) => updateControl(`${control.id}.${field.key}`, field.valueType === 'number' ? Number(event.target.value) : event.target.value)}
+                                  className="h-9 w-full rounded border border-slate-300 bg-white px-2 text-sm text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                                />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => submitDeviceControl(control.id)}
@@ -542,14 +610,183 @@ export function DeviceDetails() {
                     </div>
                   );
                 })}
+                {controlDefinitions.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-slate-300 p-6 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400 md:col-span-2">
+                    No control actions configured for this device.
+                  </div>
+                )}
               </div>
               {controlMessage && (
                 <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">{controlMessage}</p>
               )}
             </div>
-          )}
         </div>
       </div>
+
+      {controlDraft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4">
+          <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+                {editingControl ? 'Edit Control Action' : 'Add Control Action'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setControlDraft(null);
+                  setEditingControl(null);
+                }}
+                className="rounded p-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid max-h-[70vh] grid-cols-1 gap-4 overflow-y-auto p-5 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Action ID</label>
+                <input
+                  value={controlDraft.id}
+                  onChange={(event) => setControlDraft((current) => current ? { ...current, id: event.target.value.trim() || current.id } : current)}
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Action Label</label>
+                <input
+                  value={controlDraft.label}
+                  onChange={(event) => setControlDraft((current) => current ? { ...current, label: event.target.value } : current)}
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Description</label>
+                <input
+                  value={controlDraft.description}
+                  onChange={(event) => setControlDraft((current) => current ? { ...current, description: event.target.value } : current)}
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Value Type</label>
+                <select
+                  value={controlDraft.valueType}
+                  onChange={(event) => setControlDraft((current) => current ? { ...current, valueType: event.target.value as DeviceControlValueType } : current)}
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                >
+                  <option value="none">No Value</option>
+                  <option value="toggle">Toggle</option>
+                  <option value="slider">Slider</option>
+                  <option value="number">Number</option>
+                  <option value="select">Select</option>
+                  <option value="text">Parameter</option>
+                  <option value="parameter_group">Parameter Groups</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Action Variable Name</label>
+                <input
+                  value={controlDraft.parameterKey || ''}
+                  onChange={(event) => setControlDraft((current) => current ? { ...current, parameterKey: event.target.value } : current)}
+                  placeholder="speed / pressure / mode"
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Default Value</label>
+                <input
+                  value={String(controlDraft.defaultValue ?? '')}
+                  onChange={(event) => setControlDraft((current) => current ? { ...current, defaultValue: event.target.value } : current)}
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Unit</label>
+                <input
+                  value={controlDraft.unit || ''}
+                  onChange={(event) => setControlDraft((current) => current ? { ...current, unit: event.target.value } : current)}
+                  placeholder="% / bar / rpm"
+                  className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
+              {(controlDraft.valueType === 'slider' || controlDraft.valueType === 'range' || controlDraft.valueType === 'number') && (
+                <div className="grid grid-cols-3 gap-3 sm:col-span-2">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Min</label>
+                    <input type="number" value={controlDraft.min ?? 0} onChange={(event) => setControlDraft((current) => current ? { ...current, min: Number(event.target.value) } : current)} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Max</label>
+                    <input type="number" value={controlDraft.max ?? 100} onChange={(event) => setControlDraft((current) => current ? { ...current, max: Number(event.target.value) } : current)} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Step</label>
+                    <input type="number" value={controlDraft.step ?? 1} onChange={(event) => setControlDraft((current) => current ? { ...current, step: Number(event.target.value) } : current)} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                  </div>
+                </div>
+              )}
+              {controlDraft.valueType === 'select' && (
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Select Options</label>
+                  <textarea
+                    rows={4}
+                    value={(controlDraft.options || []).map((option) => `${option.value}:${option.label}`).join('\n')}
+                    onChange={(event) => setControlDraft((current) => current ? {
+                      ...current,
+                      options: event.target.value.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+                        const [value, ...labelParts] = line.split(':');
+                        return { value: value.trim(), label: (labelParts.join(':').trim() || value.trim()) };
+                      }),
+                    } : current)}
+                    placeholder={'auto:Auto\nmanual:Manual'}
+                    className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </div>
+              )}
+              {controlDraft.valueType === 'parameter_group' && (
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">Parameter Group Fields JSON</label>
+                  <textarea
+                    rows={7}
+                    value={JSON.stringify(controlDraft.fields || [], null, 2)}
+                    onChange={(event) => {
+                      try {
+                        const fields = JSON.parse(event.target.value);
+                        if (Array.isArray(fields)) {
+                          setControlDraft((current) => current ? { ...current, fields } : current);
+                        }
+                      } catch {
+                        setControlDraft((current) => current ? { ...current, fields: current.fields || [] } : current);
+                      }
+                    }}
+                    className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-slate-200 px-5 py-4 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setControlDraft(null);
+                  setEditingControl(null);
+                }}
+                className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveControlDraft}
+                className="rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500"
+              >
+                Save Control
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

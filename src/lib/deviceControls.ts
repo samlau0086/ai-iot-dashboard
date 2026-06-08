@@ -11,17 +11,19 @@ import {
 } from 'lucide-react';
 import type { Device, DeviceType } from '../types';
 
-export type DeviceControlValueType = 'none' | 'select' | 'range' | 'number' | 'text';
+export type DeviceControlValueType = 'none' | 'toggle' | 'select' | 'slider' | 'range' | 'number' | 'text' | 'parameter_group';
 
 export type DeviceControlDefinition = {
   id: string;
   label: string;
   description: string;
-  icon: any;
+  icon?: any;
+  iconId?: string;
   valueType: DeviceControlValueType;
   parameterKey?: string;
-  defaultValue?: string | number;
+  defaultValue?: string | number | boolean;
   options?: Array<{ value: string; label: string }>;
+  fields?: Array<{ key: string; label: string; valueType: 'text' | 'number' | 'select'; defaultValue?: string | number | boolean; options?: Array<{ value: string; label: string }>; unit?: string }>;
   min?: number;
   max?: number;
   step?: number;
@@ -43,7 +45,7 @@ export const deviceControlProfiles: Partial<Record<DeviceType, DeviceControlDefi
       { value: 'energy_saving', label: 'Energy Saving' },
     ] },
     { id: 'set_pressure', label: 'Pressure Setpoint', description: 'Set target line pressure.', icon: Gauge, valueType: 'number', parameterKey: 'pressure', defaultValue: 4.2, min: 0, max: 16, step: 0.1, unit: 'bar' },
-    { id: 'set_speed', label: 'Motor Speed', description: 'Set pump motor speed.', icon: SlidersHorizontal, valueType: 'range', parameterKey: 'speed', defaultValue: 50, min: 0, max: 100, step: 1, unit: '%' },
+    { id: 'set_speed', label: 'Motor Speed', description: 'Set pump motor speed.', icon: SlidersHorizontal, valueType: 'slider', parameterKey: 'speed', defaultValue: 50, min: 0, max: 100, step: 1, unit: '%' },
   ],
   air_compressor: [
     ...commonPowerControls,
@@ -82,9 +84,53 @@ export const deviceControlProfiles: Partial<Record<DeviceType, DeviceControlDefi
   ],
 };
 
+const CONTROL_ICONS: Record<string, any> = {
+  gauge: Gauge,
+  power: Power,
+  power_off: PowerOff,
+  refresh: RefreshCw,
+  restart: RotateCcw,
+  send: Send,
+  settings: Settings2,
+  sliders: SlidersHorizontal,
+  wind: Wind,
+};
+
+export const resolveControlIcon = (definition: DeviceControlDefinition) => (
+  definition.icon || CONTROL_ICONS[definition.iconId || ''] || Send
+);
+
+export const sanitizeControlDefinition = (definition: DeviceControlDefinition): DeviceControlDefinition => {
+  const { icon, ...serializable } = definition;
+  return {
+    ...serializable,
+    iconId: definition.iconId || (
+      definition.id.includes('power_off') ? 'power_off'
+        : definition.id.includes('power') ? 'power'
+          : definition.id.includes('restart') ? 'restart'
+            : definition.id.includes('sync') ? 'refresh'
+              : definition.id.includes('pressure') ? 'gauge'
+                : definition.id.includes('speed') || definition.id.includes('mode') ? 'sliders'
+                  : definition.id.includes('drain') ? 'wind'
+                    : 'send'
+    ),
+  };
+};
+
 export const getDeviceControlDefinitions = (device?: Pick<Device, 'type'> | null) => {
   if (!device) return [];
-  return deviceControlProfiles[device.type] || [];
+  const customDefinitions = (device as any).config?.controlDefinitions;
+  if (Array.isArray(customDefinitions)) {
+    return customDefinitions.map((definition) => ({
+      ...definition,
+      icon: resolveControlIcon(definition),
+    }));
+  }
+
+  return (deviceControlProfiles[device.type] || []).map((definition) => ({
+    ...definition,
+    icon: resolveControlIcon(definition),
+  }));
 };
 
 export const isDeviceControllable = (device?: Pick<Device, 'type'> | null) => getDeviceControlDefinitions(device).length > 0;
@@ -95,6 +141,15 @@ export const buildControlParameters = (
   parameterName?: string
 ) => {
   if (definition.valueType === 'none') return {};
+  if (definition.valueType === 'toggle') {
+    return { [definition.parameterKey || definition.id]: Boolean(controlValues[definition.id]) };
+  }
+  if (definition.valueType === 'parameter_group') {
+    return (definition.fields || []).reduce<Record<string, any>>((acc, field) => {
+      acc[field.key] = controlValues[`${definition.id}.${field.key}`] ?? field.defaultValue ?? '';
+      return acc;
+    }, {});
+  }
   const parameterKey = definition.parameterKey || definition.id;
   const value = controlValues[definition.id] ?? definition.defaultValue ?? '';
 
@@ -119,6 +174,21 @@ export const buildControlStatePatch = (
   if (definition.id === 'power_off') return { powerState: false, lastCommand: definition.id };
   if (definition.id === 'restart' || definition.id === 'sync_config' || definition.id === 'drain_condensate') {
     return { lastCommand: definition.id, lastCommandAt: new Date().toISOString() };
+  }
+  if (definition.valueType === 'toggle') {
+    return {
+      lastCommand: definition.id,
+      [definition.id]: Boolean(controlValues[definition.id]),
+    };
+  }
+  if (definition.valueType === 'parameter_group') {
+    return {
+      lastCommand: definition.id,
+      ...Object.fromEntries((definition.fields || []).map((field) => [
+        `${definition.id}.${field.key}`,
+        controlValues[`${definition.id}.${field.key}`] ?? field.defaultValue ?? '',
+      ])),
+    };
   }
   if (definition.id === 'set_parameter') {
     return {
