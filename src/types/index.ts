@@ -19,6 +19,7 @@ export interface DeviceConfig {
   commandTopic?: string;
   mqttCommandTopic?: string;
   metricMapping?: Record<string, string>;
+  controlState?: Record<string, unknown>;
 
   // Industrial protocol / edge gateway binding
   protocol?: string;

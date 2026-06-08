@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, History, Play, Power, PowerOff, RefreshCw, RotateCcw, Send, Settings2, SlidersHorizontal } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, History, Play, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { cn } from '../lib/utils';
+import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, isDeviceControllable } from '../lib/deviceControls';
 
 type ControlCommand = {
   id: string;
@@ -18,26 +19,13 @@ type ControlCommand = {
   updatedAt: string;
 };
 
-const commandOptions = [
-  { id: 'power_on', label: 'Power On', icon: Power, tone: 'emerald' },
-  { id: 'power_off', label: 'Power Off', icon: PowerOff, tone: 'red' },
-  { id: 'restart', label: 'Restart', icon: RotateCcw, tone: 'amber' },
-  { id: 'set_mode', label: 'Set Mode', icon: Settings2, tone: 'blue' },
-  { id: 'set_speed', label: 'Set Speed', icon: SlidersHorizontal, tone: 'orange' },
-  { id: 'set_parameter', label: 'Set Parameter', icon: Send, tone: 'slate' },
-];
-
-const controllableTypes = new Set(['plc', 'pump_controller', 'air_compressor', 'gateway', 'dtu', 'rtu']);
-
 export function ControlCenter() {
-  const { devices, currentUser, activeSiteId, sites } = useAppStore();
+  const { devices, currentUser, activeSiteId, sites, updateDevice } = useAppStore();
   const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || 'All');
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [selectedCommand, setSelectedCommand] = useState('power_on');
-  const [mode, setMode] = useState('auto');
-  const [speed, setSpeed] = useState(50);
+  const [controlValues, setControlValues] = useState<Record<string, any>>({});
   const [parameterName, setParameterName] = useState('');
-  const [parameterValue, setParameterValue] = useState('');
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [commands, setCommands] = useState<ControlCommand[]>([]);
   const [message, setMessage] = useState('');
@@ -49,16 +37,30 @@ export function ControlCenter() {
   const scopedDevices = useMemo(() => {
     return devices.filter((device) => {
       const inSite = selectedSiteId === 'All' || device.siteId === selectedSiteId;
-      return inSite && controllableTypes.has(device.type);
+      return inSite && isDeviceControllable(device);
     });
   }, [devices, selectedSiteId]);
   const selectedDevice = scopedDevices.find((device) => device.id === selectedDeviceId) || scopedDevices[0] || null;
+  const commandOptions = getDeviceControlDefinitions(selectedDevice);
 
   useEffect(() => {
     if (!selectedDeviceId && selectedDevice) {
       setSelectedDeviceId(selectedDevice.id);
     }
   }, [selectedDevice, selectedDeviceId]);
+
+  useEffect(() => {
+    if (!selectedDevice) return;
+    const options = getDeviceControlDefinitions(selectedDevice);
+    const nextSelected = options.some((option) => option.id === selectedCommand)
+      ? selectedCommand
+      : options[0]?.id || '';
+    setSelectedCommand(nextSelected);
+    setControlValues({
+      ...(selectedDevice.config?.controlState || {}),
+      ...Object.fromEntries(options.map((option) => [option.id, selectedDevice.config?.controlState?.[option.id] ?? option.defaultValue ?? ''])),
+    });
+  }, [selectedDevice?.id, selectedCommand]);
 
   const loadCommands = async () => {
     try {
@@ -74,15 +76,11 @@ export function ControlCenter() {
     loadCommands();
   }, []);
 
-  const buildParameters = () => {
-    if (selectedCommand === 'set_mode') return { mode };
-    if (selectedCommand === 'set_speed') return { speed };
-    if (selectedCommand === 'set_parameter') return { name: parameterName, value: parameterValue };
-    return {};
-  };
-
   const submitCommand = async () => {
     if (!selectedDevice || !canControl || !confirmChecked) return;
+    const definition = commandOptions.find((option) => option.id === selectedCommand);
+    if (!definition) return;
+    const parameters = buildControlParameters(definition, controlValues, parameterName);
 
     setIsSubmitting(true);
     setMessage('');
@@ -94,7 +92,7 @@ export function ControlCenter() {
         body: JSON.stringify({
           deviceId: selectedDevice.id,
           command: selectedCommand,
-          parameters: buildParameters(),
+          parameters,
           requestedBy: currentUser?.name || currentUser?.email || 'Unknown user',
           requestedByRole: currentUser?.role || 'Viewer',
         }),
@@ -105,6 +103,15 @@ export function ControlCenter() {
         setMessage(payload.error || 'Control command rejected.');
       } else {
         setMessage(`Command queued: ${payload.command?.id}`);
+        updateDevice(selectedDevice.id, {
+          config: {
+            ...(selectedDevice.config || {}),
+            controlState: {
+              ...(selectedDevice.config?.controlState || {}),
+              ...buildControlStatePatch(definition, controlValues, parameters),
+            },
+          },
+        });
         setConfirmChecked(false);
         await loadCommands();
       }
@@ -116,7 +123,7 @@ export function ControlCenter() {
   };
 
   const selectedOption = commandOptions.find((option) => option.id === selectedCommand) || commandOptions[0];
-  const SelectedIcon = selectedOption.icon;
+  const SelectedIcon = selectedOption?.icon || SlidersHorizontal;
 
   return (
     <div className="space-y-6">
@@ -209,32 +216,46 @@ export function ControlCenter() {
                     </button>
                   );
                 })}
+                {commandOptions.length === 0 && (
+                  <div className="col-span-2 rounded border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    No controls available for this device type.
+                  </div>
+                )}
               </div>
             </div>
 
-            {selectedCommand === 'set_mode' && (
+            {selectedOption?.valueType === 'select' && (
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Mode</label>
-                <select value={mode} onChange={(event) => setMode(event.target.value)} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="auto">Auto</option>
-                  <option value="manual">Manual</option>
-                  <option value="eco">Eco</option>
-                  <option value="maintenance">Maintenance</option>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{selectedOption.label}</label>
+                <select value={controlValues[selectedOption.id] ?? selectedOption.defaultValue ?? ''} onChange={(event) => setControlValues((current) => ({ ...current, [selectedOption.id]: event.target.value }))} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  {selectedOption.options?.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
               </div>
             )}
 
-            {selectedCommand === 'set_speed' && (
+            {selectedOption?.valueType === 'range' && (
               <div>
                 <div className="flex items-center justify-between">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Speed</label>
-                  <span className="text-sm font-semibold text-orange-600">{speed}%</span>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{selectedOption.label}</label>
+                  <span className="text-sm font-semibold text-orange-600">{controlValues[selectedOption.id] ?? selectedOption.defaultValue}{selectedOption.unit}</span>
                 </div>
-                <input type="range" min={0} max={100} value={speed} onChange={(event) => setSpeed(Number(event.target.value))} className="mt-3 w-full accent-orange-600" />
+                <input type="range" min={selectedOption.min ?? 0} max={selectedOption.max ?? 100} step={selectedOption.step ?? 1} value={controlValues[selectedOption.id] ?? selectedOption.defaultValue ?? 0} onChange={(event) => setControlValues((current) => ({ ...current, [selectedOption.id]: Number(event.target.value) }))} className="mt-3 w-full accent-orange-600" />
               </div>
             )}
 
-            {selectedCommand === 'set_parameter' && (
+            {selectedOption?.valueType === 'number' && (
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{selectedOption.label}</label>
+                <div className="mt-1 flex rounded border border-slate-300 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                  <input type="number" min={selectedOption.min} max={selectedOption.max} step={selectedOption.step ?? 1} value={controlValues[selectedOption.id] ?? selectedOption.defaultValue ?? ''} onChange={(event) => setControlValues((current) => ({ ...current, [selectedOption.id]: Number(event.target.value) }))} className="h-10 flex-1 border-0 bg-transparent px-3 text-sm text-slate-900 outline-none focus:ring-0 dark:text-slate-100" />
+                  {selectedOption.unit && <span className="flex items-center px-3 text-xs text-slate-500">{selectedOption.unit}</span>}
+                </div>
+              </div>
+            )}
+
+            {selectedOption?.valueType === 'text' && (
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Parameter</label>
@@ -242,7 +263,7 @@ export function ControlCenter() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Value</label>
-                  <input value={parameterValue} onChange={(event) => setParameterValue(event.target.value)} placeholder="42" className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                  <input value={controlValues[selectedOption.id] ?? ''} onChange={(event) => setControlValues((current) => ({ ...current, [selectedOption.id]: event.target.value }))} placeholder="42" className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
                 </div>
               </div>
             )}

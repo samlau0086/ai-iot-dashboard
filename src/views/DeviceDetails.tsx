@@ -1,28 +1,40 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
-import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2 } from 'lucide-react';
+import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play } from 'lucide-react';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { DeviceForm } from '../components/DeviceForm';
+import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, isDeviceControllable } from '../lib/deviceControls';
 
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { devices, language, updateDevice } = useAppStore();
+  const { devices, language, updateDevice, currentUser } = useAppStore();
   const t = translations[language];
 
   const device = devices.find(d => d.id === id);
   const [isEditing, setIsEditing] = useState(false);
 
-  // States for controls
-  const [controlValues, setControlValues] = useState<Record<string, any>>({
-    powerState: true,
-    targetTemp: 22,
-    mode: 'auto',
-    speed: 50,
-  });
+  const [controlValues, setControlValues] = useState<Record<string, any>>({});
+  const [parameterNames, setParameterNames] = useState<Record<string, string>>({});
+  const [controlMessage, setControlMessage] = useState('');
+  const [submittingControlId, setSubmittingControlId] = useState('');
+  const controlDefinitions = getDeviceControlDefinitions(device);
+  const isControllable = isDeviceControllable(device);
+  const canControl = currentUser?.role !== 'Demo' && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
+
+  useEffect(() => {
+    if (!device) return;
+    setControlValues({
+      ...(device.config?.controlState || {}),
+      ...Object.fromEntries(controlDefinitions.map((control) => [
+        control.id,
+        device.config?.controlState?.[control.id] ?? control.defaultValue ?? '',
+      ])),
+    });
+  }, [device?.id]);
 
   if (!device) {
     return (
@@ -41,11 +53,53 @@ export function DeviceDetails() {
   }
 
   const IconComp = getDeviceIcon(device.icon);
-  
-  const isControllable = ['pump_controller', 'plc', 'air_compressor', 'hvac'].includes(device.type) || device.type.includes('controller');
 
   const updateControl = (key: string, value: any) => {
     setControlValues(prev => ({ ...prev, [key]: value }));
+  };
+
+  const submitDeviceControl = async (controlId: string) => {
+    const definition = controlDefinitions.find((control) => control.id === controlId);
+    if (!definition || !canControl) return;
+
+    setSubmittingControlId(controlId);
+    setControlMessage('');
+    const parameters = buildControlParameters(definition, controlValues, parameterNames[controlId]);
+
+    try {
+      const response = await fetch('/api/device-commands', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          deviceId: device.id,
+          command: definition.id,
+          parameters,
+          requestedBy: currentUser?.name || currentUser?.email || 'Unknown user',
+          requestedByRole: currentUser?.role || 'Viewer',
+        }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        setControlMessage(payload.error || 'Control command rejected.');
+        return;
+      }
+
+      updateDevice(device.id, {
+        config: {
+          ...(device.config || {}),
+          controlState: {
+            ...(device.config?.controlState || {}),
+            ...buildControlStatePatch(definition, controlValues, parameters),
+          },
+        },
+      });
+      setControlMessage(`${definition.label}: ${payload.command?.status || 'queued'} - ${payload.command?.result || 'Command recorded.'}`);
+    } catch (error) {
+      setControlMessage('Failed to submit control command.');
+    } finally {
+      setSubmittingControlId('');
+    }
   };
 
   const metricValue = (key: string) => Number(device.metrics?.[key]) || 0;
@@ -385,75 +439,113 @@ export function DeviceDetails() {
 
           {isControllable && (
             <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white mb-6 uppercase tracking-wider text-[11px] font-mono">
-                <Zap className="h-4 w-4" /> Remote Controls
-              </h3>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                {/* Power Toggle */}
-                <div className="flex items-center justify-between p-4 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800/50">
-                  <div>
-                    <p className="text-sm font-medium text-slate-900 dark:text-white">Main Power</p>
-                    <p className="text-xs text-slate-500 mt-1">Toggle equipment operations</p>
-                  </div>
-                  <button 
-                    onClick={() => updateControl('powerState', !controlValues.powerState)}
-                    className={cn(
-                      "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none",
-                      controlValues.powerState ? 'bg-orange-600' : 'bg-slate-200 dark:bg-slate-700'
-                    )}
-                  >
-                    <span 
-                      className={cn(
-                        "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
-                        controlValues.powerState ? 'translate-x-5' : 'translate-x-0'
-                      )} 
-                    />
-                  </button>
-                </div>
-
-                {/* Operation Mode */}
-                <div className="space-y-3">
-                  <label className="text-sm font-medium text-slate-900 dark:text-white block">Operating Mode</label>
-                  <div className="flex rounded-md shadow-sm">
-                    {['Auto', 'Manual', 'Eco'].map((mode) => (
-                      <button
-                        key={mode}
-                        onClick={() => updateControl('mode', mode.toLowerCase())}
-                        className={cn(
-                          "flex-1 px-4 py-2 text-xs font-medium border-y border-l first:rounded-l-md last:rounded-r-md last:border-r border-slate-200 dark:border-slate-700 transition-colors",
-                          controlValues.mode === mode.toLowerCase()
-                            ? "bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-500/10 dark:text-orange-400 dark:border-orange-500/30 z-10"
-                            : "bg-white text-slate-700 hover:bg-slate-50 dark:bg-[#1c2128] dark:text-slate-300 dark:hover:bg-slate-800"
-                        )}
-                      >
-                        {mode}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Slider Control */}
-                <div className="space-y-3 md:col-span-2 p-4 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800/50">
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-slate-900 dark:text-white">Motor Speed</label>
-                    <span className="text-sm font-mono text-orange-600 font-semibold">{controlValues.speed}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={controlValues.speed}
-                    onChange={(e) => updateControl('speed', parseInt(e.target.value))}
-                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer dark:bg-slate-700 accent-orange-600"
-                  />
-                  <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                    <span>0%</span>
-                    <span>100%</span>
-                  </div>
-                </div>
-
+              <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white uppercase tracking-wider text-[11px] font-mono">
+                  <Zap className="h-4 w-4" /> Remote Controls
+                </h3>
+                {!canControl && (
+                  <span className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                    Current role can view controls only.
+                  </span>
+                )}
               </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {controlDefinitions.map((control) => {
+                  const Icon = control.icon;
+                  const currentValue = controlValues[control.id] ?? control.defaultValue ?? '';
+
+                  return (
+                    <div key={control.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800/50 dark:bg-slate-900">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-900 dark:text-white">{control.label}</p>
+                          <p className="mt-1 text-xs text-slate-500">{control.description}</p>
+                        </div>
+                        <div className="rounded-md bg-white p-2 text-orange-500 ring-1 ring-slate-200 dark:bg-[#1c2128] dark:ring-slate-800">
+                          <Icon className="h-4 w-4" />
+                        </div>
+                      </div>
+
+                      {control.valueType === 'select' && (
+                        <select
+                          value={currentValue}
+                          onChange={(event) => updateControl(control.id, event.target.value)}
+                          className="mt-4 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                        >
+                          {control.options?.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      )}
+
+                      {control.valueType === 'range' && (
+                        <div className="mt-4">
+                          <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+                            <span>{control.min ?? 0}</span>
+                            <span className="font-mono text-orange-600">{currentValue}{control.unit}</span>
+                            <span>{control.max ?? 100}</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={control.min ?? 0}
+                            max={control.max ?? 100}
+                            step={control.step ?? 1}
+                            value={currentValue}
+                            onChange={(event) => updateControl(control.id, Number(event.target.value))}
+                            className="w-full accent-orange-600"
+                          />
+                        </div>
+                      )}
+
+                      {control.valueType === 'number' && (
+                        <div className="mt-4 flex rounded border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-950">
+                          <input
+                            type="number"
+                            min={control.min}
+                            max={control.max}
+                            step={control.step ?? 1}
+                            value={currentValue}
+                            onChange={(event) => updateControl(control.id, Number(event.target.value))}
+                            className="h-9 flex-1 border-0 bg-transparent px-3 text-sm text-slate-900 focus:ring-0 dark:text-slate-100"
+                          />
+                          {control.unit && <span className="flex items-center px-3 text-xs text-slate-500">{control.unit}</span>}
+                        </div>
+                      )}
+
+                      {control.valueType === 'text' && (
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                          <input
+                            value={parameterNames[control.id] || ''}
+                            onChange={(event) => setParameterNames((current) => ({ ...current, [control.id]: event.target.value }))}
+                            placeholder="parameter"
+                            className="h-9 rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                          />
+                          <input
+                            value={currentValue}
+                            onChange={(event) => updateControl(control.id, event.target.value)}
+                            placeholder="value"
+                            className="h-9 rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                          />
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => submitDeviceControl(control.id)}
+                        disabled={!canControl || submittingControlId === control.id}
+                        className="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded bg-orange-600 px-3 text-xs font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        {submittingControlId === control.id ? 'Sending...' : 'Send Command'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {controlMessage && (
+                <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">{controlMessage}</p>
+              )}
             </div>
           )}
         </div>
