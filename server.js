@@ -29,6 +29,51 @@ const splitTopics = (value) => Array.isArray(value)
   ? value.map((topic) => String(topic).trim()).filter(Boolean)
   : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
 const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const telemetryMetadataKeys = new Set([
+  'id',
+  'device_id',
+  'deviceId',
+  'device_type',
+  'type',
+  'site_id',
+  'siteId',
+  'tenant_id',
+  'tenantId',
+  'tags',
+  'metrics',
+  'status',
+  'timestamp',
+  'lastSeen',
+  'firmwareVersion',
+  'name',
+  'source',
+  'received_at',
+  'mqtt_topic',
+  'topic',
+]);
+const extractTelemetryMetrics = (message = {}) => {
+  const nestedMetrics = message.metrics && typeof message.metrics === 'object' && !Array.isArray(message.metrics)
+    ? message.metrics
+    : {};
+  const metrics = {};
+
+  for (const [key, value] of Object.entries(nestedMetrics)) {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      metrics[key] = numericValue;
+    }
+  }
+
+  for (const [key, value] of Object.entries(message)) {
+    if (telemetryMetadataKeys.has(key)) continue;
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      metrics[key] = numericValue;
+    }
+  }
+
+  return metrics;
+};
 const createDefaultHttpChannels = () => [{
   id: 'http-default',
   name: 'Default HTTP Push',
@@ -1282,10 +1327,12 @@ const ingestTelemetryPayload = async (payload, source = 'http') => {
   for (const message of messages) {
     if (!message || typeof message !== 'object') continue;
     const deviceId = message.device_id || message.deviceId || message.id;
-    if (!deviceId || !message.metrics || typeof message.metrics !== 'object') continue;
+    const metrics = extractTelemetryMetrics(message);
+    if (!deviceId || Object.keys(metrics).length === 0) continue;
 
     accepted.push({
       ...message,
+      metrics,
       source,
       received_at: new Date().toISOString(),
     });

@@ -11,6 +11,36 @@ const toNumberMetrics = (metrics: Record<string, unknown> = {}) => {
   }, {});
 };
 
+const TELEMETRY_METADATA_KEYS = new Set([
+  'id',
+  'device_id',
+  'deviceId',
+  'device_type',
+  'type',
+  'site_id',
+  'siteId',
+  'tenant_id',
+  'tenantId',
+  'tags',
+  'metrics',
+  'status',
+  'timestamp',
+  'lastSeen',
+  'firmwareVersion',
+  'name',
+  'source',
+  'received_at',
+  'mqtt_topic',
+  'topic',
+]);
+
+const extractTelemetryMetrics = (payload: DeviceTelemetryMessage) => ({
+  ...toNumberMetrics(payload.metrics),
+  ...toNumberMetrics(Object.fromEntries(
+    Object.entries(payload as Record<string, unknown>).filter(([key]) => !TELEMETRY_METADATA_KEYS.has(key))
+  )),
+});
+
 export const normalizeDevice = (payload: DeviceTelemetryMessage): Device | null => {
   const id = payload.device_id || payload.deviceId || payload.id;
   const type = payload.device_type || payload.type;
@@ -25,7 +55,7 @@ export const normalizeDevice = (payload: DeviceTelemetryMessage): Device | null 
     siteId,
     tenantId: payload.tenant_id || payload.tenantId,
     tags: payload.tags || (siteId ? [siteId] : []),
-    metrics: toNumberMetrics(payload.metrics),
+    metrics: extractTelemetryMetrics(payload),
     status: payload.status || 'online',
     lastSeen: payload.lastSeen || payload.timestamp || new Date().toISOString(),
     firmwareVersion: payload.firmwareVersion || 'unknown',
@@ -69,7 +99,7 @@ export const mergeTelemetryIntoDevices = (devices: Device[], payload: DeviceTele
           tags: payload.tags?.length ? payload.tags : device.tags,
           metrics: {
             ...device.metrics,
-            ...toNumberMetrics(payload.metrics),
+            ...extractTelemetryMetrics(payload),
           },
           firmwareVersion: payload.firmwareVersion || device.firmwareVersion,
         }
