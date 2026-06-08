@@ -84,7 +84,7 @@ export function DeviceDetails() {
   const primaryMetricKeysByType: Record<string, { key: string; label: string; icon: any }[]> = {
     energy_meter: [
       { key: 'power', label: 'Power Draw', icon: Zap },
-      { key: 'energy_today', label: 'Energy Today', icon: Activity },
+      { key: 'energy', label: 'Energy Today', icon: Activity },
       { key: 'voltage', label: 'Voltage', icon: Gauge },
       { key: 'current', label: 'Current', icon: Activity },
     ],
@@ -140,7 +140,8 @@ export function DeviceDetails() {
   const secondaryMetrics = Object.entries(device.metrics || {}).filter(([key]) => !primaryMetricSet.has(key));
   const commonMetricTargets = [
     { key: 'power', label: 'Power Draw' },
-    { key: 'energy_today', label: 'Energy Today' },
+    { key: 'energy', label: 'Energy Today' },
+    { key: 'energy_today', label: 'Energy Today (Legacy)' },
     { key: 'voltage', label: 'Voltage' },
     { key: 'current', label: 'Current' },
     { key: 'temperature', label: 'Temperature' },

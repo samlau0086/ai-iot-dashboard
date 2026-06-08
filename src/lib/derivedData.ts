@@ -89,7 +89,7 @@ export const deriveAlertsFromDevices = (devices: Device[]): Alert[] => {
 
 export const deriveEnergyTrendData = (devices: Device[], metric = 'power') => {
   const totalMetric = devices.reduce((sum, device) => sum + numberMetric(device, metric), 0);
-  const fallbackEnergy = devices.reduce((sum, device) => sum + numberMetric(device, 'energy_today'), 0);
+  const fallbackEnergy = devices.reduce((sum, device) => sum + numberMetric(device, 'energy') || numberMetric(device, 'energy_today'), 0);
   const baseValue = totalMetric || fallbackEnergy || 0;
 
   return trendTimes.map((time, index) => ({

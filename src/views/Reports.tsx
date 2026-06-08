@@ -106,7 +106,7 @@ export function Reports() {
       ];
     }
 
-    const totalEnergy = devices.reduce((sum, device) => sum + (Number(device.metrics.energy_today) || 0), 0);
+    const totalEnergy = devices.reduce((sum, device) => sum + (Number(device.metrics.energy) || Number(device.metrics.energy_today) || 0), 0);
     const totalPower = devices.reduce((sum, device) => sum + (Number(device.metrics.power) || 0), 0);
 
     return [
@@ -126,7 +126,7 @@ export function Reports() {
         device.id,
         device.name,
         device.type,
-        String(device.metrics.energy_today || ''),
+        String(device.metrics.energy || device.metrics.energy_today || ''),
         String(device.metrics.power || ''),
         device.status,
       ]),

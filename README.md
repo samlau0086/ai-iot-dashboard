@@ -480,7 +480,7 @@ Token 管理流程：
   "tags": ["factory-a"],
   "metrics": {
     "power": 4070,
-    "energy_today": 128.6
+    "energy": 128.6
   },
   "status": "online",
   "timestamp": "2026-06-05T10:00:00Z"
@@ -498,7 +498,7 @@ curl -X POST "http://localhost:3006/api/telemetry" \
     "tags": ["factory-a"],
     "metrics": {
       "power": 4070,
-      "energy_today": 128.6,
+      "energy": 128.6,
       "voltage": 380,
       "current": 10.7
     },
@@ -608,7 +608,7 @@ MQTT Payload 格式：
   "tags": ["factory-a"],
   "metrics": {
     "power": 4070,
-    "energy_today": 128.6
+    "energy": 128.6
   },
   "status": "online",
   "timestamp": "2026-06-05T10:00:00Z"

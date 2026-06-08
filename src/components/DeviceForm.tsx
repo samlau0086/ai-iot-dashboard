@@ -114,7 +114,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   const sampleMetricsByType = (type?: DeviceType) => {
     switch (type) {
       case 'energy_meter':
-        return { power: 4070, energy_today: 128.6, voltage: 380, current: 10.7 };
+        return { power: 4070, energy: 128.6, voltage: 380, current: 10.7 };
       case 'temperature_sensor':
       case 'sensor':
         return { temperature: -18.4, humidity: 62, battery: 85 };

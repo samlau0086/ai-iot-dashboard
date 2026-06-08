@@ -96,7 +96,7 @@ const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
   }
 
   if (chartConf.dataSource === 'energy') {
-    const metric = boundMetric || 'energy_today';
+    const metric = boundMetric || 'energy';
     const factor = Math.max(sumMetric(devices, metric) / 600, 0.2);
     return fallbackData.map((item) => ({
       ...item,

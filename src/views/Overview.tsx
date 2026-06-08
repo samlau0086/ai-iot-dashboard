@@ -175,7 +175,7 @@ const WIDGET_PRESET_LIBRARY: (OverviewWidget & { category: string; description: 
     title: 'Energy Trend',
     description: 'Area trend for daily energy consumption.',
     displayMode: 'area',
-    metricKey: 'energy_today',
+    metricKey: 'energy',
     iconId: 'plug-zap',
     unit: 'kWh',
     precision: 1,
@@ -488,7 +488,7 @@ export function Overview() {
     return {
       totalDevices: { name: t.overview.totalDevices, value: targetDevices.length.toString(), icon: Server },
       onlineDevices: { name: t.overview.onlineDevices, value: targetDevices.filter(d => d.status === 'online').length.toString(), icon: Activity },
-      energyToday: { name: t.overview.energyToday, value: `${sumMetric(targetDevices, 'energy_today').toFixed(1)} kWh`, icon: Zap },
+      energyToday: { name: t.overview.energyToday, value: `${sumMetric(targetDevices, 'energy').toFixed(1)} kWh`, icon: Zap },
       activeAlerts: { name: t.overview.activeAlerts, value: targetAlerts.filter(a => a.status === 'active').length.toString(), icon: AlertTriangle },
       solarGeneration: { name: 'PV Generation Today', value: `${(sumMetric(targetDevices, 'energy_today') / 1000).toFixed(2)} MWh`, icon: Sun },
       solarEfficiency: { name: 'Inverter Efficiency', value: `${averageMetric(targetDevices, 'efficiency').toFixed(1)}%`, icon: Activity },
