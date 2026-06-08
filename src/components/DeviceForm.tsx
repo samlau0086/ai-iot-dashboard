@@ -79,7 +79,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleConfigChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleConfigChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
     setConfigData((prev: any) => ({
       ...prev,
@@ -183,10 +183,22 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
 
   const buildMqttExample = () => {
     const payload = JSON.stringify(buildTelemetryPayload(), null, 2);
+    const commandPayload = configData.mqttCommandTemplate || JSON.stringify({
+      cmd: '{{command}}',
+      device: '{{deviceId}}',
+      params: '{{parameters}}',
+      ts: '{{timestamp}}',
+    }, null, 2);
     return `Topic: ${getMqttTelemetryTopic()}
 
 Payload:
 ${payload}
+
+Command Topic:
+${configData.commandTopic || `devices/${String(configData.externalDeviceId || existingDevice?.id || 'NEW-DEVICE-ID').trim()}/command`}
+
+Command Payload Template:
+${commandPayload}
 
 MQTT CLI:
 mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.stringify(buildTelemetryPayload())}'`;
@@ -619,6 +631,48 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
               />
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional command topic. If empty, the backend derives one from MQTT Topic or External Device ID.</p>
              </div>
+             {configData.dataSource === 'mqtt' && (
+              <>
+                <div className="sm:col-span-3">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">MQTT Receive Payload Template</label>
+                  <textarea
+                    name="mqttReceiveTemplate"
+                    value={configData.mqttReceiveTemplate || ''}
+                    onChange={handleConfigChange}
+                    rows={8}
+                    placeholder={`{
+  "device_id": "$.device.id",
+  "status": "$.state",
+  "metrics": {
+    "power": "$.data.p_total",
+    "energy": "$.data.kwh",
+    "voltage": "$.data.ua"
+  }
+}`}
+                    className="mt-1 block w-full rounded-md border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional JSON template. Values like $.data.power read from the incoming MQTT payload and normalize it before storage.</p>
+                </div>
+                <div className="sm:col-span-3">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">MQTT Command Payload Template</label>
+                  <textarea
+                    name="mqttCommandTemplate"
+                    value={configData.mqttCommandTemplate || ''}
+                    onChange={handleConfigChange}
+                    rows={8}
+                    placeholder={`{
+  "cmd": "{{command}}",
+  "id": "{{deviceId}}",
+  "value": "{{parameters.value}}",
+  "params": {{parametersJson}},
+  "time": "{{timestamp}}"
+}`}
+                    className="mt-1 block w-full rounded-md border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional command JSON template. Supports command, deviceId, timestamp, parameters.xxx, and parametersJson placeholders.</p>
+                </div>
+              </>
+             )}
              {renderConfigFields()}
            </div>
         </div>

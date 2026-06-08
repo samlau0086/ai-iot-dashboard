@@ -471,6 +471,69 @@ const topicMatches = (pattern, topic) => {
   return patternParts.length === topicParts.length;
 };
 
+const parseJsonTemplate = (template) => {
+  if (!template) return null;
+  if (typeof template === 'object') return template;
+  try {
+    return JSON.parse(String(template));
+  } catch (error) {
+    return null;
+  }
+};
+
+const getJsonPathValue = (payload, pathValue) => {
+  const pathText = String(pathValue || '').trim();
+  if (!pathText) return undefined;
+  if (pathText === '$') return payload;
+  const normalizedPath = pathText
+    .replace(/^\$\./, '')
+    .replace(/^\$/, '')
+    .replace(/\[(\d+)\]/g, '.$1')
+    .replace(/\[['"]([^'"]+)['"]\]/g, '.$1');
+  if (!normalizedPath) return payload;
+
+  return normalizedPath.split('.').filter(Boolean).reduce((current, part) => (
+    current && typeof current === 'object' ? current[part] : undefined
+  ), payload);
+};
+
+const resolveReceiveTemplate = (template, payload) => {
+  if (typeof template === 'string') {
+    if (template.trim().startsWith('$')) return getJsonPathValue(payload, template);
+    return template;
+  }
+  if (Array.isArray(template)) return template.map((item) => resolveReceiveTemplate(item, payload));
+  if (template && typeof template === 'object') {
+    return Object.fromEntries(Object.entries(template).map(([key, value]) => [key, resolveReceiveTemplate(value, payload)]));
+  }
+  return template;
+};
+
+const findDashboardDeviceForTelemetry = async (message) => {
+  const deviceId = message.device_id || message.deviceId || message.id;
+  const topic = message.mqtt_topic || message.topic;
+  const devices = await getDashboardDevices();
+  return devices.find((device) => {
+    if (deviceId && (device.id === deviceId || device?.config?.externalDeviceId === deviceId)) return true;
+    const configuredTopic = device?.config?.mqttTopic;
+    return configuredTopic && topic && topicMatches(configuredTopic, topic);
+  }) || null;
+};
+
+const applyDeviceReceiveTemplate = (message, device) => {
+  const template = parseJsonTemplate(device?.config?.mqttReceiveTemplate);
+  if (!template) return message;
+  const resolved = resolveReceiveTemplate(template, message);
+  if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved)) return message;
+
+  return {
+    ...message,
+    ...resolved,
+    device_id: resolved.device_id || resolved.deviceId || resolved.id || message.device_id || message.deviceId || message.id || device?.config?.externalDeviceId || device?.id,
+    mqtt_topic: message.mqtt_topic || message.topic,
+  };
+};
+
 const getMetricValue = (event, metric) => {
   if (!metric) return undefined;
   const metrics = event?.message?.metrics || event?.payload?.metrics || event?.metrics || {};
@@ -779,6 +842,44 @@ const publicDeviceCommandPayload = (command) => ({
   timestamp: command.createdAt,
 });
 
+const getTemplateContextValue = (context, pathValue) => {
+  const pathText = String(pathValue || '').trim();
+  if (!pathText) return '';
+  return pathText.split('.').reduce((current, part) => (
+    current && typeof current === 'object' ? current[part] : undefined
+  ), context);
+};
+
+const renderDeviceCommandPayload = (command, device) => {
+  const template = device?.config?.mqttCommandTemplate;
+  if (!template) return publicDeviceCommandPayload(command);
+
+  const context = {
+    commandId: command.id,
+    command: command.command,
+    deviceId: command.deviceId,
+    externalDeviceId: device?.config?.externalDeviceId || command.deviceId,
+    requestedBy: command.requestedBy,
+    source: command.source,
+    timestamp: command.createdAt,
+    parameters: command.parameters || {},
+    parametersJson: JSON.stringify(command.parameters || {}),
+  };
+
+  const rendered = String(template).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, key) => {
+    const value = getTemplateContextValue(context, key);
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  });
+
+  try {
+    return JSON.parse(rendered);
+  } catch (error) {
+    return rendered;
+  }
+};
+
 const publishDeviceCommandToMqtt = async (command, device) => {
   const topic = getDeviceCommandTopic(device);
   if (!topic) {
@@ -795,7 +896,8 @@ const publishDeviceCommandToMqtt = async (command, device) => {
     return {ok: false, message: 'No connected MQTT subscriber socket is available for command publish.'};
   }
 
-  runtime.socket.write(createMqttPublishPacket(topic, JSON.stringify(publicDeviceCommandPayload(command))));
+  const payload = renderDeviceCommandPayload(command, device);
+  runtime.socket.write(createMqttPublishPacket(topic, typeof payload === 'string' ? payload : JSON.stringify(payload)));
   return {ok: true, message: `Published to MQTT topic ${topic}`};
 };
 
@@ -1346,12 +1448,15 @@ const ingestTelemetryPayload = async (payload, source = 'http') => {
 
   for (const message of messages) {
     if (!message || typeof message !== 'object') continue;
-    const deviceId = message.device_id || message.deviceId || message.id;
-    const metrics = extractTelemetryMetrics(message);
+    const device = await findDashboardDeviceForTelemetry(message);
+    const normalizedMessage = applyDeviceReceiveTemplate(message, device);
+    const deviceId = normalizedMessage.device_id || normalizedMessage.deviceId || normalizedMessage.id || device?.config?.externalDeviceId || device?.id;
+    const metrics = extractTelemetryMetrics(normalizedMessage);
     if (!deviceId || Object.keys(metrics).length === 0) continue;
 
     accepted.push({
-      ...message,
+      ...normalizedMessage,
+      device_id: deviceId,
       metrics,
       source,
       received_at: new Date().toISOString(),
