@@ -158,7 +158,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
       device_id: externalDeviceId,
       device_type: deviceType,
       tags: formData.tags || ['factory-a'],
-      ...(configData.dataSource === 'mqtt' && configData.mqttTopic ? { mqtt_topic: configData.mqttTopic } : {}),
+      ...(configData.dataSource === 'mqtt' ? { mqtt_topic: getMqttTelemetryTopic() } : {}),
       metrics: Object.keys(existingDevice?.metrics || {}).length
         ? existingDevice?.metrics
         : sampleMetricsByType(deviceType),
@@ -175,13 +175,32 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   -d '${payload}'`;
   };
 
-  const handleCopyCurl = async () => {
+  function getMqttTelemetryTopic() {
+    const fallbackId = existingDevice?.id || 'NEW-DEVICE-ID';
+    const externalDeviceId = String(configData.externalDeviceId || fallbackId).trim() || fallbackId;
+    return String(configData.mqttTopic || '').trim() || `devices/${externalDeviceId}/telemetry`;
+  }
+
+  const buildMqttExample = () => {
+    const payload = JSON.stringify(buildTelemetryPayload(), null, 2);
+    return `Topic: ${getMqttTelemetryTopic()}
+
+Payload:
+${payload}
+
+MQTT CLI:
+mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.stringify(buildTelemetryPayload())}'`;
+  };
+
+  const buildTelemetryExample = () => configData.dataSource === 'mqtt' ? buildMqttExample() : buildCurlRequest();
+
+  const handleCopyTelemetryExample = async () => {
     setCopyMessage('');
     try {
-      await navigator.clipboard.writeText(buildCurlRequest());
-      setCopyMessage('Curl request copied.');
+      await navigator.clipboard.writeText(buildTelemetryExample());
+      setCopyMessage(configData.dataSource === 'mqtt' ? 'MQTT example copied.' : 'Curl request copied.');
     } catch (error) {
-      setCopyMessage('Copy failed. Select the request text and copy it manually.');
+      setCopyMessage('Copy failed. Select the example text and copy it manually.');
     }
   };
 
@@ -608,14 +627,18 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
           <div className="border-t border-slate-200 dark:border-slate-800 pt-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h4 className="text-sm font-medium text-slate-900 dark:text-white">Telemetry Test Curl</h4>
+                <h4 className="text-sm font-medium text-slate-900 dark:text-white">
+                  {configData.dataSource === 'mqtt' ? 'MQTT Telemetry Example' : 'Telemetry Test Curl'}
+                </h4>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Generated from the current device binding fields. Use an active Ingest Token from Settings when testing /api/telemetry.
+                  {configData.dataSource === 'mqtt'
+                    ? 'Generated from the current MQTT topic and device binding fields. Publish this JSON payload to the topic after the backend subscriber is connected.'
+                    : 'Generated from the current device binding fields. Use an active Ingest Token from Settings when testing /api/telemetry.'}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={handleCopyCurl}
+                onClick={handleCopyTelemetryExample}
                 className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
               >
                 <Copy className="h-3.5 w-3.5" />
@@ -623,13 +646,8 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
               </button>
             </div>
             <pre className="mt-3 max-h-80 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-4 text-xs leading-5 text-slate-100 dark:border-slate-800">
-              <code>{buildCurlRequest()}</code>
+              <code>{buildTelemetryExample()}</code>
             </pre>
-            {configData.dataSource === 'mqtt' && (
-              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                MQTT devices should publish this JSON payload to the configured topic; the curl request is for validating the Dashboard HTTP ingest path with the same payload.
-              </p>
-            )}
             {copyMessage && (
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{copyMessage}</p>
             )}
