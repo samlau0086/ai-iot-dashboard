@@ -993,6 +993,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       const selectedControl = controlDefinitions.find((control) => control.id === node.config.controlId) || controlDefinitions[0];
                       const controlValue = node.config.value ?? selectedControl?.defaultValue ?? '';
                       const parameterValues = node.config.parameters || {};
+                      const ControlIcon = selectedControl?.icon;
 
                       const updateControlValue = (value: any) => {
                         if (!selectedControl) return;
@@ -1011,9 +1012,22 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
                         updateNodeConfig(node.id, { value, parameters });
                       };
+                      const updateParameterName = (parameterName: string) => {
+                        if (!selectedControl) return;
+                        const controlValues = { [selectedControl.id]: controlValue };
+                        updateNodeConfig(node.id, {
+                          parameterName,
+                          parameters: buildControlParameters(selectedControl, controlValues, parameterName || 'parameter'),
+                        });
+                      };
+                      const updateParameterGroupField = (fieldKey: string, value: any) => {
+                        if (!selectedControl) return;
+                        const nextParameters = { ...parameterValues, [fieldKey]: value };
+                        updateNodeConfig(node.id, { parameters: nextParameters });
+                      };
 
                       return (
-                        <div className="space-y-4 rounded-lg border border-orange-200 bg-orange-50/50 p-3 dark:border-orange-500/20 dark:bg-orange-500/5">
+                        <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                           <div>
                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Device</label>
                             <DeviceSelect
@@ -1038,18 +1052,44 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                             </select>
                           </div>
 
+                          {selectedControl && (
+                            <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-semibold text-slate-900 dark:text-white">{selectedControl.label}</p>
+                                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{selectedControl.description}</p>
+                                </div>
+                                <div className="rounded-md bg-slate-50 p-2 text-orange-500 ring-1 ring-slate-200 dark:bg-[#1c2128] dark:ring-slate-800">
+                                  {ControlIcon ? <ControlIcon className="h-4 w-4" /> : getActionIcon(node.config.type)}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
                           {selectedControl && selectedControl.valueType === 'toggle' && (
-                            <label className="flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+                            <div className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950">
                               <span className="text-slate-700 dark:text-slate-300">{selectedControl.parameterKey || selectedControl.id}</span>
-                              <select
-                                value={String(Boolean(controlValue))}
-                                onChange={(event) => updateControlValue(event.target.value === 'true')}
-                                className="rounded border-0 bg-transparent text-sm font-semibold text-orange-600 focus:ring-0 dark:text-orange-400"
+                              <button
+                                type="button"
+                                onClick={() => updateControlValue(!Boolean(controlValue))}
+                                className={cn(
+                                  "relative inline-flex h-10 w-24 shrink-0 items-center rounded-full border-2 px-2 font-bold transition-colors",
+                                  Boolean(controlValue)
+                                    ? "justify-start border-slate-950 bg-slate-950 text-white dark:border-orange-500 dark:bg-orange-600"
+                                    : "justify-end border-slate-950 bg-white text-slate-950 dark:border-slate-400 dark:bg-slate-950 dark:text-white"
+                                )}
                               >
-                                <option value="true">ON</option>
-                                <option value="false">OFF</option>
-                              </select>
-                            </label>
+                                <span className="z-10 text-sm">{Boolean(controlValue) ? 'ON' : 'OFF'}</span>
+                                <span
+                                  className={cn(
+                                    "absolute top-1 h-7 w-7 rounded-full transition-all",
+                                    Boolean(controlValue)
+                                      ? "right-1 bg-white"
+                                      : "left-1 bg-slate-950 dark:bg-white"
+                                  )}
+                                />
+                              </button>
+                            </div>
                           )}
 
                           {selectedControl && ['select'].includes(selectedControl.valueType) && (
@@ -1069,16 +1109,31 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
                           {selectedControl && ['slider', 'range', 'number'].includes(selectedControl.valueType) && (
                             <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{selectedControl.label}</label>
-                              <input
-                                type="number"
-                                min={selectedControl.min}
-                                max={selectedControl.max}
-                                step={selectedControl.step ?? 1}
-                                value={controlValue}
-                                onChange={(event) => updateControlValue(Number(event.target.value))}
-                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
-                              />
+                              <div className="mb-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                <span>{selectedControl.label}</span>
+                                <span className="font-mono text-orange-600 dark:text-orange-400">{controlValue}{selectedControl.unit}</span>
+                              </div>
+                              {selectedControl.valueType === 'number' ? (
+                                <input
+                                  type="number"
+                                  min={selectedControl.min}
+                                  max={selectedControl.max}
+                                  step={selectedControl.step ?? 1}
+                                  value={controlValue}
+                                  onChange={(event) => updateControlValue(Number(event.target.value))}
+                                  className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                />
+                              ) : (
+                                <input
+                                  type="range"
+                                  min={selectedControl.min ?? 0}
+                                  max={selectedControl.max ?? 100}
+                                  step={selectedControl.step ?? 1}
+                                  value={controlValue}
+                                  onChange={(event) => updateControlValue(Number(event.target.value))}
+                                  className="w-full accent-orange-600"
+                                />
+                              )}
                             </div>
                           )}
 
@@ -1089,7 +1144,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Parameter Name</label>
                                   <input
                                     value={node.config.parameterName || ''}
-                                    onChange={(event) => updateNodeConfig(node.id, { parameterName: event.target.value })}
+                                    onChange={(event) => updateParameterName(event.target.value)}
                                     className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
                                   />
                                 </div>
@@ -1110,15 +1165,26 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                               {(selectedControl.fields || []).map((field) => (
                                 <div key={field.key}>
                                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{field.label}</label>
-                                  <input
-                                    type={field.valueType === 'number' ? 'number' : 'text'}
-                                    value={parameterValues[field.key] ?? field.defaultValue ?? ''}
-                                    onChange={(event) => {
-                                      const nextParameters = { ...parameterValues, [field.key]: field.valueType === 'number' ? Number(event.target.value) : event.target.value };
-                                      updateNodeConfig(node.id, { parameters: nextParameters });
-                                    }}
-                                    className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
-                                  />
+                                  {field.valueType === 'select' ? (
+                                    <select
+                                      value={parameterValues[field.key] ?? field.defaultValue ?? ''}
+                                      onChange={(event) => updateParameterGroupField(field.key, event.target.value)}
+                                      className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                    >
+                                      {field.options?.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type={field.valueType === 'number' ? 'number' : 'text'}
+                                      value={parameterValues[field.key] ?? field.defaultValue ?? ''}
+                                      onChange={(event) => {
+                                        updateParameterGroupField(field.key, field.valueType === 'number' ? Number(event.target.value) : event.target.value);
+                                      }}
+                                      className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                    />
+                                  )}
                                 </div>
                               ))}
                             </div>
