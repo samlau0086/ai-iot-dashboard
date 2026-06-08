@@ -111,6 +111,10 @@ type MqttStatus = {
   message: string;
   connectedAt?: string | null;
   lastMessageAt?: string | null;
+  lastTopic?: string | null;
+  receivedCount?: number;
+  acceptedCount?: number;
+  rejectedCount?: number;
 };
 
 type IngestToken = {
@@ -373,7 +377,15 @@ export function Settings() {
       return;
     }
 
-    const invalidMqtt = mqttChannels.find((channel) => {
+    const channelsToSave = mqttChannels.map((channel) => ({
+      ...channel,
+      topics: normalizeTopics([
+        ...normalizeTopics(channel.topics),
+        mqttTopicDrafts[channel.id] || '',
+      ]),
+    }));
+
+    const invalidMqtt = channelsToSave.find((channel) => {
       const topics = normalizeTopics(channel.topics);
       return channel.enabled && (!channel.brokerUrl.trim() || topics.length === 0);
     });
@@ -388,7 +400,7 @@ export function Settings() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           httpPushChannels,
-          mqttChannels: mqttChannels.map((channel) => ({
+          mqttChannels: channelsToSave.map((channel) => ({
             ...channel,
             topics: normalizeTopics(channel.topics),
           })),
@@ -950,6 +962,16 @@ export function Settings() {
                           {status?.lastMessageAt && (
                             <span className="text-xs text-slate-500 dark:text-slate-400">Last message: {new Date(status.lastMessageAt).toLocaleString()}</span>
                           )}
+                          {status?.lastTopic && (
+                            <span className="max-w-full truncate rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                              Topic: {status.lastTopic}
+                            </span>
+                          )}
+                          {status && (status.receivedCount || status.acceptedCount || status.rejectedCount) ? (
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              Received {status.receivedCount || 0} / Accepted {status.acceptedCount || 0} / Rejected {status.rejectedCount || 0}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                     );

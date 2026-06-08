@@ -1278,6 +1278,10 @@ const mqttStatusFor = (channelId) => mqttRuntimes.get(channelId)?.status || {
   message: 'MQTT subscriber is disabled',
   connectedAt: null,
   lastMessageAt: null,
+  lastTopic: null,
+  receivedCount: 0,
+  acceptedCount: 0,
+  rejectedCount: 0,
 };
 
 const mqttStatuses = () => Object.fromEntries(mqttChannels.map((channel) => [channel.id, mqttStatusFor(channel.id)]));
@@ -1412,6 +1416,13 @@ const handleMqttPublish = async (runtime, packet, flags) => {
 
   const payloadText = packet.slice(payloadStart).toString();
   rememberMqttTopic(runtime, topic);
+  const now = new Date().toISOString();
+  runtime.status = {
+    ...runtime.status,
+    lastTopic: topic,
+    lastMessageAt: now,
+    receivedCount: (runtime.status.receivedCount || 0) + 1,
+  };
 
   try {
     const payload = JSON.parse(payloadText);
@@ -1422,10 +1433,25 @@ const handleMqttPublish = async (runtime, packet, flags) => {
       `mqtt:${runtime.config.id}`
     );
     if (accepted.length > 0) {
-      runtime.status = {...runtime.status, lastMessageAt: new Date().toISOString()};
+      runtime.status = {
+        ...runtime.status,
+        message: `Accepted ${accepted.length} telemetry message(s) from ${topic}`,
+        lastMessageAt: now,
+        acceptedCount: (runtime.status.acceptedCount || 0) + accepted.length,
+      };
+    } else {
+      runtime.status = {
+        ...runtime.status,
+        message: `MQTT payload on ${topic} did not include a device id and numeric metrics`,
+        rejectedCount: (runtime.status.rejectedCount || 0) + 1,
+      };
     }
   } catch (error) {
-    runtime.status = {...runtime.status, message: `MQTT payload JSON parse failed on ${topic}`};
+    runtime.status = {
+      ...runtime.status,
+      message: `MQTT payload JSON parse failed on ${topic}`,
+      rejectedCount: (runtime.status.rejectedCount || 0) + 1,
+    };
   }
 };
 
@@ -1457,7 +1483,7 @@ const handleMqttData = (runtime, chunk) => {
     if (packetType === 2) {
       const returnCode = packet[1];
       if (returnCode === 0) {
-        runtime.status = {state: 'connected', message: 'Connected to MQTT broker', connectedAt: new Date().toISOString(), lastMessageAt: runtime.status.lastMessageAt};
+        runtime.status = {...runtime.status, state: 'connected', message: 'Connected to MQTT broker', connectedAt: new Date().toISOString()};
         if (runtime.config.topics.length > 0) {
           runtime.socket?.write(createMqttSubscribePacket(runtime, runtime.config.topics));
         }
@@ -1471,6 +1497,24 @@ const handleMqttData = (runtime, chunk) => {
       handleMqttPublish(runtime, packet, flags).catch((error) => {
         runtime.status = {...runtime.status, message: error.message};
       });
+    }
+
+    if (packetType === 9) {
+      const returnCodes = Array.from(packet.slice(2));
+      const rejectedTopics = runtime.config.topics.filter((_, index) => returnCodes[index] === 0x80);
+      if (rejectedTopics.length > 0) {
+        runtime.status = {
+          ...runtime.status,
+          state: 'error',
+          message: `MQTT subscription rejected for: ${rejectedTopics.join(', ')}`,
+        };
+      } else {
+        runtime.status = {
+          ...runtime.status,
+          state: 'connected',
+          message: `Subscribed to ${runtime.config.topics.join(', ')}`,
+        };
+      }
     }
   }
 };
