@@ -1236,6 +1236,20 @@ const mqttStatusFor = (channelId) => mqttRuntimes.get(channelId)?.status || {
 };
 
 const mqttStatuses = () => Object.fromEntries(mqttChannels.map((channel) => [channel.id, mqttStatusFor(channel.id)]));
+const mqttObservedTopics = () => Object.fromEntries(mqttChannels.map((channel) => [
+  channel.id,
+  Array.from(mqttRuntimes.get(channel.id)?.observedTopics || []).sort(),
+]));
+
+const rememberMqttTopic = (runtime, topic) => {
+  if (!topic) return;
+  runtime.observedTopics = runtime.observedTopics || new Set();
+  runtime.observedTopics.add(topic);
+  if (runtime.observedTopics.size > 100) {
+    const oldestTopic = runtime.observedTopics.values().next().value;
+    runtime.observedTopics.delete(oldestTopic);
+  }
+};
 
 const persistTelemetryMessages = async (messages, source = 'http') => {
   if (!db || messages.length === 0) return;
@@ -1350,6 +1364,7 @@ const handleMqttPublish = async (runtime, packet, flags) => {
   }
 
   const payloadText = packet.slice(payloadStart).toString();
+  rememberMqttTopic(runtime, topic);
 
   try {
     const payload = JSON.parse(payloadText);
@@ -1425,8 +1440,10 @@ const startMqttRuntime = (config) => {
     packetId: 1,
     buffer: Buffer.alloc(0),
     status: {state: 'disabled', message: 'MQTT subscriber is disabled', connectedAt: null, lastMessageAt: null},
+    observedTopics: new Set(),
   };
   runtime.config = config;
+  runtime.observedTopics = runtime.observedTopics || new Set();
   runtime.stopped = false;
   mqttRuntimes.set(config.id, runtime);
 
@@ -1564,6 +1581,7 @@ app.get('/api/data-sources', (_req, res) => {
     httpPushChannels: httpPushChannels.map(sanitizeHttpChannel),
     mqttChannels: mqttChannels.map(publicMqttChannel),
     mqttStatuses: mqttStatuses(),
+    mqttObservedTopics: mqttObservedTopics(),
   });
 });
 
@@ -1589,6 +1607,7 @@ app.post('/api/data-sources', async (req, res) => {
       httpPushChannels: httpPushChannels.map(sanitizeHttpChannel),
       mqttChannels: mqttChannels.map(publicMqttChannel),
       mqttStatuses: mqttStatuses(),
+      mqttObservedTopics: mqttObservedTopics(),
     });
   } catch (error) {
     res.status(500).json({error: error.message});

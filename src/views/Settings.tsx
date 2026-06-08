@@ -151,6 +151,8 @@ export function Settings() {
   const [httpPushChannels, setHttpPushChannels] = useState<HttpPushChannel[]>([]);
   const [mqttChannels, setMqttChannels] = useState<MqttChannel[]>([]);
   const [mqttStatuses, setMqttStatuses] = useState<Record<string, MqttStatus>>({});
+  const [mqttObservedTopics, setMqttObservedTopics] = useState<Record<string, string[]>>({});
+  const [mqttTopicDrafts, setMqttTopicDrafts] = useState<Record<string, string>>({});
   const [dataSourceMessage, setDataSourceMessage] = useState('');
   const [ingestTokens, setIngestTokens] = useState<IngestToken[]>([]);
   const [tokenDraftName, setTokenDraftName] = useState('Device Gateway Token');
@@ -187,6 +189,11 @@ export function Settings() {
     { id: 'users', name: t.settings.tabs.users, icon: Users },
   ];
 
+  const mqttChannelIds = mqttChannels.map((channel) => channel.id).join('|');
+  const normalizeTopics = (topics: MqttChannel['topics']) => Array.isArray(topics)
+    ? topics.map((topic) => topic.trim()).filter(Boolean)
+    : topics.split(',').map((topic) => topic.trim()).filter(Boolean);
+
   useEffect(() => {
     const loadDataSources = async () => {
       try {
@@ -198,10 +205,11 @@ export function Settings() {
           ? payload.mqttChannels.map((channel: MqttChannel) => ({
               ...channel,
               password: '',
-              topics: Array.isArray(channel.topics) ? channel.topics.join(', ') : channel.topics || '',
+              topics: normalizeTopics(channel.topics || []),
             }))
           : []);
         setMqttStatuses(payload.mqttStatuses || {});
+        setMqttObservedTopics(payload.mqttObservedTopics || {});
       } catch (error) {
         setDataSourceMessage('Failed to load device data source config.');
       }
@@ -221,6 +229,33 @@ export function Settings() {
     loadDataSources();
     loadIngestTokens();
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'data' || mqttChannelIds.length === 0) return;
+
+    let cancelled = false;
+    const refreshMqttStatuses = async () => {
+      try {
+        const response = await fetch('/api/data-sources');
+        if (!response.ok || cancelled) return;
+        const payload = await response.json();
+        if (!cancelled) {
+          setMqttStatuses(payload.mqttStatuses || {});
+          setMqttObservedTopics(payload.mqttObservedTopics || {});
+        }
+      } catch {
+        // Keep the last visible status if the backend is briefly unavailable.
+      }
+    };
+
+    refreshMqttStatuses();
+    const intervalId = window.setInterval(refreshMqttStatuses, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeTab, mqttChannelIds]);
 
   const handleAddChannel = () => {
     const target = notificationTargetFromConfig(channelDraft.type, channelDraft.config);
@@ -309,6 +344,28 @@ export function Settings() {
     ]);
   };
 
+  const updateMqttTopics = (channelId: string, topics: string[]) => {
+    const uniqueTopics = Array.from(new Set(topics.map((topic) => topic.trim()).filter(Boolean)));
+    setMqttChannels((current) => current.map((item) => (
+      item.id === channelId ? { ...item, topics: uniqueTopics } : item
+    )));
+  };
+
+  const addMqttTopic = (channelId: string, topic: string) => {
+    const nextTopic = topic.trim();
+    if (!nextTopic) return;
+    const channel = mqttChannels.find((item) => item.id === channelId);
+    if (!channel) return;
+    updateMqttTopics(channelId, [...normalizeTopics(channel.topics), nextTopic]);
+    setMqttTopicDrafts((current) => ({ ...current, [channelId]: '' }));
+  };
+
+  const removeMqttTopic = (channelId: string, topic: string) => {
+    const channel = mqttChannels.find((item) => item.id === channelId);
+    if (!channel) return;
+    updateMqttTopics(channelId, normalizeTopics(channel.topics).filter((item) => item !== topic));
+  };
+
   const handleSaveDataSources = async () => {
     setDataSourceMessage('');
     if (isDemoUser) {
@@ -317,8 +374,8 @@ export function Settings() {
     }
 
     const invalidMqtt = mqttChannels.find((channel) => {
-      const topics = typeof channel.topics === 'string' ? channel.topics.trim() : channel.topics.join(',').trim();
-      return channel.enabled && (!channel.brokerUrl.trim() || !topics);
+      const topics = normalizeTopics(channel.topics);
+      return channel.enabled && (!channel.brokerUrl.trim() || topics.length === 0);
     });
     if (invalidMqtt) {
       setDataSourceMessage(`${invalidMqtt.name} requires broker URL and at least one topic.`);
@@ -333,9 +390,7 @@ export function Settings() {
           httpPushChannels,
           mqttChannels: mqttChannels.map((channel) => ({
             ...channel,
-            topics: typeof channel.topics === 'string'
-              ? channel.topics.split(',').map((topic) => topic.trim()).filter(Boolean)
-              : channel.topics,
+            topics: normalizeTopics(channel.topics),
           })),
         }),
       });
@@ -346,10 +401,11 @@ export function Settings() {
           ? payload.mqttChannels.map((channel: MqttChannel) => ({
               ...channel,
               password: '',
-              topics: Array.isArray(channel.topics) ? channel.topics.join(', ') : channel.topics || '',
+              topics: normalizeTopics(channel.topics || []),
             }))
           : mqttChannels);
         setMqttStatuses(payload.mqttStatuses || {});
+        setMqttObservedTopics(payload.mqttObservedTopics || {});
       }
       setDataSourceMessage(response.ok ? 'Device data source channels saved.' : 'Failed to save device data source channels.');
     } catch (error) {
@@ -823,12 +879,63 @@ export function Settings() {
                           </div>
                           <div>
                             <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Subscribe Topics</label>
-                            <input
-                              value={typeof channel.topics === 'string' ? channel.topics : channel.topics.join(', ')}
-                              onChange={(event) => setMqttChannels((current) => current.map((item) => item.id === channel.id ? { ...item, topics: event.target.value } : item))}
-                              placeholder="devices/+/telemetry, factory-a/#"
-                              className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700"
-                            />
+                            <div className="mt-1 flex min-h-[2.5rem] w-full flex-wrap items-center gap-2 rounded-md bg-white p-1.5 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus-within:ring-2 focus-within:ring-orange-500 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700">
+                              {normalizeTopics(channel.topics).map((topic) => (
+                                <span key={topic} className="inline-flex max-w-full items-center gap-1 rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                                  <span className="max-w-[13rem] truncate">{topic}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeMqttTopic(channel.id, topic)}
+                                    className="text-slate-400 hover:text-red-500"
+                                    title="Remove topic"
+                                  >
+                                    &times;
+                                  </button>
+                                </span>
+                              ))}
+                              <input
+                                list={`mqtt-topic-options-${channel.id}`}
+                                value={mqttTopicDrafts[channel.id] || ''}
+                                onChange={(event) => setMqttTopicDrafts((current) => ({ ...current, [channel.id]: event.target.value }))}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' || event.key === ',') {
+                                    event.preventDefault();
+                                    addMqttTopic(channel.id, mqttTopicDrafts[channel.id] || '');
+                                  } else if (event.key === 'Backspace' && !mqttTopicDrafts[channel.id]) {
+                                    const topics = normalizeTopics(channel.topics);
+                                    updateMqttTopics(channel.id, topics.slice(0, -1));
+                                  }
+                                }}
+                                onBlur={() => addMqttTopic(channel.id, mqttTopicDrafts[channel.id] || '')}
+                                placeholder="devices/+/telemetry"
+                                className="min-w-[12rem] flex-1 border-0 bg-transparent p-0 font-mono text-sm text-slate-900 shadow-none outline-none placeholder:text-slate-400 focus:ring-0 dark:text-slate-200"
+                              />
+                              <datalist id={`mqtt-topic-options-${channel.id}`}>
+                                {(mqttObservedTopics[channel.id] || [])
+                                  .filter((topic) => !normalizeTopics(channel.topics).includes(topic))
+                                  .map((topic) => (
+                                    <option key={topic} value={topic} />
+                                  ))}
+                              </datalist>
+                            </div>
+                            {(mqttObservedTopics[channel.id] || []).length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {(mqttObservedTopics[channel.id] || [])
+                                  .filter((topic) => !normalizeTopics(channel.topics).includes(topic))
+                                  .slice(0, 6)
+                                  .map((topic) => (
+                                    <button
+                                      key={topic}
+                                      type="button"
+                                      onClick={() => addMqttTopic(channel.id, topic)}
+                                      className="max-w-[12rem] truncate rounded border border-sky-200 bg-sky-50 px-2 py-1 font-mono text-[10px] text-sky-700 hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300"
+                                      title={topic}
+                                    >
+                                      {topic}
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap items-center gap-2">
