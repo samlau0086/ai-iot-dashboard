@@ -125,6 +125,14 @@ export interface DashboardTemplate {
   widgets: OverviewWidget[];
 }
 
+export interface OverviewDashboardState {
+  layout: any[];
+  widgets: OverviewWidget[];
+  widgetLibrary: OverviewWidget[];
+  templateId?: string;
+  updatedAt?: string;
+}
+
 const DEFAULT_TAG_TEMPLATE_MAP: Record<string, string> = {
   All: 'factory-energy',
   'factory-a': 'factory-energy',
@@ -356,6 +364,123 @@ const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   },
 ];
 
+const getDefaultDashboardTemplateId = (siteId: string, sites: SiteTenant[] = DEFAULT_SITES, templateMap: Record<string, string> = DEFAULT_TAG_TEMPLATE_MAP) => {
+  if (siteId === 'All') return templateMap.All || 'factory-energy';
+
+  const site = sites.find((item) => item.id === siteId);
+  const mappedByTag = site?.tags.map((tag) => templateMap[tag]).find(Boolean);
+  if (mappedByTag) return mappedByTag;
+
+  switch (site?.type) {
+    case 'solar':
+      return 'solar-monitoring';
+    case 'cold_storage':
+      return 'cold-storage';
+    case 'pump_station':
+      return 'water-pump';
+    case 'compressed_air':
+      return 'air-compressor';
+    case 'factory':
+    default:
+      return 'factory-energy';
+  }
+};
+
+const cloneDashboard = (dashboard: OverviewDashboardState): OverviewDashboardState => ({
+  layout: cloneLayout(dashboard.layout),
+  widgets: cloneWidgets(dashboard.widgets),
+  widgetLibrary: cloneWidgets(dashboard.widgetLibrary || []),
+  templateId: dashboard.templateId,
+  updatedAt: dashboard.updatedAt,
+});
+
+const createDefaultOverviewDashboard = (
+  siteId: string,
+  sites: SiteTenant[] = DEFAULT_SITES,
+  templateMap: Record<string, string> = DEFAULT_TAG_TEMPLATE_MAP,
+): OverviewDashboardState => {
+  const templateId = getDefaultDashboardTemplateId(siteId, sites, templateMap);
+  const template = DASHBOARD_TEMPLATES.find((item) => item.id === templateId) || DASHBOARD_TEMPLATES[0];
+
+  return {
+    layout: cloneLayout(template.layout),
+    widgets: cloneWidgets(template.widgets),
+    widgetLibrary: [],
+    templateId: template.id,
+  };
+};
+
+const getOverviewDashboard = (state: Pick<AppState, 'overviewDashboardsBySite' | 'sites' | 'tagDashboardTemplateMap' | 'activeSiteId'>, siteId?: string) => {
+  const dashboardSiteId = siteId || state.activeSiteId || 'factory-a';
+  return state.overviewDashboardsBySite[dashboardSiteId] || createDefaultOverviewDashboard(dashboardSiteId, state.sites, state.tagDashboardTemplateMap);
+};
+
+const mergeDefaultOverviewDashboards = (
+  dashboardsBySite: Record<string, OverviewDashboardState> = {},
+  sites: SiteTenant[] = DEFAULT_SITES,
+  legacyLayout?: any[],
+  legacyWidgets?: OverviewWidget[],
+  legacyWidgetLibrary?: OverviewWidget[],
+  activeSiteId = 'factory-a',
+  templateMap: Record<string, string> = DEFAULT_TAG_TEMPLATE_MAP,
+) => {
+  const nextDashboards = Object.fromEntries(
+    Object.entries(dashboardsBySite).map(([siteId, dashboard]) => [siteId, cloneDashboard({
+      layout: dashboard.layout || [],
+      widgets: dashboard.widgets || [],
+      widgetLibrary: dashboard.widgetLibrary || [],
+      templateId: dashboard.templateId,
+      updatedAt: dashboard.updatedAt,
+    })])
+  ) as Record<string, OverviewDashboardState>;
+
+  if (Object.keys(nextDashboards).length === 0 && legacyLayout?.length && legacyWidgets?.length) {
+    nextDashboards[activeSiteId] = {
+      layout: cloneLayout(legacyLayout),
+      widgets: cloneWidgets(legacyWidgets),
+      widgetLibrary: cloneWidgets(legacyWidgetLibrary || []),
+      templateId: getDefaultDashboardTemplateId(activeSiteId, sites, templateMap),
+    };
+  }
+
+  ['All', ...sites.map((site) => site.id)].forEach((siteId) => {
+    if (!nextDashboards[siteId]) {
+      nextDashboards[siteId] = createDefaultOverviewDashboard(siteId, sites, templateMap);
+    }
+  });
+
+  return nextDashboards;
+};
+
+const patchOverviewDashboard = (
+  state: Pick<AppState, 'overviewDashboardsBySite' | 'sites' | 'tagDashboardTemplateMap' | 'activeSiteId'>,
+  siteId: string | undefined,
+  patch: Partial<OverviewDashboardState>,
+) => {
+  const dashboardSiteId = siteId || state.activeSiteId || 'factory-a';
+  const currentDashboard = getOverviewDashboard(state, dashboardSiteId);
+  const nextDashboard: OverviewDashboardState = {
+    ...currentDashboard,
+    ...patch,
+    layout: patch.layout ? cloneLayout(patch.layout) : cloneLayout(currentDashboard.layout),
+    widgets: patch.widgets ? cloneWidgets(patch.widgets) : cloneWidgets(currentDashboard.widgets),
+    widgetLibrary: patch.widgetLibrary ? cloneWidgets(patch.widgetLibrary) : cloneWidgets(currentDashboard.widgetLibrary),
+    updatedAt: new Date().toISOString(),
+  };
+
+  return {
+    overviewDashboardsBySite: {
+      ...state.overviewDashboardsBySite,
+      [dashboardSiteId]: nextDashboard,
+    },
+    ...(dashboardSiteId === state.activeSiteId ? {
+      overviewLayout: cloneLayout(nextDashboard.layout),
+      overviewWidgets: cloneWidgets(nextDashboard.widgets),
+      overviewWidgetLibrary: cloneWidgets(nextDashboard.widgetLibrary),
+    } : {}),
+  };
+};
+
 export interface WorkflowNode {
   id: string;
   type: 'trigger' | 'condition' | 'action';
@@ -435,22 +560,23 @@ interface AppState {
   overviewLayout: any[];
   overviewWidgets: OverviewWidget[];
   overviewWidgetLibrary: OverviewWidget[];
+  overviewDashboardsBySite: Record<string, OverviewDashboardState>;
   dashboardTemplates: DashboardTemplate[];
   activeDashboardTemplateId: string;
   tagDashboardTemplateMap: Record<string, string>;
-  updateOverviewLayout: (layout: any[]) => void;
-  updateOverviewWidgets: (widgets: OverviewWidget[]) => void;
-  addOverviewWidgetLibraryItem: (widget: OverviewWidget) => void;
-  updateOverviewWidgetLibraryItem: (id: string, widget: Partial<OverviewWidget>) => void;
-  removeOverviewWidgetLibraryItem: (id: string) => void;
-  applyDashboardTemplate: (id: string) => void;
+  updateOverviewLayout: (layout: any[], siteId?: string) => void;
+  updateOverviewWidgets: (widgets: OverviewWidget[], siteId?: string) => void;
+  addOverviewWidgetLibraryItem: (widget: OverviewWidget, siteId?: string) => void;
+  updateOverviewWidgetLibraryItem: (id: string, widget: Partial<OverviewWidget>, siteId?: string) => void;
+  removeOverviewWidgetLibraryItem: (id: string, siteId?: string) => void;
+  applyDashboardTemplate: (id: string, siteId?: string) => void;
   setTagDashboardTemplate: (tag: string, templateId: string) => void;
   addDashboardTemplate: (template: DashboardTemplate) => void;
   updateDashboardTemplate: (template: DashboardTemplate) => void;
   deleteDashboardTemplate: (id: string) => void;
-  addOverviewWidget: (widget: OverviewWidget, layoutItem: any) => void;
-  updateOverviewWidget: (id: string, widget: Partial<OverviewWidget>) => void;
-  removeOverviewWidget: (id: string) => void;
+  addOverviewWidget: (widget: OverviewWidget, layoutItem: any, siteId?: string) => void;
+  updateOverviewWidget: (id: string, widget: Partial<OverviewWidget>, siteId?: string) => void;
+  removeOverviewWidget: (id: string, siteId?: string) => void;
   // Workflows
   workflows: Workflow[];
   addWorkflow: (workflow: Workflow) => void;
@@ -474,6 +600,7 @@ type BackendState = Partial<Pick<AppState,
   | 'overviewLayout'
   | 'overviewWidgets'
   | 'overviewWidgetLibrary'
+  | 'overviewDashboardsBySite'
   | 'dashboardTemplates'
   | 'activeDashboardTemplateId'
   | 'tagDashboardTemplateMap'
@@ -533,6 +660,7 @@ const pickBackendState = (state: AppState): BackendState => ({
   overviewLayout: state.overviewLayout,
   overviewWidgets: state.overviewWidgets,
   overviewWidgetLibrary: state.overviewWidgetLibrary,
+  overviewDashboardsBySite: state.overviewDashboardsBySite,
   dashboardTemplates: state.dashboardTemplates,
   activeDashboardTemplateId: state.activeDashboardTemplateId,
   tagDashboardTemplateMap: state.tagDashboardTemplateMap,
@@ -569,6 +697,18 @@ export const useAppStore = create<AppState>()(
           const payload = await response.json();
           const state = payload.state as BackendState | null;
           const users = mergeDefaultUsers(state?.users || useAppStore.getState().users);
+          const sites = mergeDefaultSites(state?.sites);
+          const activeSiteId = state?.activeSiteId || 'factory-a';
+          const overviewDashboardsBySite = mergeDefaultOverviewDashboards(
+            state?.overviewDashboardsBySite,
+            sites,
+            state?.overviewLayout,
+            state?.overviewWidgets,
+            state?.overviewWidgetLibrary,
+            activeSiteId,
+            state?.tagDashboardTemplateMap || DEFAULT_TAG_TEMPLATE_MAP,
+          );
+          const activeDashboard = overviewDashboardsBySite[activeSiteId] || createDefaultOverviewDashboard(activeSiteId, sites, state?.tagDashboardTemplateMap || DEFAULT_TAG_TEMPLATE_MAP);
           const sessionUserId = getStoredSessionUserId();
           const sessionUser = sessionUserId
             ? users.find((user) => user.id === sessionUserId && user.status === 'approved') || null
@@ -581,9 +721,13 @@ export const useAppStore = create<AppState>()(
           set({
             ...(state || {}),
             devices: mergeDefaultDevices(state?.devices),
-            sites: mergeDefaultSites(state?.sites),
-            activeSiteId: state?.activeSiteId || 'factory-a',
+            sites,
+            activeSiteId,
             charts: mergeDefaultCharts(state?.charts),
+            overviewDashboardsBySite,
+            overviewLayout: cloneLayout(activeDashboard.layout),
+            overviewWidgets: cloneWidgets(activeDashboard.widgets),
+            overviewWidgetLibrary: cloneWidgets(activeDashboard.widgetLibrary),
             users,
             currentUser: sessionUser,
             backendHydrated: true,
@@ -657,9 +801,25 @@ export const useAppStore = create<AppState>()(
 
       sites: DEFAULT_SITES,
       activeSiteId: 'factory-a',
-      setActiveSite: (siteId) => set({ activeSiteId: siteId }),
+      setActiveSite: (siteId) => set((state) => {
+        const dashboard = getOverviewDashboard(state, siteId);
+        return {
+          activeSiteId: siteId,
+          overviewDashboardsBySite: {
+            ...state.overviewDashboardsBySite,
+            [siteId]: dashboard,
+          },
+          overviewLayout: cloneLayout(dashboard.layout),
+          overviewWidgets: cloneWidgets(dashboard.widgets),
+          overviewWidgetLibrary: cloneWidgets(dashboard.widgetLibrary),
+        };
+      }),
       addSite: (site) => set((state) => ({
         sites: [...state.sites, site],
+        overviewDashboardsBySite: {
+          ...state.overviewDashboardsBySite,
+          [site.id]: createDefaultOverviewDashboard(site.id, [...state.sites, site], state.tagDashboardTemplateMap),
+        },
         tagDashboardTemplateMap: {
           ...state.tagDashboardTemplateMap,
           ...site.tags.reduce<Record<string, string>>((acc, tag) => {
@@ -668,24 +828,46 @@ export const useAppStore = create<AppState>()(
           }, {}),
         },
       })),
-      updateSite: (id, site) => set((state) => ({
-        sites: state.sites.map((item) => (
-          item.id === id ? { ...item, ...site, updatedAt: new Date().toISOString() } : item
-        )),
-        users: site.id && site.id !== id
-          ? state.users.map((user) => user.siteId === id ? { ...user, siteId: site.id as string } : user)
-          : state.users,
-        devices: site.id && site.id !== id
-          ? state.devices.map((device) => device.siteId === id ? { ...device, siteId: site.id as string } : device)
-          : state.devices,
-        activeSiteId: state.activeSiteId === id ? (site.id || id) : state.activeSiteId,
-      })),
+      updateSite: (id, site) => set((state) => {
+        const nextSiteId = site.id || id;
+        const renamedDashboard = nextSiteId !== id ? state.overviewDashboardsBySite[id] : undefined;
+        const overviewDashboardsBySite = { ...state.overviewDashboardsBySite };
+
+        if (renamedDashboard) {
+          delete overviewDashboardsBySite[id];
+          overviewDashboardsBySite[nextSiteId] = renamedDashboard;
+        }
+
+        return {
+          sites: state.sites.map((item) => (
+            item.id === id ? { ...item, ...site, updatedAt: new Date().toISOString() } : item
+          )),
+          overviewDashboardsBySite,
+          users: site.id && site.id !== id
+            ? state.users.map((user) => user.siteId === id ? { ...user, siteId: site.id as string } : user)
+            : state.users,
+          devices: site.id && site.id !== id
+            ? state.devices.map((device) => device.siteId === id ? { ...device, siteId: site.id as string } : device)
+            : state.devices,
+          activeSiteId: state.activeSiteId === id ? nextSiteId : state.activeSiteId,
+        };
+      }),
       deleteSite: (id) => set((state) => {
         const remainingSites = state.sites.filter((site) => site.id !== id);
         const fallbackSiteId = remainingSites[0]?.id || 'factory-a';
+        const overviewDashboardsBySite = { ...state.overviewDashboardsBySite };
+        delete overviewDashboardsBySite[id];
+        const fallbackDashboard = overviewDashboardsBySite[fallbackSiteId] || createDefaultOverviewDashboard(fallbackSiteId, remainingSites.length ? remainingSites : DEFAULT_SITES, state.tagDashboardTemplateMap);
+        overviewDashboardsBySite[fallbackSiteId] = fallbackDashboard;
         return {
           sites: remainingSites.length ? remainingSites : DEFAULT_SITES,
           activeSiteId: state.activeSiteId === id ? fallbackSiteId : state.activeSiteId,
+          overviewDashboardsBySite,
+          ...(state.activeSiteId === id ? {
+            overviewLayout: cloneLayout(fallbackDashboard.layout),
+            overviewWidgets: cloneWidgets(fallbackDashboard.widgets),
+            overviewWidgetLibrary: cloneWidgets(fallbackDashboard.widgetLibrary),
+          } : {}),
           users: state.users.map((user) => user.siteId === id ? { ...user, siteId: fallbackSiteId } : user),
           devices: state.devices.map((device) => device.siteId === id ? { ...device, siteId: fallbackSiteId } : device),
         };
@@ -766,6 +948,7 @@ export const useAppStore = create<AppState>()(
       overviewLayout: cloneLayout(DEFAULT_OVERVIEW_LAYOUT),
       overviewWidgets: cloneWidgets(DEFAULT_OVERVIEW_WIDGETS),
       overviewWidgetLibrary: [],
+      overviewDashboardsBySite: mergeDefaultOverviewDashboards({}, DEFAULT_SITES),
       dashboardTemplates: DASHBOARD_TEMPLATES.map((template) => ({
         ...template,
         layout: cloneLayout(template.layout),
@@ -773,29 +956,37 @@ export const useAppStore = create<AppState>()(
       })),
       activeDashboardTemplateId: 'factory-energy',
       tagDashboardTemplateMap: DEFAULT_TAG_TEMPLATE_MAP,
-      updateOverviewLayout: (layout) => set((state) => (
-        sameOverviewLayout(state.overviewLayout, layout) ? state : { overviewLayout: layout }
+      updateOverviewLayout: (layout, siteId) => set((state) => (
+        sameOverviewLayout(getOverviewDashboard(state, siteId).layout, layout) ? state : patchOverviewDashboard(state, siteId, { layout })
       )),
-      updateOverviewWidgets: (widgets) => set({ overviewWidgets: widgets }),
-      addOverviewWidgetLibraryItem: (widget) => set((state) => ({
-        overviewWidgetLibrary: [...state.overviewWidgetLibrary, widget]
-      })),
-      updateOverviewWidgetLibraryItem: (id, widget) => set((state) => ({
-        overviewWidgetLibrary: state.overviewWidgetLibrary.map((item) => (
-          item.id === id ? { ...item, ...widget } : item
-        ))
-      })),
-      removeOverviewWidgetLibraryItem: (id) => set((state) => ({
-        overviewWidgetLibrary: state.overviewWidgetLibrary.filter((item) => item.id !== id)
-      })),
-      applyDashboardTemplate: (id) => set((state) => {
+      updateOverviewWidgets: (widgets, siteId) => set((state) => patchOverviewDashboard(state, siteId, { widgets })),
+      addOverviewWidgetLibraryItem: (widget, siteId) => set((state) => {
+        const dashboard = getOverviewDashboard(state, siteId);
+        return patchOverviewDashboard(state, siteId, { widgetLibrary: [...dashboard.widgetLibrary, widget] });
+      }),
+      updateOverviewWidgetLibraryItem: (id, widget, siteId) => set((state) => {
+        const dashboard = getOverviewDashboard(state, siteId);
+        return patchOverviewDashboard(state, siteId, {
+          widgetLibrary: dashboard.widgetLibrary.map((item) => (
+            item.id === id ? { ...item, ...widget } : item
+          )),
+        });
+      }),
+      removeOverviewWidgetLibraryItem: (id, siteId) => set((state) => {
+        const dashboard = getOverviewDashboard(state, siteId);
+        return patchOverviewDashboard(state, siteId, { widgetLibrary: dashboard.widgetLibrary.filter((item) => item.id !== id) });
+      }),
+      applyDashboardTemplate: (id, siteId) => set((state) => {
         const template = state.dashboardTemplates.find((item) => item.id === id);
         if (!template) return {};
 
         return {
           activeDashboardTemplateId: id,
-          overviewLayout: cloneLayout(template.layout),
-          overviewWidgets: cloneWidgets(template.widgets),
+          ...patchOverviewDashboard(state, siteId, {
+            templateId: id,
+            layout: cloneLayout(template.layout),
+            widgets: cloneWidgets(template.widgets),
+          }),
         };
       }),
       setTagDashboardTemplate: (tag, templateId) => set((state) => ({
@@ -848,19 +1039,27 @@ export const useAppStore = create<AppState>()(
           overviewWidgets: cloneWidgets(fallbackTemplate.widgets),
         };
       }),
-      addOverviewWidget: (widget, layoutItem) => set((state) => ({
-        overviewWidgets: [...state.overviewWidgets, widget],
-        overviewLayout: [...state.overviewLayout, layoutItem]
+      addOverviewWidget: (widget, layoutItem, siteId) => set((state) => ({
+        ...patchOverviewDashboard(state, siteId, {
+          widgets: [...getOverviewDashboard(state, siteId).widgets, widget],
+          layout: [...getOverviewDashboard(state, siteId).layout, layoutItem],
+        }),
       })),
-      updateOverviewWidget: (id, widget) => set((state) => ({
-        overviewWidgets: state.overviewWidgets.map((item) => (
-          item.id === id ? { ...item, ...widget } : item
-        ))
-      })),
-      removeOverviewWidget: (id) => set((state) => ({
-        overviewWidgets: state.overviewWidgets.filter(w => w.id !== id),
-        overviewLayout: state.overviewLayout.filter(l => l.i !== id)
-      })),
+      updateOverviewWidget: (id, widget, siteId) => set((state) => {
+        const dashboard = getOverviewDashboard(state, siteId);
+        return patchOverviewDashboard(state, siteId, {
+          widgets: dashboard.widgets.map((item) => (
+            item.id === id ? { ...item, ...widget } : item
+          )),
+        });
+      }),
+      removeOverviewWidget: (id, siteId) => set((state) => {
+        const dashboard = getOverviewDashboard(state, siteId);
+        return patchOverviewDashboard(state, siteId, {
+          widgets: dashboard.widgets.filter(w => w.id !== id),
+          layout: dashboard.layout.filter(l => l.i !== id),
+        });
+      }),
       
       workflows: [
         {

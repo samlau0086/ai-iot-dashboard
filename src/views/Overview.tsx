@@ -339,9 +339,10 @@ export function Overview() {
     theme,
     devices,
     charts,
-    overviewWidgets,
-    overviewWidgetLibrary,
-    overviewLayout,
+    overviewWidgets: globalOverviewWidgets,
+    overviewWidgetLibrary: globalOverviewWidgetLibrary,
+    overviewLayout: globalOverviewLayout,
+    overviewDashboardsBySite,
     sites,
     activeSiteId,
     setActiveSite,
@@ -377,6 +378,14 @@ export function Overview() {
   const [builderNoDataColor, setBuilderNoDataColor] = useState(DEFAULT_WIDGET_COLORS.noData);
   const dashboardDropRef = useRef<HTMLDivElement | null>(null);
   const isGridInteractingRef = useRef(false);
+  const activeOverviewDashboard = overviewDashboardsBySite[selectedSiteId] || {
+    layout: globalOverviewLayout,
+    widgets: globalOverviewWidgets,
+    widgetLibrary: globalOverviewWidgetLibrary,
+  };
+  const overviewLayout = activeOverviewDashboard.layout || [];
+  const overviewWidgets = activeOverviewDashboard.widgets || [];
+  const overviewWidgetLibrary = activeOverviewDashboard.widgetLibrary || [];
 
   const updateSnapGuide = (nextGuide: SnapGuide) => {
     setActiveSnapGuide((currentGuide) => (
@@ -527,9 +536,9 @@ export function Overview() {
       ...overviewLayout.filter((item) => item.i !== 'kpis' && !KPI_WIDGETS.some((kpi) => kpi.id === item.i)),
     ];
 
-    updateOverviewWidgets(nextWidgets);
-    updateOverviewLayout(nextLayout);
-  }, [overviewLayout, overviewWidgets, updateOverviewLayout, updateOverviewWidgets]);
+    updateOverviewWidgets(nextWidgets, selectedSiteId);
+    updateOverviewLayout(nextLayout, selectedSiteId);
+  }, [overviewLayout, overviewWidgets, selectedSiteId, updateOverviewLayout, updateOverviewWidgets]);
 
   useEffect(() => {
     if (!showWidgetBuilder) return;
@@ -549,7 +558,7 @@ export function Overview() {
     if (isGridInteractingRef.current) return;
     if (layoutsEqual(currentLayout, overviewLayout)) return;
 
-    updateOverviewLayout(currentLayout);
+    updateOverviewLayout(currentLayout, selectedSiteId);
   };
 
   const handleDragStart = () => {
@@ -617,7 +626,7 @@ export function Overview() {
     const nextLayout = snapLayoutItem(layout.map((item) => ({ ...item })), { ...newItem });
 
     if (!layoutsEqual(nextLayout, overviewLayout)) {
-      updateOverviewLayout(nextLayout);
+      updateOverviewLayout(nextLayout, selectedSiteId);
     }
 
     isGridInteractingRef.current = false;
@@ -633,7 +642,7 @@ export function Overview() {
     const nextLayout = layout.map((item) => ({ ...item }));
 
     if (!layoutsEqual(nextLayout, overviewLayout)) {
-      updateOverviewLayout(nextLayout);
+      updateOverviewLayout(nextLayout, selectedSiteId);
     }
 
     isGridInteractingRef.current = false;
@@ -687,7 +696,7 @@ export function Overview() {
   const getWidgetTitle = (widget: OverviewWidget) => widget.title || getWidgetDefaultTitle(widget);
 
   const handleWidgetTitleChange = (widget: OverviewWidget, title: string) => {
-    updateOverviewWidget(widget.id, { title });
+    updateOverviewWidget(widget.id, { title }, selectedSiteId);
   };
 
   const handleWidgetDeviceToggle = (widget: OverviewWidget, deviceId: string) => {
@@ -699,11 +708,11 @@ export function Overview() {
       selectedDeviceIds.add(deviceId);
     }
 
-    updateOverviewWidget(widget.id, { deviceIds: Array.from(selectedDeviceIds) });
+    updateOverviewWidget(widget.id, { deviceIds: Array.from(selectedDeviceIds) }, selectedSiteId);
   };
 
   const clearWidgetDevices = (widget: OverviewWidget) => {
-    updateOverviewWidget(widget.id, { deviceIds: [] });
+    updateOverviewWidget(widget.id, { deviceIds: [] }, selectedSiteId);
   };
 
   const resetWidgetBuilder = () => {
@@ -783,9 +792,9 @@ export function Overview() {
     };
 
     if (editingLibraryWidgetId) {
-      updateOverviewWidgetLibraryItem(editingLibraryWidgetId, widget);
+      updateOverviewWidgetLibraryItem(editingLibraryWidgetId, widget, selectedSiteId);
     } else {
-      addOverviewWidgetLibraryItem(widget);
+      addOverviewWidgetLibraryItem(widget, selectedSiteId);
     }
 
     setShowWidgetBuilder(false);
@@ -808,7 +817,7 @@ export function Overview() {
         ...preset.colorRules,
       },
       deviceIds: [],
-    });
+    }, selectedSiteId);
   };
 
   const getDropGridPosition = (event: React.DragEvent<HTMLDivElement>, width: number) => {
@@ -838,7 +847,8 @@ export function Overview() {
 
     addOverviewWidget(
       { ...libraryWidget, id, deviceIds: libraryWidget.deviceIds ? [...libraryWidget.deviceIds] : [] },
-      { i: id, x: nextPosition.x, y: nextPosition.y, w: width, h: height, minW: isChartLike ? 3 : 2, minH: 2 }
+      { i: id, x: nextPosition.x, y: nextPosition.y, w: width, h: height, minW: isChartLike ? 3 : 2, minH: 2 },
+      selectedSiteId
     );
     setConfigWidgetId(id);
   };
@@ -866,7 +876,8 @@ export function Overview() {
 
     addOverviewWidget(
       { id, type: 'chart', chartId: chart.id, title: chart.title },
-      { i: id, x: 0, y: Infinity, w: 4, h: 4, minW: 3, minH: 3 }
+      { i: id, x: 0, y: Infinity, w: 4, h: 4, minW: 3, minH: 3 },
+      selectedSiteId
     );
     setConfigWidgetId(id);
     setShowWidgetBuilder(false);
@@ -877,7 +888,8 @@ export function Overview() {
 
     addOverviewWidget(
       { id, type: 'kpi', kpiKey: kpi.key, title: stats[kpi.key].name },
-      { i: id, x: 0, y: Infinity, w: 3, h: 2, minW: 2, minH: 2 }
+      { i: id, x: 0, y: Infinity, w: 3, h: 2, minW: 2, minH: 2 },
+      selectedSiteId
     );
     setConfigWidgetId(id);
     setShowWidgetBuilder(false);
@@ -889,7 +901,8 @@ export function Overview() {
 
     addOverviewWidget(
       { id, type, title },
-      { i: id, x: 0, y: Infinity, w: type === 'trend' ? 5 : 4, h: 5, minW: 3, minH: 3 }
+      { i: id, x: 0, y: Infinity, w: type === 'trend' ? 5 : 4, h: 5, minW: 3, minH: 3 },
+      selectedSiteId
     );
     setConfigWidgetId(id);
     setShowWidgetBuilder(false);
@@ -1008,7 +1021,7 @@ export function Overview() {
       <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
         {false && (
         <button 
-          onClick={() => removeOverviewWidget(widgetConfig.id)} 
+          onClick={() => removeOverviewWidget(widgetConfig.id, selectedSiteId)}
           className="absolute top-3 right-3 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity z-10 block cursor-pointer"
         >
           ×
@@ -1516,7 +1529,7 @@ export function Overview() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => removeOverviewWidgetLibraryItem(widget.id)}
+                        onClick={() => removeOverviewWidgetLibraryItem(widget.id, selectedSiteId)}
                         className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1607,7 +1620,7 @@ export function Overview() {
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Unit</label>
                   <input
                     value={configWidget.unit || ''}
-                    onChange={(event) => updateOverviewWidget(configWidget.id, { unit: event.target.value.trim() || undefined })}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { unit: event.target.value.trim() || undefined }, selectedSiteId)}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   />
                 </div>
@@ -1618,7 +1631,7 @@ export function Overview() {
                     min={0}
                     max={6}
                     value={getWidgetPrecision(configWidget)}
-                    onChange={(event) => updateOverviewWidget(configWidget.id, { precision: normalizePrecision(Number(event.target.value)) })}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { precision: normalizePrecision(Number(event.target.value)) }, selectedSiteId)}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   />
                 </div>
@@ -1626,7 +1639,7 @@ export function Overview() {
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Threshold</label>
                   <select
                     value={configWidget.thresholds?.direction || 'above'}
-                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, direction: event.target.value as 'above' | 'below' } })}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, direction: event.target.value as 'above' | 'below' } }, selectedSiteId)}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
                     <option value="above">Above is bad</option>
@@ -1638,7 +1651,7 @@ export function Overview() {
                   <input
                     type="number"
                     value={configWidget.thresholds?.warning ?? ''}
-                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, warning: parseOptionalNumber(event.target.value) } })}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, warning: parseOptionalNumber(event.target.value) } }, selectedSiteId)}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   />
                 </div>
@@ -1647,7 +1660,7 @@ export function Overview() {
                   <input
                     type="number"
                     value={configWidget.thresholds?.critical ?? ''}
-                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, critical: parseOptionalNumber(event.target.value) } })}
+                    onChange={(event) => updateOverviewWidget(configWidget.id, { thresholds: { ...configWidget.thresholds, critical: parseOptionalNumber(event.target.value) } }, selectedSiteId)}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   />
                 </div>
@@ -1664,7 +1677,7 @@ export function Overview() {
                     <input
                       type="color"
                       value={configWidget.colorRules?.[key] || DEFAULT_WIDGET_COLORS[key]}
-                      onChange={(event) => updateOverviewWidget(configWidget.id, { colorRules: { ...configWidget.colorRules, [key]: event.target.value } })}
+                      onChange={(event) => updateOverviewWidget(configWidget.id, { colorRules: { ...configWidget.colorRules, [key]: event.target.value } }, selectedSiteId)}
                       className="h-7 w-10 rounded border border-slate-300 bg-transparent p-0 dark:border-slate-700"
                     />
                   </label>
@@ -1739,7 +1752,7 @@ export function Overview() {
                 <button
                   type="button"
                   onClick={() => {
-                    removeOverviewWidget(widget.id);
+                    removeOverviewWidget(widget.id, selectedSiteId);
                     if (configWidgetId === widget.id) setConfigWidgetId(null);
                   }}
                   className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 shadow-sm hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-red-500/50 dark:hover:text-red-400"
