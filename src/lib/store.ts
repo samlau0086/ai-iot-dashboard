@@ -483,6 +483,7 @@ const patchOverviewDashboard = (
 
 export interface WorkflowNode {
   id: string;
+  name?: string;
   type: 'trigger' | 'condition' | 'action';
   config: any;
 }

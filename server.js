@@ -650,8 +650,8 @@ const parseConditionExpression = (expression) => {
   return {metric: match[1], operator: match[2], value: match[3].replace(/^["']|["']$/g, '')};
 };
 
-const conditionMatchesEvent = (condition, event) => {
-  const config = condition.config || {};
+const conditionMatchesEvent = (condition, event, context = {}) => {
+  const config = resolveWorkflowValue(condition.config || {}, context);
 
   if (config.type === 'else') {
     return true;
@@ -939,20 +939,113 @@ const createDeviceControlCommand = async ({
   return await dispatchDeviceControlCommand(normalizedCommand, device);
 };
 
-const executeWorkflowAction = async (workflow, action, event) => {
-  const config = action.config || {};
+const normalizeWorkflowNodeName = (node, fallback = 'node') => String(node?.name || node?.config?.name || node?.config?.type || fallback)
+  .trim()
+  .replace(/\s+/g, '_')
+  .replace(/[.]/g, '_') || fallback;
+
+const buildWorkflowNodeNameMap = (workflow) => {
+  const namesById = new Map();
+  const usedNames = new Map();
+  let currentIfName = '';
+
+  for (const node of workflow.nodes || []) {
+    let name = normalizeWorkflowNodeName(node, node.id);
+
+    if (node.type === 'condition' && ['elif', 'else'].includes(node.config?.type)) {
+      name = currentIfName || name;
+    }
+
+    if (!(node.type === 'condition' && ['elif', 'else'].includes(node.config?.type))) {
+      const count = usedNames.get(name) || 0;
+      usedNames.set(name, count + 1);
+      if (count > 0) name = `${name}_${count + 1}`;
+    }
+
+    if (node.type === 'condition' && node.config?.type === 'if') {
+      currentIfName = name;
+    }
+
+    namesById.set(node.id, name);
+  }
+
+  return namesById;
+};
+
+const getObjectPath = (target, pathExpression = '') => {
+  if (!pathExpression) return target;
+  return String(pathExpression)
+    .split('.')
+    .filter(Boolean)
+    .reduce((value, key) => (value == null ? undefined : value[key]), target);
+};
+
+const resolveWorkflowReference = (expression, context) => {
+  const match = String(expression || '').trim().match(/^\$\.(.+?)\.(input|output|status|nodeId|type)(?:\.(.*))?$/);
+  if (!match) return undefined;
+  const [, nodeName, section, pathExpression] = match;
+  const nodeContext = context[nodeName];
+  if (!nodeContext) return undefined;
+  return getObjectPath(nodeContext[section], pathExpression);
+};
+
+const stringifyReferenceValue = (value) => {
+  if (value === undefined || value === null) return '';
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+};
+
+const resolveWorkflowValue = (value, context) => {
+  if (typeof value === 'string') {
+    const wholeReference = resolveWorkflowReference(value, context);
+    if (wholeReference !== undefined) return wholeReference;
+
+    return value.replace(/\$\.(.+?)\.(input|output|status|nodeId|type)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?/g, (match) => {
+      const resolved = resolveWorkflowReference(match, context);
+      return stringifyReferenceValue(resolved);
+    });
+  }
+
+  if (Array.isArray(value)) return value.map((item) => resolveWorkflowValue(item, context));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveWorkflowValue(item, context)]));
+  }
+
+  return value;
+};
+
+const createWorkflowNodeInput = (node, event, context) => ({
+  config: resolveWorkflowValue(node.config || {}, context),
+  event,
+});
+
+const recordWorkflowNodeResult = (context, nodeName, step) => {
+  context[nodeName] = {
+    ...(context[nodeName] || {}),
+    nodeId: step.nodeId,
+    type: step.type,
+    status: step.status,
+    input: step.input,
+    output: step.output,
+  };
+};
+
+const executeWorkflowAction = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id)) => {
+  const input = createWorkflowNodeInput(action, event, context);
+  const config = input.config || {};
   const startedAt = new Date().toISOString();
   const baseStep = {
     nodeId: action.id,
+    nodeName,
     type: config.type || action.type,
     status: 'success',
+    input,
     startedAt,
     finishedAt: startedAt,
     output: null,
   };
 
   if (config.type === 'webhook') {
-    const url = config.url || config.webhookUrl || config.target;
+    const url = config.url || config.webhookUrl || config.endpoint || config.target;
     if (!url || !String(url).startsWith('http')) {
       return {...baseStep, status: 'skipped', output: 'Webhook action requires url/webhookUrl/target.'};
     }
@@ -960,7 +1053,7 @@ const executeWorkflowAction = async (workflow, action, event) => {
     const response = await fetch(url, {
       method: 'POST',
       headers: {'content-type': 'application/json'},
-      body: JSON.stringify({workflow: {id: workflow.id, name: workflow.name}, event}),
+      body: JSON.stringify({workflow: {id: workflow.id, name: workflow.name}, event, context}),
     });
 
     return {
@@ -984,7 +1077,7 @@ const executeWorkflowAction = async (workflow, action, event) => {
       requestedByRole: 'Workflow',
       source: `workflow:${workflow.id}`,
     });
-    return {...baseStep, status: command.status, output: `${command.command} ${command.id}: ${command.result}`};
+    return {...baseStep, status: command.status, output: {commandId: command.id, command: command.command, status: command.status, result: command.result}};
   }
 
   if (config.type === 'start_backup' || config.type === 'stop_device') {
@@ -996,7 +1089,7 @@ const executeWorkflowAction = async (workflow, action, event) => {
       requestedByRole: 'Workflow',
       source: `workflow:${workflow.id}`,
     });
-    return {...baseStep, status: command.status, output: `${command.command} ${command.id}: ${command.result}`};
+    return {...baseStep, status: command.status, output: {commandId: command.id, command: command.command, status: command.status, result: command.result}};
   }
 
   if (['email', 'whatsapp', 'notification', 'ticket', 'report', 'ai_analyze'].includes(config.type)) {
@@ -1008,6 +1101,7 @@ const executeWorkflowAction = async (workflow, action, event) => {
 
 const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => {
   const nodesById = new Map((workflow.nodes || []).map((node) => [node.id, node]));
+  const nodeNamesById = buildWorkflowNodeNameMap(workflow);
   const outgoingEdges = new Map();
   for (const edge of workflow.edges || []) {
     if (!outgoingEdges.has(edge.source)) outgoingEdges.set(edge.source, []);
@@ -1015,6 +1109,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
   }
 
   const steps = [];
+  const context = {};
   const visited = new Set();
   let currentNode = trigger;
   let guard = 0;
@@ -1052,23 +1147,42 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
     visited.add(currentNode.id);
 
     const outgoing = outgoingEdges.get(currentNode.id) || [];
+    const nodeName = nodeNamesById.get(currentNode.id) || normalizeWorkflowNodeName(currentNode, currentNode.id);
 
     if (currentNode.type === 'trigger') {
+      const input = createWorkflowNodeInput(currentNode, event, context);
+      recordWorkflowNodeResult(context, nodeName, {
+        nodeId: currentNode.id,
+        nodeName,
+        type: currentNode.config?.type || 'trigger',
+        status: 'success',
+        input,
+        output: event,
+      });
       const nextEdge = outgoing.find((edge) => edge.type === 'next') || outgoing[0];
       currentNode = nodesById.get(nextEdge?.target);
       continue;
     }
 
     if (currentNode.type === 'condition') {
-      const passed = conditionMatchesEvent(currentNode, event);
-      steps.push({
+      const input = createWorkflowNodeInput(currentNode, event, context);
+      const passed = conditionMatchesEvent(currentNode, event, context);
+      const step = {
         nodeId: currentNode.id,
+        nodeName,
         type: currentNode.config?.type || 'condition',
         status: passed ? 'success' : 'skipped',
-        output: passed ? 'Condition passed' : 'Condition did not match event',
+        input,
+        output: {
+          passed,
+          branch: currentNode.config?.type || 'condition',
+          message: passed ? 'Condition passed' : 'Condition did not match event',
+        },
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
-      });
+      };
+      steps.push(step);
+      recordWorkflowNodeResult(context, nodeName, step);
 
       const nextEdge = passed
         ? outgoing.find((edge) => edge.type === 'true' || edge.type === 'next')
@@ -1085,16 +1199,23 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
 
     if (currentNode.type === 'action') {
       try {
-        steps.push(await executeWorkflowAction(workflow, currentNode, event));
+        const step = await executeWorkflowAction(workflow, currentNode, event, context, nodeName);
+        steps.push(step);
+        recordWorkflowNodeResult(context, nodeName, step);
       } catch (error) {
-        steps.push({
+        const input = createWorkflowNodeInput(currentNode, event, context);
+        const step = {
           nodeId: currentNode.id,
+          nodeName,
           type: currentNode.config?.type || 'action',
           status: 'failed',
+          input,
           output: error.message,
           startedAt: new Date().toISOString(),
           finishedAt: new Date().toISOString(),
-        });
+        };
+        steps.push(step);
+        recordWorkflowNodeResult(context, nodeName, step);
       }
 
       const nextEdge = outgoing.find((edge) => edge.type === 'next' || edge.type === 'continue');
@@ -1132,6 +1253,17 @@ const executeWorkflow = async (workflow, trigger, event) => {
   const nonTriggerNodes = workflow.nodes.filter((node) => node.type !== 'trigger');
   const branchConditions = nonTriggerNodes.filter((node) => node.type === 'condition' && branchTypes.has(node.config?.type));
   const steps = [];
+  const context = {};
+  const nodeNamesById = buildWorkflowNodeNameMap(workflow);
+  const triggerName = nodeNamesById.get(trigger.id) || normalizeWorkflowNodeName(trigger, trigger.id);
+  recordWorkflowNodeResult(context, triggerName, {
+    nodeId: trigger.id,
+    nodeName: triggerName,
+    type: trigger.config?.type || 'trigger',
+    status: 'success',
+    input: createWorkflowNodeInput(trigger, event, context),
+    output: event,
+  });
 
   if (branchConditions.length > 0) {
     const selectedActions = [];
@@ -1174,15 +1306,21 @@ const executeWorkflow = async (workflow, trigger, event) => {
         }
 
         const matchedBranch = branches.find(({condition}) => {
-          const passed = conditionMatchesEvent(condition, event);
-          steps.push({
+          const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
+          const input = createWorkflowNodeInput(condition, event, context);
+          const passed = conditionMatchesEvent(condition, event, context);
+          const step = {
             nodeId: condition.id,
+            nodeName,
             type: condition.config?.type || 'condition',
             status: passed ? 'success' : 'skipped',
-            output: passed ? 'Branch matched' : 'Branch did not match event',
+            input,
+            output: {passed, branch: condition.config?.type || 'condition', message: passed ? 'Branch matched' : 'Branch did not match event'},
             startedAt: new Date().toISOString(),
             finishedAt: new Date().toISOString(),
-          });
+          };
+          steps.push(step);
+          recordWorkflowNodeResult(context, nodeName, step);
           return passed;
         });
 
@@ -1208,15 +1346,21 @@ const executeWorkflow = async (workflow, trigger, event) => {
       }
 
       if (node.type === 'condition') {
-        const passed = conditionMatchesEvent(node, event);
-        steps.push({
+        const nodeName = nodeNamesById.get(node.id) || normalizeWorkflowNodeName(node, node.id);
+        const input = createWorkflowNodeInput(node, event, context);
+        const passed = conditionMatchesEvent(node, event, context);
+        const step = {
           nodeId: node.id,
+          nodeName,
           type: node.config?.type || 'condition',
           status: passed ? 'success' : 'skipped',
-          output: passed ? 'Condition passed' : 'Condition did not match event',
+          input,
+          output: {passed, message: passed ? 'Condition passed' : 'Condition did not match event'},
           startedAt: new Date().toISOString(),
           finishedAt: new Date().toISOString(),
-        });
+        };
+        steps.push(step);
+        recordWorkflowNodeResult(context, nodeName, step);
         if (!passed) {
           const finishedAt = new Date().toISOString();
           await persistWorkflowRun({
@@ -1245,16 +1389,25 @@ const executeWorkflow = async (workflow, trigger, event) => {
 
     for (const action of selectedActions) {
       try {
-        steps.push(await executeWorkflowAction(workflow, action, event));
+        const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
+        const step = await executeWorkflowAction(workflow, action, event, context, nodeName);
+        steps.push(step);
+        recordWorkflowNodeResult(context, nodeName, step);
       } catch (error) {
-        steps.push({
+        const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
+        const input = createWorkflowNodeInput(action, event, context);
+        const step = {
           nodeId: action.id,
+          nodeName,
           type: action.config?.type || 'action',
           status: 'failed',
+          input,
           output: error.message,
           startedAt: new Date().toISOString(),
           finishedAt: new Date().toISOString(),
-        });
+        };
+        steps.push(step);
+        recordWorkflowNodeResult(context, nodeName, step);
       }
     }
 
@@ -1278,15 +1431,21 @@ const executeWorkflow = async (workflow, trigger, event) => {
   const actions = nonTriggerNodes.filter((node) => node.type === 'action');
 
   for (const condition of conditions) {
-    const passed = conditionMatchesEvent(condition, event);
-    steps.push({
+    const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
+    const input = createWorkflowNodeInput(condition, event, context);
+    const passed = conditionMatchesEvent(condition, event, context);
+    const step = {
       nodeId: condition.id,
+      nodeName,
       type: condition.config?.type || 'condition',
       status: passed ? 'success' : 'skipped',
-      output: passed ? 'Condition passed' : 'Condition did not match event',
+      input,
+      output: {passed, message: passed ? 'Condition passed' : 'Condition did not match event'},
       startedAt: new Date().toISOString(),
       finishedAt: new Date().toISOString(),
-    });
+    };
+    steps.push(step);
+    recordWorkflowNodeResult(context, nodeName, step);
     if (!passed) {
       const finishedAt = new Date().toISOString();
       await persistWorkflowRun({
@@ -1307,16 +1466,25 @@ const executeWorkflow = async (workflow, trigger, event) => {
 
   for (const action of actions) {
     try {
-      steps.push(await executeWorkflowAction(workflow, action, event));
+      const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
+      const step = await executeWorkflowAction(workflow, action, event, context, nodeName);
+      steps.push(step);
+      recordWorkflowNodeResult(context, nodeName, step);
     } catch (error) {
-      steps.push({
+      const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
+      const input = createWorkflowNodeInput(action, event, context);
+      const step = {
         nodeId: action.id,
+        nodeName,
         type: action.config?.type || 'action',
         status: 'failed',
+        input,
         output: error.message,
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
-      });
+      };
+      steps.push(step);
+      recordWorkflowNodeResult(context, nodeName, step);
     }
   }
 

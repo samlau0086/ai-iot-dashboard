@@ -79,6 +79,25 @@ const createWebhookEndpoint = (workflowId: string) => {
   return `${window.location.origin}/api/workflow-webhooks/${workflowId}/${token}`;
 };
 
+const slugifyNodeName = (value: string) => String(value || '')
+  .trim()
+  .replace(/\s+/g, '_')
+  .replace(/[.]/g, '_');
+
+const getNodeDefaultName = (type: string, existingNodes: WorkflowNode[]) => {
+  const base = slugifyNodeName(type) || 'node';
+  let index = existingNodes.length + 1;
+  let name = `${base}_${index}`;
+  const existingNames = new Set(existingNodes.map((node) => node.name).filter(Boolean));
+
+  while (existingNames.has(name)) {
+    index++;
+    name = `${base}_${index}`;
+  }
+
+  return name;
+};
+
 function DeviceSelect({ value, onChange, devices }: { value: string, onChange: (val: string) => void, devices: any[] }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -255,6 +274,13 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     }
     flowItems.push({ type: 'nodes', groups: toActionGroups(nodeItems) });
   }
+  const getBranchRootName = (nodeId: string) => {
+    const branchGroup = flowItems.find((item): item is Extract<FlowItem, { type: 'branch_group' }> => (
+      item.type === 'branch_group' && item.branches.some((branch) => branch.condition.id === nodeId)
+    ));
+
+    return branchGroup?.branches[0]?.condition.name || branchGroup?.branches[0]?.condition.id || '';
+  };
 
   const useBranchLayout = flowItems.some((item) => item.type === 'branch_group');
   const otherNodeGroups = toActionGroups(otherNodes.map((node, index) => ({ node, index: triggerNodes.length + index })));
@@ -329,7 +355,31 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   };
 
   const handleSave = () => {
-    const workflowToSave = { ...draft, edges: buildWorkflowEdges() };
+    const usedNames = new Set<string>();
+    let currentBranchRootName = '';
+    const namedNodes = draft.nodes.map((node) => {
+      let nodeName = slugifyNodeName(node.name || node.config?.name || node.config?.type || node.id);
+
+      if (node.type === 'condition' && ['elif', 'else'].includes(node.config?.type)) {
+        nodeName = currentBranchRootName || nodeName;
+      }
+
+      if (!nodeName) nodeName = node.id;
+      const baseName = nodeName;
+      let suffix = 2;
+      while (usedNames.has(nodeName) && !(node.type === 'condition' && ['elif', 'else'].includes(node.config?.type))) {
+        nodeName = `${baseName}_${suffix}`;
+        suffix++;
+      }
+      usedNames.add(nodeName);
+
+      if (node.type === 'condition' && node.config?.type === 'if') {
+        currentBranchRootName = nodeName;
+      }
+
+      return { ...node, name: nodeName };
+    });
+    const workflowToSave = { ...draft, nodes: namedNodes, edges: buildWorkflowEdges() };
     if (isNew) {
       addWorkflow(workflowToSave);
     } else {
@@ -359,6 +409,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
     const newNode: WorkflowNode = {
       id: `n-${Date.now()}`,
+      name: getNodeDefaultName(type, draft.nodes),
       type: isTrigger ? 'trigger' : isCondition ? 'condition' : 'action',
       config: { type, ...nodeConfig }
     };
@@ -433,6 +484,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             <h4 className="font-semibold text-slate-900 dark:text-white tracking-tight truncate">
               {getActionLabel(node.config.type)}
             </h4>
+            <p className="text-[11px] text-orange-600 dark:text-orange-400 mt-0.5 truncate">
+              {node.type === 'condition' && ['elif', 'else'].includes(node.config.type)
+                ? `$.${getBranchRootName(node.id) || node.name || node.id}`
+                : `$.${node.name || node.id}`}
+            </p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
               {isTrigger ? "Trigger" : isBranch ? "Branch" : isCondition ? "Condition" : "Action"} - {Object.keys(node.config).filter(k => k !== 'type').length} params
             </p>
@@ -858,6 +914,32 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               
               return (
                 <div key={node.id} className="space-y-6">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Node Name</label>
+                    {node.type === 'condition' && ['elif', 'else'].includes(node.config.type) ? (
+                      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
+                        Uses IF group name: <span className="font-mono text-orange-600 dark:text-orange-400">$.{getBranchRootName(node.id) || node.name || node.id}</span>
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={node.name || ''}
+                        placeholder="e.g. CheckTemperature"
+                        onChange={(event) => {
+                          const newName = slugifyNodeName(event.target.value);
+                          const newNodes = draft.nodes.map(n =>
+                            n.id === node.id ? { ...n, name: newName } : n
+                          );
+                          setDraft({ ...draft, nodes: newNodes });
+                        }}
+                        className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                      />
+                    )}
+                    <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                      Reference this node later with <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.input</span> or <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.output</span>.
+                    </p>
+                  </div>
+
                   <div>
                     <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Type</label>
                     <div className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
