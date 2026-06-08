@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Bell, BrainCircuit, Languages, Moon, Search, Sun } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Bell, BrainCircuit, CheckCircle2, Languages, Moon, Search, Sun } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
@@ -8,7 +8,46 @@ export function Header() {
   const { language, setLanguage, theme, toggleTheme, devices, currentUser, sites, activeSiteId, setActiveSite } = useAppStore();
   const t = translations[language];
   const [showNotifications, setShowNotifications] = useState(false);
-  const alerts = deriveAlertsFromDevices(devices);
+  const [readNotificationKeys, setReadNotificationKeys] = useState<string[]>([]);
+  const [notificationReadStateReady, setNotificationReadStateReady] = useState(false);
+  const alerts = useMemo(() => deriveAlertsFromDevices(devices), [devices]);
+  const notificationStorageKey = `ai-iot-dashboard-read-notifications:${currentUser?.id || 'guest'}`;
+  const notificationKey = (alert: typeof alerts[number]) => `${alert.id}:${alert.timestamp}`;
+  const unreadAlerts = alerts.filter((alert) => !readNotificationKeys.includes(notificationKey(alert)));
+  const hasUnreadNotifications = unreadAlerts.length > 0;
+  const markNotificationRead = (alert: typeof alerts[number]) => {
+    const key = notificationKey(alert);
+    setReadNotificationKeys((current) => (
+      current.includes(key) ? current : [...current, key]
+    ));
+  };
+
+  useEffect(() => {
+    setNotificationReadStateReady(false);
+    try {
+      const stored = window.localStorage.getItem(notificationStorageKey);
+      const parsed = stored ? JSON.parse(stored) : [];
+      setReadNotificationKeys(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setReadNotificationKeys([]);
+    } finally {
+      setNotificationReadStateReady(true);
+    }
+  }, [notificationStorageKey]);
+
+  useEffect(() => {
+    if (!notificationReadStateReady) return;
+    try {
+      const activeKeys = new Set(alerts.map(notificationKey));
+      const nextReadKeys = readNotificationKeys.filter((key) => activeKeys.has(key));
+      window.localStorage.setItem(notificationStorageKey, JSON.stringify(nextReadKeys));
+      if (nextReadKeys.length !== readNotificationKeys.length) {
+        setReadNotificationKeys(nextReadKeys);
+      }
+    } catch {
+      // Local read state is a convenience feature; failures should not block navigation.
+    }
+  }, [alerts, notificationReadStateReady, notificationStorageKey, readNotificationKeys]);
 
   return (
     <header className="relative z-[40] flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-[#16191f]/80 sm:h-16 sm:gap-x-6 sm:px-6 lg:px-8">
@@ -73,11 +112,12 @@ export function Header() {
             <button 
               type="button" 
               onClick={() => setShowNotifications(!showNotifications)}
+              aria-expanded={showNotifications}
               className="-m-2.5 p-2.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white relative"
             >
               <span className="sr-only">View notifications</span>
               <Bell className="h-5 w-5" aria-hidden="true" />
-              {alerts.some(a => a.status === 'active') && (
+              {hasUnreadNotifications && (
                 <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-[#16191f]" />
               )}
             </button>
@@ -85,18 +125,55 @@ export function Header() {
             {showNotifications && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowNotifications(false)}></div>
-                <div className="fixed left-3 right-3 top-16 z-20 rounded-lg border border-slate-200 bg-white py-2 shadow-lg dark:border-slate-700 dark:bg-[#1c2128] sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-80">
-                  <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800/50">
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Recent Notifications</h3>
+                <div className="fixed left-3 right-3 top-16 z-20 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-[#1c2128] sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96">
+                  <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800/50">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Notifications</h3>
+                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                        {hasUnreadNotifications ? `${unreadAlerts.length} unread` : 'All caught up'}
+                      </p>
+                    </div>
+                    {hasUnreadNotifications && (
+                      <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600 dark:bg-red-500/10 dark:text-red-300">
+                        New
+                      </span>
+                    )}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
-                    {alerts.slice(0, 5).map(alert => (
-                      <div key={alert.id} className="px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors border-b border-slate-50 dark:border-slate-800/30 last:border-0">
-                        <p className="text-sm font-medium text-slate-900 dark:text-slate-300">{alert.deviceName}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">{alert.message}</p>
-                        <p className="text-[10px] text-slate-400 font-mono mt-1 w-full text-right">
-                          {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}
-                        </p>
+                    {alerts.map(alert => (
+                      <div
+                        key={notificationKey(alert)}
+                        className="flex gap-3 border-b border-slate-50 px-4 py-3 transition-colors last:border-0 hover:bg-slate-50 dark:border-slate-800/30 dark:hover:bg-slate-800/50"
+                      >
+                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${readNotificationKeys.includes(notificationKey(alert)) ? 'bg-slate-300 dark:bg-slate-700' : 'bg-red-500'}`} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-300">{alert.deviceName}</p>
+                              <p className="mt-0.5 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{alert.message}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                markNotificationRead(alert);
+                              }}
+                              disabled={readNotificationKeys.includes(notificationKey(alert))}
+                              title={readNotificationKeys.includes(notificationKey(alert)) ? 'Read' : 'Mark read'}
+                              className="rounded-md p-1 text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-slate-400 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-300"
+                            >
+                              <CheckCircle2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between gap-2">
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                              {alert.level}
+                            </span>
+                            <p className="font-mono text-[10px] text-slate-400">
+                              {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}
+                            </p>
+                          </div>
+                        </div>
                       </div>
                     ))}
                     {alerts.length === 0 && (
