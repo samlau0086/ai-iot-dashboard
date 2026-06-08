@@ -41,6 +41,14 @@ const extractTelemetryMetrics = (payload: DeviceTelemetryMessage) => ({
   )),
 });
 
+const applyMetricMapping = (metrics: Record<string, number>, mapping: Record<string, string> = {}) => {
+  return Object.entries(mapping).reduce<Record<string, number>>((acc, [sourceKey, targetKey]) => {
+    if (!targetKey || metrics[sourceKey] === undefined) return acc;
+    acc[targetKey] = metrics[sourceKey];
+    return acc;
+  }, { ...metrics });
+};
+
 export const normalizeDevice = (payload: DeviceTelemetryMessage): Device | null => {
   const id = payload.device_id || payload.deviceId || payload.id;
   const type = payload.device_type || payload.type;
@@ -80,6 +88,10 @@ export const mergeTelemetryIntoDevices = (devices: Device[], payload: DeviceTele
 
   const existingDevice = devices.find((device) => device.id === id || device.config?.externalDeviceId === id);
   const nextDevice = normalizeDevice(payload);
+  const incomingMetrics = extractTelemetryMetrics(payload);
+  const mappedMetrics = existingDevice
+    ? applyMetricMapping(incomingMetrics, existingDevice.config?.metricMapping)
+    : incomingMetrics;
 
   if (!existingDevice) {
     return nextDevice ? [...devices, nextDevice] : devices;
@@ -99,7 +111,7 @@ export const mergeTelemetryIntoDevices = (devices: Device[], payload: DeviceTele
           tags: payload.tags?.length ? payload.tags : device.tags,
           metrics: {
             ...device.metrics,
-            ...extractTelemetryMetrics(payload),
+            ...mappedMetrics,
           },
           firmwareVersion: payload.firmwareVersion || device.firmwareVersion,
         }

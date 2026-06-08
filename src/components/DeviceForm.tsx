@@ -42,9 +42,14 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
     ...existingDevice
   });
 
-  const [configData, setConfigData] = useState<any>({
+  const initialConfigData = {
     dataSource: 'manual',
-    ...existingDevice?.config
+    ...existingDevice?.config,
+    ...(existingDevice?.config?.dataSource === 'mqtt' && !existingDevice?.config?.protocol ? { protocol: 'MQTT' } : {}),
+  };
+
+  const [configData, setConfigData] = useState<any>({
+    ...initialConfigData,
   });
   
   const [tagInput, setTagInput] = useState('');
@@ -84,10 +89,26 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
 
   const handleConfigSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setConfigData((prev: any) => ({
-      ...prev,
-      [name]: value
-    }));
+    setConfigData((prev: any) => {
+      const next = {
+        ...prev,
+        [name]: value,
+      };
+
+      if (name === 'dataSource' && value === 'mqtt') {
+        next.protocol = 'MQTT';
+      }
+
+      if (name === 'dataSource' && value === 'api' && prev.protocol === 'MQTT') {
+        next.protocol = 'HTTP Push';
+      }
+
+      if (name === 'dataSource' && value === 'manual' && prev.protocol === 'MQTT') {
+        next.protocol = 'Manual / Mock';
+      }
+
+      return next;
+    });
   };
 
   const sampleMetricsByType = (type?: DeviceType) => {

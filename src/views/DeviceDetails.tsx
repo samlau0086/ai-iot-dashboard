@@ -10,7 +10,7 @@ import { DeviceForm } from '../components/DeviceForm';
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { devices, language } = useAppStore();
+  const { devices, language, updateDevice } = useAppStore();
   const t = translations[language];
 
   const device = devices.find(d => d.id === id);
@@ -138,6 +138,52 @@ export function DeviceDetails() {
   const primaryMetrics = primaryMetricKeys.filter((metric) => device.metrics?.[metric.key] !== undefined);
   const primaryMetricSet = new Set(primaryMetrics.map((metric) => metric.key));
   const secondaryMetrics = Object.entries(device.metrics || {}).filter(([key]) => !primaryMetricSet.has(key));
+  const commonMetricTargets = [
+    { key: 'power', label: 'Power Draw' },
+    { key: 'energy_today', label: 'Energy Today' },
+    { key: 'voltage', label: 'Voltage' },
+    { key: 'current', label: 'Current' },
+    { key: 'temperature', label: 'Temperature' },
+    { key: 'humidity', label: 'Humidity' },
+    { key: 'pressure', label: 'Pressure' },
+    { key: 'flow_rate', label: 'Flow Rate' },
+    { key: 'running_hours', label: 'Runtime' },
+    { key: 'signal', label: 'Signal' },
+    { key: 'battery', label: 'Battery' },
+    { key: 'cpu', label: 'CPU Load' },
+    { key: 'ram', label: 'Memory' },
+  ];
+  const metricTargetMap = new Map<string, { key: string; label: string }>();
+  primaryMetricKeys.forEach((metric) => metricTargetMap.set(metric.key, { key: metric.key, label: metric.label }));
+  commonMetricTargets.forEach((metric) => metricTargetMap.set(metric.key, metric));
+  Object.keys(device.metrics || {}).forEach((key) => metricTargetMap.set(key, { key, label: key }));
+  const metricTargetOptions = Array.from(metricTargetMap.values());
+
+  const formatConfigValue = (value: unknown) => {
+    if (value && typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  };
+
+  const handleMetricMappingChange = (sourceKey: string, targetKey: string) => {
+    const currentMapping = device.config?.metricMapping || {};
+    const nextMapping = { ...currentMapping };
+    const nextMetrics = { ...device.metrics };
+
+    if (targetKey) {
+      nextMapping[sourceKey] = targetKey;
+      nextMetrics[targetKey] = Number(device.metrics[sourceKey]);
+    } else {
+      delete nextMapping[sourceKey];
+    }
+
+    updateDevice(device.id, {
+      metrics: nextMetrics,
+      config: {
+        ...(device.config || {}),
+        metricMapping: nextMapping,
+      },
+    });
+  };
 
   const renderMetricCard = (metric: { key: string; label: string; icon: any }) => {
     const value = metricValue(metric.key);
@@ -264,7 +310,7 @@ export function DeviceDetails() {
                 {Object.entries(device.config).map(([key, value]) => (
                   <div key={key} className="flex justify-between pb-3 border-b border-slate-100 dark:border-slate-800/50 last:border-0 last:pb-0">
                     <span className="text-slate-500">{key}</span>
-                    <span className="text-slate-900 dark:text-slate-300">{String(value)}</span>
+                    <span className="max-w-[14rem] truncate text-right text-slate-900 dark:text-slate-300" title={formatConfigValue(value)}>{formatConfigValue(value)}</span>
                   </div>
                 ))}
               </div>
@@ -293,11 +339,23 @@ export function DeviceDetails() {
                     </div>
                     <div className="divide-y divide-slate-100 dark:divide-slate-800/70">
                       {secondaryMetrics.map(([key, value]) => (
-                        <div key={key} className="flex items-center justify-between px-4 py-3 text-xs font-mono">
-                          <span className="text-slate-500">{key}</span>
+                        <div key={key} className="grid grid-cols-1 gap-3 px-4 py-3 text-xs font-mono sm:grid-cols-[1fr_auto_14rem] sm:items-center">
+                          <span className="min-w-0 truncate text-slate-500">{key}</span>
                           <span className="text-slate-900 dark:text-slate-300">
-                            {String(value)} {metricUnit(key)}
+                            {String(value)} {metricUnit(device.config?.metricMapping?.[key] || key)}
                           </span>
+                          <select
+                            value={device.config?.metricMapping?.[key] || ''}
+                            onChange={(event) => handleMetricMappingChange(key, event.target.value)}
+                            className="h-8 rounded-md border-slate-300 bg-white px-2 text-xs text-slate-700 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          >
+                            <option value="">Unmapped</option>
+                            {metricTargetOptions
+                              .filter((metric) => metric.key !== key)
+                              .map((metric) => (
+                                <option key={metric.key} value={metric.key}>{metric.label} ({metric.key})</option>
+                              ))}
+                          </select>
                         </div>
                       ))}
                     </div>
