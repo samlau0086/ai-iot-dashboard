@@ -521,7 +521,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const groupHasElseBranch = branches.some((branch) => branch.condition.config.type === 'else');
 
     return (
-    <div className="mb-8 flex w-full min-w-max flex-col items-center overflow-x-auto px-4 py-2">
+    <div className="mb-8 flex w-max min-w-full flex-col items-center px-4 py-2">
       {renderBranchBrace(branches, 'down')}
       <div className="flex items-start justify-center">
         {branches.map((branch, index) => {
