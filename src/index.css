@@ -158,8 +158,8 @@ body {
   cursor: grabbing;
 }
 
-.overview-mobile-layout .draggable-handle,
-.overview-mobile-layout .react-resizable-handle {
+.overview-readonly-layout .draggable-handle,
+.overview-readonly-layout .react-resizable-handle {
   display: none !important;
 }
 

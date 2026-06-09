@@ -430,6 +430,7 @@ export function Overview() {
   const [builderCriticalColor, setBuilderCriticalColor] = useState(DEFAULT_WIDGET_COLORS.critical);
   const [builderNoDataColor, setBuilderNoDataColor] = useState(DEFAULT_WIDGET_COLORS.noData);
   const [currentBreakpoint, setCurrentBreakpoint] = useState<keyof typeof GRID_COLS_BY_BREAKPOINT>(getInitialOverviewBreakpoint);
+  const [layoutEditMode, setLayoutEditMode] = useState(false);
   const dashboardDropRef = useRef<HTMLDivElement | null>(null);
   const isGridInteractingRef = useRef(false);
   const activeOverviewDashboard = overviewDashboardsBySite[selectedSiteId] || {
@@ -482,6 +483,7 @@ export function Overview() {
     xxs: createResponsiveLayout(overviewLayout, GRID_COLS_BY_BREAKPOINT.xxs),
   }), [overviewLayout]);
   const isDesktopGrid = currentBreakpoint === 'lg' || currentBreakpoint === 'md';
+  const isLayoutEditable = isDesktopGrid && layoutEditMode;
 
   const siteFilters = useMemo(() => [
     { id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] },
@@ -497,6 +499,13 @@ export function Overview() {
 
     setSelectedSiteId(activeSiteId);
   }, [activeSiteId, selectedSiteId]);
+
+  useEffect(() => {
+    if (!isDesktopGrid && layoutEditMode) {
+      setLayoutEditMode(false);
+      clearSnapGuide();
+    }
+  }, [isDesktopGrid, layoutEditMode]);
 
   const selectedSite = useMemo(() => sites.find((site) => site.id === selectedSiteId) || null, [selectedSiteId, sites]);
 
@@ -614,7 +623,7 @@ export function Overview() {
   const tooltipColor = isDark ? '#cbd5e1' : '#334155';
 
   const onLayoutChange = (currentLayout: any[]) => {
-    if (!isDesktopGrid) return;
+    if (!isLayoutEditable) return;
     if (isGridInteractingRef.current) return;
     if (layoutsEqual(currentLayout, overviewLayout)) return;
 
@@ -622,12 +631,12 @@ export function Overview() {
   };
 
   const handleDragStart = () => {
-    if (!isDesktopGrid) return;
+    if (!isLayoutEditable) return;
     isGridInteractingRef.current = true;
   };
 
   const handleDrag = (_layout: any[], _oldItem: any, newItem: any, _placeholder: any) => {
-    if (!isDesktopGrid) return;
+    if (!isLayoutEditable) return;
     const guides = snapGuides[newItem.i];
     if (!guides) {
       updateSnapGuide({});
@@ -685,7 +694,7 @@ export function Overview() {
   };
 
   const handleDragStop = (layout: any[], _oldItem: any, newItem: any) => {
-    if (!isDesktopGrid) return;
+    if (!isLayoutEditable) return;
     const nextLayout = snapLayoutItem(layout.map((item) => ({ ...item })), { ...newItem });
 
     if (!layoutsEqual(nextLayout, overviewLayout)) {
@@ -697,13 +706,13 @@ export function Overview() {
   };
 
   const handleResizeStart = () => {
-    if (!isDesktopGrid) return;
+    if (!isLayoutEditable) return;
     isGridInteractingRef.current = true;
     clearSnapGuide();
   };
 
   const handleResizeStop = (layout: any[]) => {
-    if (!isDesktopGrid) return;
+    if (!isLayoutEditable) return;
     const nextLayout = layout.map((item) => ({ ...item }));
 
     if (!layoutsEqual(nextLayout, overviewLayout)) {
@@ -1318,6 +1327,25 @@ export function Overview() {
           <button
             type="button"
             onClick={() => {
+              setLayoutEditMode((value) => !value);
+              clearSnapGuide();
+            }}
+            disabled={!isDesktopGrid}
+            className={cn(
+              "inline-flex h-9 items-center gap-x-2 rounded border px-3 text-sm font-semibold shadow-sm transition-colors",
+              layoutEditMode && isDesktopGrid
+                ? "border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-500"
+                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1c2128] dark:text-slate-300 dark:hover:bg-slate-800/80",
+              !isDesktopGrid && "cursor-not-allowed opacity-50"
+            )}
+            title={isDesktopGrid ? "Enable layout editing" : "Layout editing is available on PC view"}
+          >
+            <SlidersHorizontal className="-ml-0.5 h-4 w-4" aria-hidden="true" />
+            {layoutEditMode && isDesktopGrid ? 'Lock Layout' : 'Edit Layout'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
               if (showWidgetBuilder) {
                 setShowWidgetBuilder(false);
                 resetWidgetBuilder();
@@ -1780,7 +1808,7 @@ export function Overview() {
           )}
         </div>
         <ResponsiveGridLayout
-          className={cn("layout", !isDesktopGrid && "overview-mobile-layout")}
+          className={cn("layout", !isLayoutEditable && "overview-readonly-layout", !isDesktopGrid && "overview-mobile-layout")}
           layouts={gridLayouts}
           breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
           cols={GRID_COLS_BY_BREAKPOINT}
@@ -1796,8 +1824,8 @@ export function Overview() {
           onResizeStart={handleResizeStart}
           onResizeStop={handleResizeStop}
           {...({ draggableHandle: ".draggable-handle" } as any)}
-          isResizable={isDesktopGrid}
-          isDraggable={isDesktopGrid}
+          isResizable={isLayoutEditable}
+          isDraggable={isLayoutEditable}
           resizeHandles={['se']}
           preventCollision={true}
           compactType={null}
