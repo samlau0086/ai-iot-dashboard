@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Copy, Edit2, Eye, KeyRound, Plus, QrCode, RefreshCw, Trash2, X } from 'lucide-react';
+import { Check, Copy, Edit2, Eye, KeyRound, Plus, QrCode, RefreshCw, Trash2, X } from 'lucide-react';
 import { useAppStore, type AccessCredential, type AccessDefinition } from '../lib/store';
 import { cn } from '../lib/utils';
 
@@ -71,6 +71,7 @@ export function AccessControl() {
   const [credentialLink, setCredentialLink] = useState('');
   const [credentialLatestQrLink, setCredentialLatestQrLink] = useState('');
   const [message, setMessage] = useState('');
+  const [copiedKey, setCopiedKey] = useState('');
 
   const selectedAccess = accesses.find((access) => access.id === selectedAccessId) || accesses[0];
   const credentials = useMemo(
@@ -238,6 +239,19 @@ export function AccessControl() {
     const response = await fetch(`/api/access-credentials/${credentialId}`, { method: 'DELETE' });
     const payload = await response.json();
     if (response.ok) setAccessCredentials(payload.credentials || []);
+  };
+
+  const copyToClipboard = async (value: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      setMessage('Copied to clipboard.');
+      window.setTimeout(() => {
+        setCopiedKey((current) => (current === key ? '' : current));
+      }, 1800);
+    } catch {
+      setMessage('Copy failed. Please copy the link manually.');
+    }
   };
 
   return (
@@ -475,11 +489,11 @@ export function AccessControl() {
                       <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{lastLink}</p>
                       <button
                         type="button"
-                        onClick={() => navigator.clipboard.writeText(lastLink)}
+                        onClick={() => copyToClipboard(lastLink, 'last-link')}
                         className="mt-3 inline-flex items-center gap-2 rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500"
                       >
-                        <Copy className="h-4 w-4" />
-                        Copy Link
+                        {copiedKey === 'last-link' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        {copiedKey === 'last-link' ? 'Copied' : 'Copy Link'}
                       </button>
                       {lastLatestQrLink && (
                         <div className="mt-4 rounded border border-orange-200 bg-white/70 p-3 dark:border-orange-500/30 dark:bg-slate-950/40">
@@ -492,11 +506,11 @@ export function AccessControl() {
                           <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{lastLatestQrLink}</p>
                           <button
                             type="button"
-                            onClick={() => navigator.clipboard.writeText(lastLatestQrLink)}
+                            onClick={() => copyToClipboard(lastLatestQrLink, 'last-latest-link')}
                             className="mt-3 inline-flex items-center gap-2 rounded border border-orange-300 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-50 dark:border-orange-500/40 dark:text-orange-300 dark:hover:bg-orange-500/10"
                           >
-                            <Copy className="h-4 w-4" />
-                            Copy Latest QR Page
+                            {copiedKey === 'last-latest-link' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            {copiedKey === 'last-latest-link' ? 'Copied' : 'Copy Latest QR Page'}
                           </button>
                         </div>
                       )}
@@ -588,11 +602,11 @@ export function AccessControl() {
                       </p>
                       <button
                         type="button"
-                        onClick={() => navigator.clipboard.writeText(credentialLink)}
+                        onClick={() => copyToClipboard(credentialLink, 'credential-link')}
                         className="mt-3 inline-flex items-center gap-2 rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500"
                       >
-                        <Copy className="h-4 w-4" />
-                        Copy Link
+                        {copiedKey === 'credential-link' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        {copiedKey === 'credential-link' ? 'Copied' : 'Copy Link'}
                       </button>
                       {credentialLatestQrLink && (
                         <div className="mt-4 rounded border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900">
@@ -605,11 +619,11 @@ export function AccessControl() {
                           <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{credentialLatestQrLink}</p>
                           <button
                             type="button"
-                            onClick={() => navigator.clipboard.writeText(credentialLatestQrLink)}
+                            onClick={() => copyToClipboard(credentialLatestQrLink, 'credential-latest-link')}
                             className="mt-3 inline-flex items-center gap-2 rounded border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                           >
-                            <Copy className="h-4 w-4" />
-                            Copy Latest QR Page
+                            {copiedKey === 'credential-latest-link' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            {copiedKey === 'credential-latest-link' ? 'Copied' : 'Copy Latest QR Page'}
                           </button>
                         </div>
                       )}

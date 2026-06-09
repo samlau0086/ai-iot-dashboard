@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useAppStore, Workflow, WorkflowEdge, WorkflowNode } from '../lib/store';
+import { useAppStore, Workflow, WorkflowEdge, WorkflowNode, type AccessDefinition } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
   ArrowLeft, Plus, Save, Trash2, Play, Square,
@@ -205,6 +205,83 @@ function DeviceSelect({ value, onChange, devices }: { value: string, onChange: (
   );
 }
 
+function AccessSelect({ value, onChange, accesses }: { value: string; onChange: (val: string) => void; accesses: AccessDefinition[] }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const filtered = accesses.filter((access) => (
+    access.name.toLowerCase().includes(normalizedSearch) ||
+    access.id.toLowerCase().includes(normalizedSearch) ||
+    access.method.toLowerCase().includes(normalizedSearch)
+  ));
+  const selected = accesses.find((access) => access.id === value);
+
+  useEffect(() => {
+    const handleClick = () => setIsOpen(false);
+    if (isOpen) window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, [isOpen]);
+
+  return (
+    <div className="relative" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="block w-full rounded-md border-0 py-2 pl-3 pr-10 text-left text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+      >
+        {selected ? selected.name : 'Any Access'}
+        <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2">
+          <ChevronDown className="h-4 w-4 text-slate-400" aria-hidden="true" />
+        </span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute z-20 mx-auto mt-1 max-h-64 w-full overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm dark:bg-slate-800 dark:ring-slate-700">
+          <div className="sticky top-0 z-10 bg-white px-3 py-2 dark:bg-slate-800">
+            <input
+              type="text"
+              className="block w-full rounded-md border-0 py-1.5 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm sm:leading-6 dark:bg-slate-900 dark:text-white dark:ring-slate-700"
+              placeholder="Search access..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          <div
+            className={cn("relative cursor-default select-none py-2 pl-3 pr-9 hover:bg-orange-50 dark:hover:bg-slate-700", !value && "bg-orange-50 dark:bg-slate-700")}
+            onClick={() => { onChange(''); setIsOpen(false); }}
+          >
+            <div className="font-medium text-slate-800 dark:text-slate-100">Any Access</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">Trigger when any enabled Access is used.</div>
+          </div>
+          {filtered.map((access) => (
+            <div
+              key={access.id}
+              className={cn("relative cursor-default select-none py-2 pl-3 pr-9 hover:bg-orange-50 dark:hover:bg-slate-700", value === access.id && "bg-orange-50 dark:bg-slate-700")}
+              onClick={() => { onChange(access.id); setIsOpen(false); }}
+            >
+              <div className="flex items-center gap-2">
+                <span className={cn("inline-block h-2 w-2 shrink-0 rounded-full", access.enabled ? "bg-emerald-500" : "bg-slate-400")} />
+                <span className={cn("block truncate", value === access.id ? "font-semibold" : "font-medium")}>
+                  {access.name}
+                </span>
+              </div>
+              <div className="mt-0.5 truncate pl-4 text-xs text-slate-500 dark:text-slate-400">
+                {access.id} · {access.method.toUpperCase()}
+              </div>
+            </div>
+          ))}
+          {filtered.length === 0 && (
+            <div className="px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
+              No access entries found.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const { language, workflows, addWorkflow, updateWorkflow, devices, accesses } = useAppStore();
   const t = translations[language];
@@ -246,6 +323,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const terminalBranchTypes = new Set(['else', 'default']);
   const getBranchFamily = (type: string) => (['switch', 'case', 'default'].includes(type) ? 'switch' : 'if');
   const conditionTypesForSelector = showSelector.allowedConditionTypes || availableConditionTypes.filter((type) => !['elif', 'else', 'case', 'default'].includes(type));
+  const triggerTypesForSelector = Array.from(new Set([...Object.keys(t.workflows.triggerTypes), 'access']));
 
   type BranchGroup = { condition: WorkflowNode; index: number; nodes: Array<{ node: WorkflowNode; index: number }>; endIndex: number };
   type FlowItem = { type: 'branch_group'; branches: BranchGroup[]; startIndex: number; endIndex: number } | { type: 'nodes'; groups: any[] };
@@ -544,6 +622,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   };
 
   const getActionLabel = (type: string) => {
+    if (type === 'access') return 'Access Trigger';
     return (t.workflows.actionTypes as any)[type] || (t.workflows.conditionTypes as any)[type] || (t.workflows.triggerTypes as any)[type] || type;
   };
 
@@ -1469,16 +1548,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                               Access
                             </label>
-                            <select
+                            <AccessSelect
                               value={value as string}
-                              onChange={(event) => updateNodeConfig(node.id, { accessId: event.target.value })}
-                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
-                            >
-                              <option value="">Any Access</option>
-                              {accesses.map((access) => (
-                                <option key={access.id} value={access.id}>{access.name}</option>
-                              ))}
-                            </select>
+                              onChange={(accessId) => updateNodeConfig(node.id, { accessId })}
+                              accesses={accesses}
+                            />
                             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                               Access extra parameters are available from this trigger output, for example $.access_trigger.output.params.deviceId.
                             </p>
@@ -1704,7 +1778,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                 <div>
                   <h4 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 px-1">{t.workflows.triggers}</h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
-                    {Object.keys(t.workflows.triggerTypes).map(type => (
+                    {triggerTypesForSelector.map(type => (
                       <button
                         key={type}
                         onClick={() => addNode(type, true, false)}
