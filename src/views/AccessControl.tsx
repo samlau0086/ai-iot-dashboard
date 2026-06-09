@@ -22,6 +22,18 @@ const createDefaultQrName = () => {
 
 type DurationUnit = 'seconds' | 'minutes' | 'hours' | 'days' | 'months';
 
+type AccessEvent = {
+  id: string;
+  accessId?: string | null;
+  accessName?: string;
+  credentialId?: string | null;
+  credentialName?: string;
+  credentialType?: string;
+  status: string;
+  reason?: string | null;
+  createdAt: string;
+};
+
 const durationUnits: Array<{ value: DurationUnit; label: string; multiplier: number }> = [
   { value: 'seconds', label: 'Seconds', multiplier: 1 },
   { value: 'minutes', label: 'Minutes', multiplier: 60 },
@@ -72,11 +84,18 @@ export function AccessControl() {
   const [credentialLatestQrLink, setCredentialLatestQrLink] = useState('');
   const [message, setMessage] = useState('');
   const [copiedKey, setCopiedKey] = useState('');
+  const [accessEvents, setAccessEvents] = useState<AccessEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState('');
 
   const selectedAccess = accesses.find((access) => access.id === selectedAccessId) || accesses[0];
   const credentials = useMemo(
     () => accessCredentials.filter((credential) => credential.accessId === selectedAccess?.id),
     [accessCredentials, selectedAccess?.id]
+  );
+  const accessCredentialNames = useMemo(
+    () => new Map(accessCredentials.map((credential) => [credential.id, credential.name])),
+    [accessCredentials]
   );
 
   useEffect(() => {
@@ -97,6 +116,22 @@ export function AccessControl() {
     setAccessCredentials(payload.credentials || []);
   };
 
+  const loadAccessEvents = async (accessId: string) => {
+    setEventsLoading(true);
+    setEventsError('');
+    try {
+      const response = await fetch(`/api/access-events?accessId=${encodeURIComponent(accessId)}&limit=100`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Failed to load access events.');
+      setAccessEvents(Array.isArray(payload.events) ? payload.events : []);
+    } catch (error) {
+      setAccessEvents([]);
+      setEventsError(error instanceof Error ? error.message : 'Failed to load access events.');
+    } finally {
+      setEventsLoading(false);
+    }
+  };
+
   const patchAccess = (accessId: string, patch: Partial<AccessDefinition>) => {
     updateAccess(accessId, patch);
     fetch(`/api/accesses/${accessId}`, {
@@ -109,6 +144,14 @@ export function AccessControl() {
   useEffect(() => {
     syncAccesses().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!selectedAccess?.id) {
+      setAccessEvents([]);
+      return;
+    }
+    loadAccessEvents(selectedAccess.id);
+  }, [selectedAccess?.id]);
 
   const saveParams = async () => {
     if (!selectedAccess) return;
@@ -199,6 +242,11 @@ export function AccessControl() {
     });
     const payload = await response.json();
     if (response.ok) setAccessCredentials(payload.credentials || []);
+  };
+
+  const formatEventTime = (value: string) => {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
   };
 
   const openCredentialModal = async (mode: 'view' | 'edit', credential: AccessCredential) => {
@@ -553,6 +601,79 @@ export function AccessControl() {
                     {credentials.length === 0 && (
                       <tr>
                         <td colSpan={4} className="px-3 py-6 text-center text-slate-500">No QR credentials generated.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-[#1c2128]">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+                  <Eye className="h-4 w-4 text-orange-500" />
+                  QR Access Records
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => loadAccessEvents(selectedAccess.id)}
+                  disabled={eventsLoading}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  <RefreshCw className={cn("h-4 w-4", eventsLoading && "animate-spin")} />
+                  Refresh
+                </button>
+              </div>
+
+              {eventsError && (
+                <div className="mt-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+                  {eventsError}
+                </div>
+              )}
+
+              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
+                  <thead className="bg-slate-50 dark:bg-slate-900/60">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">QR</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">Access Time</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">Status</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {accessEvents.map((event) => (
+                      <tr key={event.id}>
+                        <td className="px-3 py-2">
+                          <div className="font-medium text-slate-900 dark:text-white">
+                            {event.credentialName || (event.credentialId ? accessCredentialNames.get(event.credentialId) : '') || 'Unknown QR'}
+                          </div>
+                          {event.credentialId && (
+                            <div className="mt-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">{event.credentialId}</div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-slate-500 dark:text-slate-400">{formatEventTime(event.createdAt)}</td>
+                        <td className="px-3 py-2">
+                          <span className={cn(
+                            'rounded-full border px-2 py-0.5 text-xs font-semibold capitalize',
+                            event.status === 'accepted'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300'
+                              : 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+                          )}>
+                            {event.status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-slate-500 dark:text-slate-400">{event.reason || '-'}</td>
+                      </tr>
+                    ))}
+                    {eventsLoading && accessEvents.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-6 text-center text-slate-500">Loading access records...</td>
+                      </tr>
+                    )}
+                    {!eventsLoading && accessEvents.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-6 text-center text-slate-500">No QR access records yet.</td>
                       </tr>
                     )}
                   </tbody>

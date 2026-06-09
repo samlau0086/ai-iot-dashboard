@@ -848,12 +848,11 @@ const conditionMatchesEvent = (condition, event, context = {}) => {
 };
 
 const sanitizeWorkflowLogValue = (value, options = {}) => {
-  const seen = new WeakSet();
   const maxDepth = Number(options.maxDepth || 8);
   const maxArrayLength = Number(options.maxArrayLength || 100);
   const maxStringLength = Number(options.maxStringLength || 4000);
 
-  const sanitize = (item, depth) => {
+  const sanitize = (item, depth, stack = new WeakSet()) => {
     if (item === null || item === undefined) return item;
     if (typeof item === 'string') {
       return item.length > maxStringLength ? `${item.slice(0, maxStringLength)}... [truncated]` : item;
@@ -864,17 +863,20 @@ const sanitizeWorkflowLogValue = (value, options = {}) => {
     if (typeof item !== 'object') return String(item);
     if (item instanceof Date) return item.toISOString();
     if (Buffer.isBuffer(item)) return `[Buffer ${item.length} bytes]`;
-    if (seen.has(item)) return '[Circular]';
+    if (stack.has(item)) return '[Circular]';
     if (depth >= maxDepth) return '[MaxDepth]';
 
-    seen.add(item);
+    stack.add(item);
+    let result;
     if (Array.isArray(item)) {
-      const result = item.slice(0, maxArrayLength).map((entry) => sanitize(entry, depth + 1));
+      result = item.slice(0, maxArrayLength).map((entry) => sanitize(entry, depth + 1, stack));
       if (item.length > maxArrayLength) result.push(`[${item.length - maxArrayLength} more items]`);
-      return result;
+    } else {
+      result = Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, sanitize(entry, depth + 1, stack)]));
     }
+    stack.delete(item);
 
-    return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, sanitize(entry, depth + 1)]));
+    return result;
   };
 
   return sanitize(value, 0);
@@ -1265,6 +1267,21 @@ const createWorkflowNodeInput = (node, event, context) => ({
   event,
 });
 
+const createWorkflowTriggerOutput = (trigger, event) => {
+  if (trigger?.config?.type === 'access') {
+    const params = event?.params && typeof event.params === 'object' && !Array.isArray(event.params)
+      ? event.params
+      : {};
+    return {
+      ...event,
+      ...params,
+      params,
+    };
+  }
+
+  return event;
+};
+
 const recordWorkflowNodeResult = (context, nodeName, step) => {
   context[nodeName] = {
     ...(context[nodeName] || {}),
@@ -1516,7 +1533,15 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   }
 
   if (['email', 'whatsapp', 'notification', 'ticket', 'report', 'ai_analyze'].includes(config.type)) {
-    return {...baseStep, status: 'queued', output: `${config.type} action queued for downstream connector.`};
+    return {
+      ...baseStep,
+      status: 'queued',
+      output: {
+        message: config.message || config.subject || config.prompt || '',
+        config,
+        result: `${config.type} action queued for downstream connector.`,
+      },
+    };
   }
 
   return {...baseStep, status: 'skipped', output: `Unsupported action type: ${config.type || 'unknown'}`};
@@ -1636,13 +1661,14 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
 
     if (currentNode.type === 'trigger') {
       const input = createWorkflowNodeInput(currentNode, event, context);
+      const output = createWorkflowTriggerOutput(currentNode, event);
       recordWorkflowNodeResult(context, nodeName, {
         nodeId: currentNode.id,
         nodeName,
         type: currentNode.config?.type || 'trigger',
         status: 'success',
         input,
-        output: event,
+        output,
       });
       appendWorkflowLiveStep(workflow, {
         nodeId: currentNode.id,
@@ -1781,13 +1807,14 @@ const executeWorkflow = async (workflow, trigger, event) => {
   const context = {};
   const nodeNamesById = buildWorkflowNodeNameMap(workflow);
   const triggerName = nodeNamesById.get(trigger.id) || normalizeWorkflowNodeName(trigger, trigger.id);
+  const triggerOutput = createWorkflowTriggerOutput(trigger, event);
   recordWorkflowNodeResult(context, triggerName, {
     nodeId: trigger.id,
     nodeName: triggerName,
     type: trigger.config?.type || 'trigger',
     status: 'success',
     input: createWorkflowNodeInput(trigger, event, context),
-    output: event,
+    output: triggerOutput,
   });
   appendWorkflowLiveStep(workflow, {
     nodeId: trigger.id,
@@ -2783,20 +2810,44 @@ app.delete('/api/access-credentials/:credentialId', async (req, res) => {
 
 app.get('/api/access-events', async (req, res) => {
   try {
+    const accessId = typeof req.query.accessId === 'string' ? req.query.accessId.trim() : '';
     const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
+    const {accesses, accessCredentials} = await getAccessState();
+    const accessById = new Map(accesses.map((access) => [access.id, access]));
+    const credentialById = new Map(accessCredentials.map((credential) => [credential.id, credential]));
+    const enrichEvent = (event) => {
+      const credential = credentialById.get(event.credentialId);
+      const access = accessById.get(event.accessId);
+      return {
+        ...event,
+        accessName: event.accessName || access?.name || '',
+        credentialName: event.credentialName || credential?.name || event.credentialId || '',
+      };
+    };
+
     if (db) {
+      const values = [];
+      const whereSql = accessId ? 'WHERE access_id = $1' : '';
+      if (accessId) values.push(accessId);
+      values.push(limit);
       const result = await queryDb(
         `SELECT id, access_id AS "accessId", credential_id AS "credentialId", credential_type AS "credentialType",
                 status, reason, params_snapshot AS params, request_meta AS request, created_at AS "createdAt"
          FROM access_events
+         ${whereSql}
          ORDER BY created_at DESC
-         LIMIT $1`,
-        [limit]
+         LIMIT $${values.length}`,
+        values
       );
-      res.status(200).json({events: result.rows});
+      res.status(200).json({events: result.rows.map(enrichEvent)});
       return;
     }
-    res.status(200).json({events: accessEvents.slice(0, limit)});
+    res.status(200).json({
+      events: accessEvents
+        .filter((event) => !accessId || event.accessId === accessId)
+        .slice(0, limit)
+        .map(enrichEvent),
+    });
   } catch (error) {
     res.status(500).json({error: error.message, events: []});
   }

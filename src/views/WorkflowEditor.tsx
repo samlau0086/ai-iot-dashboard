@@ -1554,7 +1554,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                               accesses={accesses}
                             />
                             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              Access extra parameters are available from this trigger output, for example $.access_trigger.output.params.deviceId.
+                              Access extra parameters are available from this trigger output, for example $.access_trigger.output.deviceId or $.access_trigger.output.params.deviceId.
                             </p>
                           </div>
                         );
