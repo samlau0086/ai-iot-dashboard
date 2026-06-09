@@ -1124,6 +1124,27 @@ const recordWorkflowNodeResult = (context, nodeName, step) => {
   };
 };
 
+const parseWorkflowRetryInterval = (value) => {
+  const text = String(value || '0').trim();
+  const match = text.match(/^(\d+(?:\.\d+)?)(ms|s|m)?$/i);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  const unit = (match[2] || 'ms').toLowerCase();
+  const multiplier = unit === 'm' ? 60000 : unit === 's' ? 1000 : 1;
+  return Math.max(0, Math.min(amount * multiplier, 30000));
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getNodeExecutionPolicy = (node) => ({
+  retryEnabled: Boolean(node?.config?.executionPolicy?.retryEnabled),
+  retryAttempts: Math.max(1, Math.min(Number(node?.config?.executionPolicy?.retryAttempts || 1) || 1, 10)),
+  retryInterval: node?.config?.executionPolicy?.retryInterval || '0s',
+  onFailure: ['continue', 'stop'].includes(node?.config?.executionPolicy?.onFailure)
+    ? node.config.executionPolicy.onFailure
+    : 'stop',
+});
+
 const executeWorkflowAction = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id)) => {
   const input = createWorkflowNodeInput(action, event, context);
   const config = input.config || {};
@@ -1345,6 +1366,63 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   return {...baseStep, status: 'skipped', output: `Unsupported action type: ${config.type || 'unknown'}`};
 };
 
+const executeWorkflowActionWithPolicy = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id)) => {
+  const policy = getNodeExecutionPolicy(action);
+  const totalAttempts = policy.retryEnabled ? policy.retryAttempts : 1;
+  const retryIntervalMs = parseWorkflowRetryInterval(policy.retryInterval);
+  const attempts = [];
+  let lastStep = null;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+    try {
+      const step = await executeWorkflowAction(workflow, action, event, context, nodeName);
+      attempts.push({attempt, status: step.status, output: step.output});
+      lastStep = step;
+      if (step.status !== 'failed') break;
+    } catch (error) {
+      attempts.push({attempt, status: 'failed', output: error.message});
+      lastStep = {
+        nodeId: action.id,
+        nodeName,
+        type: action.config?.type || 'action',
+        status: 'failed',
+        input: createWorkflowNodeInput(action, event, context),
+        output: error.message,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      };
+    }
+
+    if (attempt < totalAttempts && retryIntervalMs > 0) {
+      await sleep(retryIntervalMs);
+    }
+  }
+
+  if (!lastStep) return executeWorkflowAction(workflow, action, event, context, nodeName);
+
+  if (policy.retryEnabled || lastStep.status === 'failed') {
+    lastStep = {
+      ...lastStep,
+      output: {
+        result: lastStep.output,
+        executionPolicy: {
+          retryEnabled: policy.retryEnabled,
+          retryAttempts: totalAttempts,
+          retryInterval: policy.retryInterval,
+          onFailure: policy.onFailure,
+        },
+        attempts,
+      },
+    };
+  }
+
+  return lastStep;
+};
+
+const shouldStopWorkflowAfterAction = (action, step) => (
+  step?.status === 'failed' && getNodeExecutionPolicy(action).onFailure !== 'continue'
+);
+
 const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => {
   const nodesById = new Map((workflow.nodes || []).map((node) => [node.id, node]));
   const nodeNamesById = buildWorkflowNodeNameMap(workflow);
@@ -1460,12 +1538,16 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
 
     if (currentNode.type === 'action') {
       try {
-        const step = await executeWorkflowAction(workflow, currentNode, event, context, nodeName);
+        const step = await executeWorkflowActionWithPolicy(workflow, currentNode, event, context, nodeName);
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
         appendWorkflowLiveStep(workflow, step);
         if (step.status === 'stopped') {
           await persistResult('stopped');
+          return;
+        }
+        if (shouldStopWorkflowAfterAction(currentNode, step)) {
+          await persistResult('failed');
           return;
         }
       } catch (error) {
@@ -1483,6 +1565,10 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
         appendWorkflowLiveStep(workflow, step);
+        if (shouldStopWorkflowAfterAction(currentNode, step)) {
+          await persistResult('failed');
+          return;
+        }
       }
 
       const nextEdge = outgoing.find((edge) => edge.type === 'next' || edge.type === 'continue');
@@ -1722,11 +1808,12 @@ const executeWorkflow = async (workflow, trigger, event) => {
       try {
         const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
         updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
-        const step = await executeWorkflowAction(workflow, action, event, context, nodeName);
+        const step = await executeWorkflowActionWithPolicy(workflow, action, event, context, nodeName);
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
         appendWorkflowLiveStep(workflow, step);
         if (step.status === 'stopped') break;
+        if (shouldStopWorkflowAfterAction(action, step)) break;
       } catch (error) {
         const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
         updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
@@ -1744,6 +1831,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
         appendWorkflowLiveStep(workflow, step);
+        if (shouldStopWorkflowAfterAction(action, step)) break;
       }
     }
 
@@ -1808,11 +1896,12 @@ const executeWorkflow = async (workflow, trigger, event) => {
     try {
       const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
       updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
-      const step = await executeWorkflowAction(workflow, action, event, context, nodeName);
+      const step = await executeWorkflowActionWithPolicy(workflow, action, event, context, nodeName);
       steps.push(step);
       recordWorkflowNodeResult(context, nodeName, step);
       appendWorkflowLiveStep(workflow, step);
       if (step.status === 'stopped') break;
+      if (shouldStopWorkflowAfterAction(action, step)) break;
     } catch (error) {
       const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
       updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
@@ -1830,6 +1919,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
       steps.push(step);
       recordWorkflowNodeResult(context, nodeName, step);
       appendWorkflowLiveStep(workflow, step);
+      if (shouldStopWorkflowAfterAction(action, step)) break;
     }
   }
 

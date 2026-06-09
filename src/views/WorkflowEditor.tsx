@@ -106,6 +106,7 @@ const selectConfigOptions: Record<string, string[]> = {
   from: ['C', 'F', 'K', 'W', 'kW', 'Wh', 'kWh', 'bar', 'psi'],
   to: ['C', 'F', 'K', 'W', 'kW', 'Wh', 'kWh', 'bar', 'psi'],
 };
+const hiddenActionNodeTypes = new Set(['retry', 'error_catch']);
 
 const isFlowControlNode = (node?: WorkflowNode) => node?.type === 'action' && ['retry', 'error_catch'].includes(node.config?.type);
 const isStopWorkflowNode = (node?: WorkflowNode) => node?.type === 'action' && node.config?.type === 'stop_workflow';
@@ -676,6 +677,13 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
               {isTrigger ? "Trigger" : isBranch ? "Branch" : isCondition ? "Condition" : isFlowControl ? "Flow Control" : "Action"} - {Object.keys(node.config).filter(k => k !== 'type').length} params
             </p>
+            {node.type !== 'trigger' && (node.config.executionPolicy?.retryEnabled || node.config.executionPolicy?.onFailure === 'continue') && (
+              <p className="mt-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                {node.config.executionPolicy?.retryEnabled ? `Retry x${node.config.executionPolicy.retryAttempts || 3}` : 'No retry'}
+                {' · '}
+                On error: {node.config.executionPolicy?.onFailure === 'continue' ? 'Continue' : 'Stop'}
+              </p>
+            )}
           </div>
         </div>
         <button 
@@ -1483,6 +1491,90 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                     })}
                   </div>
                   
+                  {node.type !== 'trigger' && (
+                    <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Execution Policy</label>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Configure retry and failure handling for this node without adding extra workflow nodes.
+                        </p>
+                      </div>
+
+                      <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950">
+                        <span className="font-medium text-slate-700 dark:text-slate-300">Retry on failure</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(node.config.executionPolicy?.retryEnabled)}
+                          onChange={(event) => updateNodeConfig(node.id, {
+                            executionPolicy: {
+                              ...(node.config.executionPolicy || {}),
+                              retryEnabled: event.target.checked,
+                              retryAttempts: node.config.executionPolicy?.retryAttempts ?? 3,
+                              retryInterval: node.config.executionPolicy?.retryInterval ?? '10s',
+                              onFailure: node.config.executionPolicy?.onFailure || 'stop',
+                            },
+                          })}
+                          className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-600"
+                        />
+                      </label>
+
+                      {node.config.executionPolicy?.retryEnabled && (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Attempts</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={10}
+                              value={node.config.executionPolicy?.retryAttempts ?? 3}
+                              onChange={(event) => updateNodeConfig(node.id, {
+                                executionPolicy: {
+                                  ...(node.config.executionPolicy || {}),
+                                  retryEnabled: true,
+                                  retryAttempts: Number(event.target.value),
+                                },
+                              })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Interval</label>
+                            <input
+                              value={node.config.executionPolicy?.retryInterval ?? '10s'}
+                              onChange={(event) => updateNodeConfig(node.id, {
+                                executionPolicy: {
+                                  ...(node.config.executionPolicy || {}),
+                                  retryEnabled: true,
+                                  retryInterval: event.target.value,
+                                },
+                              })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">On Failure</label>
+                        <select
+                          value={node.config.executionPolicy?.onFailure || 'stop'}
+                          onChange={(event) => updateNodeConfig(node.id, {
+                            executionPolicy: {
+                              ...(node.config.executionPolicy || {}),
+                              retryAttempts: node.config.executionPolicy?.retryAttempts ?? 3,
+                              retryInterval: node.config.executionPolicy?.retryInterval ?? '10s',
+                              onFailure: event.target.value,
+                            },
+                          })}
+                          className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                        >
+                          <option value="stop">Stop workflow</option>
+                          <option value="continue">Continue to next node</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
                     <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                       Edit the parameters above to configure how this {node.type} behaves when executed in the workflow stream.
@@ -1557,7 +1649,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                   <div>
                     <h4 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 px-1">{t.workflows.actions}</h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
-                      {Object.keys(t.workflows.actionTypes).map(type => (
+                      {Object.keys(t.workflows.actionTypes).filter((type) => !hiddenActionNodeTypes.has(type)).map(type => (
                         <button
                           key={type}
                           onClick={() => addNode(type, false, false)}
