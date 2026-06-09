@@ -345,6 +345,14 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     () => workflowLogs.find((run) => run.id === selectedRunId) || workflowLogs[0] || null,
     [workflowLogs, selectedRunId]
   );
+  const selectedNodeLastLog = useMemo(() => {
+    if (!selectedNodeId) return null;
+    for (const run of workflowLogs) {
+      const step = (run.steps || []).find((item) => item.nodeId === selectedNodeId);
+      if (step) return {run, step};
+    }
+    return null;
+  }, [workflowLogs, selectedNodeId]);
 
   const isTriggerOnly = showSelector.isTriggerSelect || (showSelector.insertIndex === 0 && triggerNodes.length === 0);
   const isAfterTriggers = showSelector.insertIndex === triggerNodes.length;
@@ -550,6 +558,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   useEffect(() => {
     if (showLogs) loadWorkflowLogs();
   }, [showLogs, draft.id]);
+
+  useEffect(() => {
+    if (selectedNodeId) loadWorkflowLogs();
+  }, [selectedNodeId, draft.id]);
 
   const formatJson = (value: unknown) => {
     if (typeof value === 'string') return value;
@@ -1834,6 +1846,49 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       </div>
                     </div>
                   )}
+
+                  <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Input / Output</label>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {selectedNodeLastLog
+                            ? `Latest run: ${new Date(selectedNodeLastLog.run.startedAt || selectedNodeLastLog.run.finishedAt).toLocaleString()}`
+                            : logsLoading
+                              ? 'Loading node logs...'
+                              : 'No run log found for this node yet.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={loadWorkflowLogs}
+                        disabled={logsLoading}
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-white disabled:opacity-60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                      >
+                        <RefreshCw className={cn("h-3.5 w-3.5", logsLoading && "animate-spin")} />
+                        Refresh
+                      </button>
+                    </div>
+
+                    {selectedNodeLastLog && (
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className={cn("rounded-full border px-2 py-0.5 font-medium", statusClassName(selectedNodeLastLog.step.status))}>
+                            {selectedNodeLastLog.step.status || 'unknown'}
+                          </span>
+                          <span className="text-slate-500 dark:text-slate-400">{selectedNodeLastLog.run.id}</span>
+                        </div>
+                        <div>
+                          <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Input</div>
+                          <pre className="max-h-56 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-200">{formatJson(selectedNodeLastLog.step.input)}</pre>
+                        </div>
+                        <div>
+                          <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Output</div>
+                          <pre className={cn("max-h-56 overflow-auto rounded-md p-3 text-xs", selectedNodeLastLog.step.status === 'failed' ? "bg-red-950/80 text-red-100" : "bg-slate-950 text-slate-200")}>{formatJson(selectedNodeLastLog.step.output)}</pre>
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
                   <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
                     <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
