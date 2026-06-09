@@ -1685,6 +1685,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                     {Object.entries(node.config).map(([key, value]) => {
                       if (node.config.type === 'device_control') return null;
                       if (key === 'type') return null;
+                      if (key === 'executionPolicy') return null;
 
                       if (node.config.type === 'access' && key === 'accessId') {
                         return (
