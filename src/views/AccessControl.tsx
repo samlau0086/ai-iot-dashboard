@@ -13,6 +13,13 @@ const createAccessDraft = (): AccessDefinition => ({
   updatedAt: new Date().toISOString(),
 });
 
+const createDefaultQrName = () => {
+  const now = new Date();
+  const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  const randomPart = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(2, 5).toUpperCase().padEnd(3, '0');
+  return `QR-${datePart}-${randomPart}`;
+};
+
 export function AccessControl() {
   const {
     accesses,
@@ -23,7 +30,7 @@ export function AccessControl() {
   } = useAppStore();
   const [selectedAccessId, setSelectedAccessId] = useState(accesses[0]?.id || '');
   const [paramsDraft, setParamsDraft] = useState('{}');
-  const [qrName, setQrName] = useState('Main QR');
+  const [qrName, setQrName] = useState(createDefaultQrName());
   const [periodSeconds, setPeriodSeconds] = useState(3600);
   const [refreshIntervalSeconds, setRefreshIntervalSeconds] = useState(0);
   const [maxUses, setMaxUses] = useState(1);
@@ -138,6 +145,7 @@ export function AccessControl() {
     }
     setAccessCredentials(payload.credentials || []);
     setLastLink(payload.link || '');
+    setQrName(createDefaultQrName());
     setMessage('QR link generated. Copy it now; the raw token is shown only once.');
   };
 
@@ -296,11 +304,50 @@ export function AccessControl() {
                 </button>
               </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-4">
-                <input value={qrName} onChange={(event) => setQrName(event.target.value)} placeholder="QR name" className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
-                <input type="number" min={30} value={periodSeconds} onChange={(event) => setPeriodSeconds(Number(event.target.value))} placeholder="Period seconds" className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
-                <input type="number" min={0} value={refreshIntervalSeconds} onChange={(event) => setRefreshIntervalSeconds(Number(event.target.value))} placeholder="Refresh interval" className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
-                <input type="number" min={1} value={maxUses} onChange={(event) => setMaxUses(Number(event.target.value))} placeholder="Max uses" className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+              <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">QR Name</label>
+                  <input
+                    value={qrName}
+                    onChange={(event) => setQrName(event.target.value)}
+                    placeholder="QR-20260609-A1B"
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Internal display name for this QR credential.</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Valid Period (seconds)</label>
+                  <input
+                    type="number"
+                    min={30}
+                    value={periodSeconds}
+                    onChange={(event) => setPeriodSeconds(Number(event.target.value))}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">How long this generated link remains valid.</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Refresh Interval (seconds)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={refreshIntervalSeconds}
+                    onChange={(event) => setRefreshIntervalSeconds(Number(event.target.value))}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Reserved for rotating QR displays. Use 0 for no auto refresh.</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Allowed Visits</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={maxUses}
+                    onChange={(event) => setMaxUses(Number(event.target.value))}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Maximum accepted scans during this QR period.</p>
+                </div>
               </div>
 
               {lastLink && (
