@@ -107,6 +107,7 @@ const selectConfigOptions: Record<string, string[]> = {
   to: ['C', 'F', 'K', 'W', 'kW', 'Wh', 'kWh', 'bar', 'psi'],
 };
 
+const isFlowControlNode = (node?: WorkflowNode) => node?.type === 'action' && ['retry', 'error_catch'].includes(node.config?.type);
 const isStopWorkflowNode = (node?: WorkflowNode) => node?.type === 'action' && node.config?.type === 'stop_workflow';
 
 const createWebhookEndpoint = (workflowId: string) => {
@@ -251,6 +252,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     items.forEach(({ node, index }) => {
       if (node.type === 'condition') {
         groups.push({ type: 'condition', node, index });
+        return;
+      }
+      if (isFlowControlNode(node)) {
+        groups.push({ type: 'flow_control', node, index });
         return;
       }
 
@@ -425,7 +430,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       if (!item) return undefined;
       if (item.type === 'branch_group') return item.branches[0]?.condition.id;
       const firstGroup = item.groups[0];
-      return firstGroup?.type === 'condition' ? firstGroup.node.id : firstGroup?.nodes?.[0]?.node.id;
+      return ['condition', 'flow_control'].includes(firstGroup?.type) ? firstGroup.node.id : firstGroup?.nodes?.[0]?.node.id;
     };
 
     triggerNodes.forEach((trigger) => addEdge(trigger.id, firstNodeOf(flowItems[0]), 'next'));
@@ -437,10 +442,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         item.groups.forEach((group, groupIndex) => {
           const nextGroup = item.groups[groupIndex + 1];
           const groupNext = nextGroup
-            ? (nextGroup.type === 'condition' ? nextGroup.node.id : nextGroup.nodes[0]?.node.id)
+            ? (['condition', 'flow_control'].includes(nextGroup.type) ? nextGroup.node.id : nextGroup.nodes[0]?.node.id)
             : nextStart;
 
-          if (group.type === 'condition') {
+          if (['condition', 'flow_control'].includes(group.type)) {
             addEdge(group.node.id, groupNext, 'next');
             return;
           }
@@ -637,6 +642,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const isCondition = node.type === 'condition';
     const isLogic = isCondition && ['logic_and', 'logic_or'].includes(node.config.type);
     const isBranch = isCondition && branchConditionTypes.has(node.config.type);
+    const isFlowControl = isFlowControlNode(node);
 
     return (
       <div 
@@ -644,7 +650,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         onClick={() => setSelectedNodeId(node.id)}
         className={cn(
           "w-80 shrink-0 rounded-xl border-2 p-4 flex items-center justify-between cursor-pointer transition-all bg-white dark:bg-[#1c2128] shadow-sm hover:shadow-md",
-          isSelected ? "border-orange-500 ring-4 ring-orange-500/10 shadow-orange-500/10" : isTrigger ? "border-slate-200 dark:border-slate-700" : isCondition ? "border-indigo-200 dark:border-indigo-900/50" : "border-slate-200 dark:border-slate-700",
+          isSelected ? "border-orange-500 ring-4 ring-orange-500/10 shadow-orange-500/10" : isTrigger ? "border-slate-200 dark:border-slate-700" : isCondition ? "border-indigo-200 dark:border-indigo-900/50" : isFlowControl ? "border-amber-200 dark:border-amber-500/30" : "border-slate-200 dark:border-slate-700",
           isTrigger && !isSelected && "border-orange-200 dark:border-orange-900/50",
           isCondition && !isSelected && !isLogic && "border-indigo-200 dark:border-indigo-900/50",
           isLogic && !isSelected && "border-purple-300 dark:border-purple-800",
@@ -654,7 +660,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         <div className="flex items-center gap-4 min-w-0">
           <div className={cn(
             "p-3 rounded-lg flex items-center justify-center shrink-0",
-            isTrigger ? "bg-orange-50 dark:bg-orange-500/10" : isCondition ? (isLogic ? "bg-purple-50 dark:bg-purple-500/10" : "bg-indigo-50 dark:bg-indigo-500/10") : "bg-slate-50 dark:bg-slate-800/50"
+            isTrigger ? "bg-orange-50 dark:bg-orange-500/10" : isCondition ? (isLogic ? "bg-purple-50 dark:bg-purple-500/10" : "bg-indigo-50 dark:bg-indigo-500/10") : isFlowControl ? "bg-amber-50 dark:bg-amber-500/10" : "bg-slate-50 dark:bg-slate-800/50"
           )}>
             {getActionIcon(node.config.type)}
           </div>
@@ -668,7 +674,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                 : `$.${node.name || node.id}`}
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
-              {isTrigger ? "Trigger" : isBranch ? "Branch" : isCondition ? "Condition" : "Action"} - {Object.keys(node.config).filter(k => k !== 'type').length} params
+              {isTrigger ? "Trigger" : isBranch ? "Branch" : isCondition ? "Condition" : isFlowControl ? "Flow Control" : "Action"} - {Object.keys(node.config).filter(k => k !== 'type').length} params
             </p>
           </div>
         </div>
@@ -860,10 +866,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
   const renderFlowNodeGroup = (group: any) => {
     const groupHasStopWorkflow = group.type === 'action_group' && group.nodes.some((item: any) => isStopWorkflowNode(item.node));
+    const isVerticalNodeGroup = ['condition', 'flow_control'].includes(group.type);
 
     return (
-    <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
-      {group.type === 'condition' ? (
+    <React.Fragment key={isVerticalNodeGroup ? group.node.id : group.groupId}>
+      {isVerticalNodeGroup ? (
         <div className="flex flex-col items-center">
           {renderNodeCard(group.node)}
           <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
