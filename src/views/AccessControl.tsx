@@ -90,6 +90,8 @@ export function AccessControl() {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState('');
   const [eventCredentialFilter, setEventCredentialFilter] = useState('');
+  const [activeAccessTab, setActiveAccessTab] = useState<'config' | 'qr' | 'records'>('config');
+  const [credentialValidMode, setCredentialValidMode] = useState<'duration' | 'until'>('duration');
 
   const selectedAccess = accesses.find((access) => access.id === selectedAccessId) || accesses[0];
   const credentials = useMemo(
@@ -263,6 +265,7 @@ export function AccessControl() {
   const openCredentialModal = async (mode: 'view' | 'edit', credential: AccessCredential) => {
     setCredentialModal({ mode, credential });
     setCredentialDraft({ ...credential });
+    setCredentialValidMode('duration');
     setCredentialLink('');
     setCredentialLatestQrLink('');
     setMessage('');
@@ -281,11 +284,14 @@ export function AccessControl() {
 
   const saveCredentialDraft = async () => {
     if (!credentialModal) return;
+    const nextPeriodSeconds = Number(credentialDraft.periodSeconds || 3600);
     await updateCredential(credentialModal.credential.id, {
       name: credentialDraft.name,
       enabled: credentialDraft.enabled,
-      periodSeconds: Number(credentialDraft.periodSeconds || 3600),
-      validUntil: credentialDraft.validUntil,
+      periodSeconds: nextPeriodSeconds,
+      validUntil: credentialValidMode === 'until'
+        ? credentialDraft.validUntil
+        : new Date(Date.now() + nextPeriodSeconds * 1000).toISOString(),
       refreshIntervalSeconds: Number(credentialDraft.refreshIntervalSeconds || 0),
       maxUses: Number(credentialDraft.maxUses || 1),
     });
@@ -297,7 +303,24 @@ export function AccessControl() {
   const deleteCredential = async (credentialId: string) => {
     const response = await fetch(`/api/access-credentials/${credentialId}`, { method: 'DELETE' });
     const payload = await response.json();
-    if (response.ok) setAccessCredentials(payload.credentials || []);
+    if (response.ok) {
+      setAccessCredentials(payload.credentials || []);
+      if (eventCredentialFilter === credentialId) setEventCredentialFilter('');
+      if (selectedAccess?.id) loadAccessEvents(selectedAccess.id, eventCredentialFilter === credentialId ? '' : eventCredentialFilter);
+    }
+  };
+
+  const clearAccessEvents = async () => {
+    if (!selectedAccess) return;
+    const params = new URLSearchParams({ accessId: selectedAccess.id });
+    if (eventCredentialFilter) params.set('credentialId', eventCredentialFilter);
+    const response = await fetch(`/api/access-events?${params.toString()}`, { method: 'DELETE' });
+    if (response.ok) {
+      setAccessEvents([]);
+      setMessage(eventCredentialFilter ? 'QR access records cleared.' : 'Access records cleared.');
+    } else {
+      setEventsError('Failed to clear access records.');
+    }
   };
 
   const copyToClipboard = async (value: string, key: string) => {
@@ -345,7 +368,10 @@ export function AccessControl() {
               <button
                 type="button"
                 key={access.id}
-                onClick={() => setSelectedAccessId(access.id)}
+                onClick={() => {
+                  setSelectedAccessId(access.id);
+                  setActiveAccessTab('config');
+                }}
                 className={cn(
                   'flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors',
                   selectedAccess?.id === access.id
@@ -368,6 +394,29 @@ export function AccessControl() {
 
         {selectedAccess && (
           <section className="space-y-6">
+            <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-[#1c2128]">
+              {[
+                { id: 'config', label: 'Access Config' },
+                { id: 'qr', label: 'QR Codes' },
+                { id: 'records', label: 'QR Access Records' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveAccessTab(tab.id as typeof activeAccessTab)}
+                  className={cn(
+                    'rounded-md px-3 py-2 text-sm font-semibold transition-colors',
+                    activeAccessTab === tab.id
+                      ? 'bg-orange-600 text-white'
+                      : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                  )}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {activeAccessTab === 'config' && (
             <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-[#1c2128]">
               <div className="grid gap-4 lg:grid-cols-[1fr_auto]">
                 <div className="grid gap-4 md:grid-cols-2">
@@ -458,7 +507,9 @@ export function AccessControl() {
                 </div>
               </div>
             </div>
+            )}
 
+            {activeAccessTab === 'qr' && (
             <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-[#1c2128]">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
@@ -641,7 +692,9 @@ export function AccessControl() {
                 </table>
               </div>
             </div>
+            )}
 
+            {activeAccessTab === 'records' && (
             <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-[#1c2128]">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
@@ -667,6 +720,15 @@ export function AccessControl() {
                   >
                     <RefreshCw className={cn("h-4 w-4", eventsLoading && "animate-spin")} />
                     Refresh
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearAccessEvents}
+                    disabled={eventsLoading}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60 dark:border-red-500/30 dark:hover:bg-red-500/10"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Clear Records
                   </button>
                 </div>
               </div>
@@ -726,6 +788,7 @@ export function AccessControl() {
                 </table>
               </div>
             </div>
+            )}
           </section>
         )}
       </div>
@@ -824,29 +887,48 @@ export function AccessControl() {
                   />
                 </div>
                 <div className="grid gap-4 sm:grid-cols-3">
-                  <div>
-                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Valid Period</label>
-                    <div className="mt-1 grid grid-cols-[1fr_7.5rem] gap-2">
-                      <input
-                        type="number"
-                        min={1}
-                        value={secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).value}
-                        onChange={(event) => {
-                          const currentUnit = secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).unit;
-                          setCredentialDraft((current) => ({ ...current, periodSeconds: durationToSeconds(Number(event.target.value), currentUnit) }));
-                        }}
-                        className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-                      />
+                  <div className="sm:col-span-3">
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Validity</label>
+                    <div className="mt-1 grid gap-2 sm:grid-cols-[8rem_1fr]">
                       <select
-                        value={secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).unit}
-                        onChange={(event) => {
-                          const currentValue = secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).value;
-                          setCredentialDraft((current) => ({ ...current, periodSeconds: durationToSeconds(currentValue, event.target.value as DurationUnit) }));
-                        }}
-                        className="h-10 rounded border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                        value={credentialValidMode}
+                        onChange={(event) => setCredentialValidMode(event.target.value as 'duration' | 'until')}
+                        className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                       >
-                        {durationUnits.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}
+                        <option value="duration">Duration</option>
+                        <option value="until">Valid Until</option>
                       </select>
+                      {credentialValidMode === 'duration' ? (
+                        <div className="grid grid-cols-[1fr_7.5rem] gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            value={secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).value}
+                            onChange={(event) => {
+                              const currentUnit = secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).unit;
+                              setCredentialDraft((current) => ({ ...current, periodSeconds: durationToSeconds(Number(event.target.value), currentUnit) }));
+                            }}
+                            className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                          />
+                          <select
+                            value={secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).unit}
+                            onChange={(event) => {
+                              const currentValue = secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).value;
+                              setCredentialDraft((current) => ({ ...current, periodSeconds: durationToSeconds(currentValue, event.target.value as DurationUnit) }));
+                            }}
+                            className="h-10 rounded border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                          >
+                            {durationUnits.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}
+                          </select>
+                        </div>
+                      ) : (
+                        <input
+                          type="datetime-local"
+                          value={credentialDraft.validUntil ? toDateTimeLocalValue(new Date(credentialDraft.validUntil)) : toDateTimeLocalValue(new Date(Date.now() + Number(credentialDraft.periodSeconds || 3600) * 1000))}
+                          onChange={(event) => setCredentialDraft((current) => ({ ...current, validUntil: new Date(event.target.value).toISOString() }))}
+                          className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                        />
+                      )}
                     </div>
                   </div>
                   <div>

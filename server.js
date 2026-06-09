@@ -24,10 +24,12 @@ const workflowRuns = [];
 const workflowLiveStates = new Map();
 const deviceControlCommands = [];
 const accessEvents = [];
+const systemNotifications = [];
 const maxTelemetryMessages = Number(process.env.IOT_TELEMETRY_BUFFER_SIZE || 500);
 const maxWorkflowRuns = Number(process.env.WORKFLOW_RUN_BUFFER_SIZE || 500);
 const maxDeviceControlCommands = Number(process.env.DEVICE_CONTROL_BUFFER_SIZE || 500);
 const maxAccessEvents = Number(process.env.ACCESS_EVENT_BUFFER_SIZE || 500);
+const maxSystemNotifications = Number(process.env.SYSTEM_NOTIFICATION_BUFFER_SIZE || 500);
 const splitTopics = (value) => Array.isArray(value)
   ? value.map((topic) => String(topic).trim()).filter(Boolean)
   : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
@@ -1211,6 +1213,85 @@ const testNotificationChannel = async (channel) => {
   return {ok: false, message: `${channel.type || 'Unknown'} test connector is not implemented yet.`};
 };
 
+const getSystemNotifications = async () => {
+  if (db) {
+    const saved = await getAppState('system_notifications');
+    return Array.isArray(saved) ? saved : [];
+  }
+  return systemNotifications;
+};
+
+const saveSystemNotifications = async (notifications) => {
+  const nextNotifications = notifications.slice(0, maxSystemNotifications);
+  if (db) {
+    await setAppState('system_notifications', nextNotifications);
+  } else {
+    systemNotifications.splice(0, systemNotifications.length, ...nextNotifications);
+  }
+  return nextNotifications;
+};
+
+const sendNotificationToChannel = async (channel, notification) => {
+  if (!channel?.enabled) return {ok: false, message: 'Channel disabled.'};
+  if (channel.type === 'bark') {
+    return sendBarkNotification(channel, {
+      title: notification.title || 'System Notification',
+      body: notification.message || '',
+    });
+  }
+  if (channel.type === 'webhook') {
+    const config = normalizeNotificationConfig(channel);
+    const url = config.url || channel.target;
+    if (!url) return {ok: false, message: 'Webhook URL is required.'};
+    const response = await fetch(url, {
+      method: config.method || 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(notification),
+    });
+    return {ok: response.ok, message: response.ok ? 'Webhook notification sent.' : `Webhook failed: ${response.status}`};
+  }
+  return {ok: false, message: `${channel.type || 'Unknown'} connector is not implemented.`};
+};
+
+const persistSystemNotification = async (notification) => {
+  const current = await getSystemNotifications();
+  const nextNotification = {
+    id: notification.id || createId('sys-notice'),
+    title: notification.title || 'System Notification',
+    message: notification.message || '',
+    level: notification.level || 'Info',
+    source: notification.source || 'workflow',
+    workflowId: notification.workflowId || '',
+    workflowName: notification.workflowName || '',
+    createdAt: notification.createdAt || new Date().toISOString(),
+  };
+  await saveSystemNotifications([nextNotification, ...current]);
+  return nextNotification;
+};
+
+const dispatchWorkflowNotification = async (workflow, config, event) => {
+  const notification = await persistSystemNotification({
+    title: config.title || 'System Notification',
+    message: config.message || '',
+    level: config.level || 'Info',
+    source: `workflow:${workflow.id}`,
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    eventType: event.type,
+  });
+  const state = await getDashboardState();
+  const channels = Array.isArray(state.notificationChannels) ? state.notificationChannels : [];
+  const results = [];
+  for (const channel of channels.filter((item) => item.enabled)) {
+    try {
+      results.push({channelId: channel.id, channelName: channel.name, ...(await sendNotificationToChannel(channel, notification))});
+    } catch (error) {
+      results.push({channelId: channel.id, channelName: channel.name, ok: false, message: error.message});
+    }
+  }
+  return {notification, channels: results};
+};
+
 const normalizeWorkflowNodeName = (node, fallback = 'node') => String(node?.name || node?.config?.name || node?.config?.type || fallback)
   .trim()
   .replace(/\s+/g, '_')
@@ -1599,7 +1680,20 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
     return {...baseStep, status: command.status, output: {commandId: command.id, command: command.command, status: command.status, result: command.result}};
   }
 
-  if (['email', 'whatsapp', 'notification', 'ticket', 'report', 'ai_analyze'].includes(config.type)) {
+  if (config.type === 'notification') {
+    const result = await dispatchWorkflowNotification(workflow, config, event);
+    return {
+      ...baseStep,
+      status: 'success',
+      output: {
+        message: config.message || '',
+        notification: result.notification,
+        channels: result.channels,
+      },
+    };
+  }
+
+  if (['email', 'whatsapp', 'ticket', 'report', 'ai_analyze'].includes(config.type)) {
     return {
       ...baseStep,
       status: 'queued',
@@ -2869,6 +2963,13 @@ app.delete('/api/access-credentials/:credentialId', async (req, res) => {
     const {accesses, accessCredentials} = await getAccessState();
     const nextCredentials = accessCredentials.filter((credential) => credential.id !== req.params.credentialId);
     await patchAccessState({accesses, accessCredentials: nextCredentials});
+    if (db) {
+      await queryDb('DELETE FROM access_events WHERE credential_id = $1', [req.params.credentialId]);
+    } else {
+      for (let index = accessEvents.length - 1; index >= 0; index--) {
+        if (accessEvents[index].credentialId === req.params.credentialId) accessEvents.splice(index, 1);
+      }
+    }
     res.status(200).json({credentials: nextCredentials.map(publicAccessCredential)});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -2927,6 +3028,42 @@ app.get('/api/access-events', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({error: error.message, events: []});
+  }
+});
+
+app.delete('/api/access-events', async (req, res) => {
+  try {
+    const accessId = typeof req.query.accessId === 'string' ? req.query.accessId.trim() : '';
+    const credentialId = typeof req.query.credentialId === 'string' ? req.query.credentialId.trim() : '';
+    if (!accessId && !credentialId) {
+      res.status(400).json({error: 'accessId or credentialId is required'});
+      return;
+    }
+
+    if (db) {
+      const values = [];
+      const where = [];
+      if (accessId) {
+        values.push(accessId);
+        where.push(`access_id = $${values.length}`);
+      }
+      if (credentialId) {
+        values.push(credentialId);
+        where.push(`credential_id = $${values.length}`);
+      }
+      await queryDb(`DELETE FROM access_events WHERE ${where.join(' AND ')}`, values);
+    } else {
+      for (let index = accessEvents.length - 1; index >= 0; index--) {
+        const event = accessEvents[index];
+        if ((!accessId || event.accessId === accessId) && (!credentialId || event.credentialId === credentialId)) {
+          accessEvents.splice(index, 1);
+        }
+      }
+    }
+
+    res.status(200).json({ok: true});
+  } catch (error) {
+    res.status(500).json({error: error.message});
   }
 });
 
@@ -3261,6 +3398,16 @@ app.post('/api/notification-channels/test', async (req, res) => {
     res.status(result.ok ? 200 : 400).json(result);
   } catch (error) {
     res.status(500).json({ok: false, message: error.message});
+  }
+});
+
+app.get('/api/system-notifications', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
+    const notifications = await getSystemNotifications();
+    res.status(200).json({notifications: notifications.slice(0, limit)});
+  } catch (error) {
+    res.status(500).json({error: error.message, notifications: []});
   }
 });
 

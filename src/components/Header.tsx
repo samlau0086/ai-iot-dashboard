@@ -10,17 +10,57 @@ export function Header() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [readNotificationKeys, setReadNotificationKeys] = useState<string[]>([]);
   const [notificationReadStateReady, setNotificationReadStateReady] = useState(false);
+  const [systemNotifications, setSystemNotifications] = useState<Array<{ id: string; title: string; message: string; level: string; createdAt: string }>>([]);
   const alerts = useMemo(() => deriveAlertsFromDevices(devices), [devices]);
+  const notifications = useMemo(() => [
+    ...systemNotifications.map((notification) => ({
+      id: notification.id,
+      title: notification.title || 'System Notification',
+      message: notification.message,
+      level: notification.level || 'Info',
+      timestamp: notification.createdAt,
+      source: 'workflow',
+    })),
+    ...alerts.map((alert) => ({
+      id: alert.id,
+      title: alert.deviceName,
+      message: alert.message,
+      level: alert.level,
+      timestamp: alert.timestamp,
+      source: 'telemetry',
+    })),
+  ].sort((first, second) => new Date(second.timestamp).getTime() - new Date(first.timestamp).getTime()), [alerts, systemNotifications]);
   const notificationStorageKey = `ai-iot-dashboard-read-notifications:${currentUser?.id || 'guest'}`;
-  const notificationKey = (alert: typeof alerts[number]) => `${alert.id}:${alert.timestamp}`;
-  const unreadAlerts = alerts.filter((alert) => !readNotificationKeys.includes(notificationKey(alert)));
+  const notificationKey = (notification: typeof notifications[number]) => `${notification.source}:${notification.id}:${notification.timestamp}`;
+  const unreadAlerts = notifications.filter((notification) => !readNotificationKeys.includes(notificationKey(notification)));
   const hasUnreadNotifications = unreadAlerts.length > 0;
-  const markNotificationRead = (alert: typeof alerts[number]) => {
-    const key = notificationKey(alert);
+  const markNotificationRead = (notification: typeof notifications[number]) => {
+    const key = notificationKey(notification);
     setReadNotificationKeys((current) => (
       current.includes(key) ? current : [...current, key]
     ));
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSystemNotifications = async () => {
+      try {
+        const response = await fetch('/api/system-notifications?limit=100');
+        const payload = await response.json();
+        if (!cancelled && response.ok) {
+          setSystemNotifications(Array.isArray(payload.notifications) ? payload.notifications : []);
+        }
+      } catch {
+        if (!cancelled) setSystemNotifications([]);
+      }
+    };
+    loadSystemNotifications();
+    const intervalId = window.setInterval(loadSystemNotifications, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   useEffect(() => {
     setNotificationReadStateReady(false);
@@ -38,7 +78,7 @@ export function Header() {
   useEffect(() => {
     if (!notificationReadStateReady) return;
     try {
-      const activeKeys = new Set(alerts.map(notificationKey));
+      const activeKeys = new Set(notifications.map(notificationKey));
       const nextReadKeys = readNotificationKeys.filter((key) => activeKeys.has(key));
       window.localStorage.setItem(notificationStorageKey, JSON.stringify(nextReadKeys));
       if (nextReadKeys.length !== readNotificationKeys.length) {
@@ -47,7 +87,7 @@ export function Header() {
     } catch {
       // Local read state is a convenience feature; failures should not block navigation.
     }
-  }, [alerts, notificationReadStateReady, notificationStorageKey, readNotificationKeys]);
+  }, [notifications, notificationReadStateReady, notificationStorageKey, readNotificationKeys]);
 
   return (
     <header className="relative z-[40] flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-[#16191f]/80 sm:h-16 sm:gap-x-6 sm:px-6 lg:px-8">
@@ -140,26 +180,26 @@ export function Header() {
                     )}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
-                    {alerts.map(alert => (
+                    {notifications.map(notification => (
                       <div
-                        key={notificationKey(alert)}
+                        key={notificationKey(notification)}
                         className="flex gap-3 border-b border-slate-50 px-4 py-3 transition-colors last:border-0 hover:bg-slate-50 dark:border-slate-800/30 dark:hover:bg-slate-800/50"
                       >
-                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${readNotificationKeys.includes(notificationKey(alert)) ? 'bg-slate-300 dark:bg-slate-700' : 'bg-red-500'}`} />
+                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${readNotificationKeys.includes(notificationKey(notification)) ? 'bg-slate-300 dark:bg-slate-700' : 'bg-red-500'}`} />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-300">{alert.deviceName}</p>
-                              <p className="mt-0.5 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{alert.message}</p>
+                              <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-300">{notification.title}</p>
+                              <p className="mt-0.5 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{notification.message}</p>
                             </div>
                             <button
                               type="button"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                markNotificationRead(alert);
+                                markNotificationRead(notification);
                               }}
-                              disabled={readNotificationKeys.includes(notificationKey(alert))}
-                              title={readNotificationKeys.includes(notificationKey(alert)) ? 'Read' : 'Mark read'}
+                              disabled={readNotificationKeys.includes(notificationKey(notification))}
+                              title={readNotificationKeys.includes(notificationKey(notification)) ? 'Read' : 'Mark read'}
                               className="rounded-md p-1 text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-slate-400 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-300"
                             >
                               <CheckCircle2 className="h-4 w-4" />
@@ -167,16 +207,16 @@ export function Header() {
                           </div>
                           <div className="mt-2 flex items-center justify-between gap-2">
                             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                              {alert.level}
+                              {notification.level}
                             </span>
                             <p className="font-mono text-[10px] text-slate-400">
-                              {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}
+                              {new Date(notification.timestamp).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}
                             </p>
                           </div>
                         </div>
                       </div>
                     ))}
-                    {alerts.length === 0 && (
+                    {notifications.length === 0 && (
                       <div className="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
                         No telemetry alerts
                       </div>
