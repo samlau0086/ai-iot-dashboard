@@ -2878,6 +2878,7 @@ app.delete('/api/access-credentials/:credentialId', async (req, res) => {
 app.get('/api/access-events', async (req, res) => {
   try {
     const accessId = typeof req.query.accessId === 'string' ? req.query.accessId.trim() : '';
+    const credentialId = typeof req.query.credentialId === 'string' ? req.query.credentialId.trim() : '';
     const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
     const {accesses, accessCredentials} = await getAccessState();
     const accessById = new Map(accesses.map((access) => [access.id, access]));
@@ -2894,9 +2895,17 @@ app.get('/api/access-events', async (req, res) => {
 
     if (db) {
       const values = [];
-      const whereSql = accessId ? 'WHERE access_id = $1' : '';
-      if (accessId) values.push(accessId);
+      const where = [];
+      if (accessId) {
+        values.push(accessId);
+        where.push(`access_id = $${values.length}`);
+      }
+      if (credentialId) {
+        values.push(credentialId);
+        where.push(`credential_id = $${values.length}`);
+      }
       values.push(limit);
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
       const result = await queryDb(
         `SELECT id, access_id AS "accessId", credential_id AS "credentialId", credential_type AS "credentialType",
                 status, reason, params_snapshot AS params, request_meta AS request, created_at AS "createdAt"
@@ -2912,6 +2921,7 @@ app.get('/api/access-events', async (req, res) => {
     res.status(200).json({
       events: accessEvents
         .filter((event) => !accessId || event.accessId === accessId)
+        .filter((event) => !credentialId || event.credentialId === credentialId)
         .slice(0, limit)
         .map(enrichEvent),
     });

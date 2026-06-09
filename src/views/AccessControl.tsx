@@ -89,6 +89,7 @@ export function AccessControl() {
   const [accessEvents, setAccessEvents] = useState<AccessEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState('');
+  const [eventCredentialFilter, setEventCredentialFilter] = useState('');
 
   const selectedAccess = accesses.find((access) => access.id === selectedAccessId) || accesses[0];
   const credentials = useMemo(
@@ -118,11 +119,13 @@ export function AccessControl() {
     setAccessCredentials(payload.credentials || []);
   };
 
-  const loadAccessEvents = async (accessId: string) => {
+  const loadAccessEvents = async (accessId: string, credentialId = eventCredentialFilter) => {
     setEventsLoading(true);
     setEventsError('');
     try {
-      const response = await fetch(`/api/access-events?accessId=${encodeURIComponent(accessId)}&limit=100`);
+      const params = new URLSearchParams({ accessId, limit: '100' });
+      if (credentialId) params.set('credentialId', credentialId);
+      const response = await fetch(`/api/access-events?${params.toString()}`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Failed to load access events.');
       setAccessEvents(Array.isArray(payload.events) ? payload.events : []);
@@ -152,8 +155,14 @@ export function AccessControl() {
       setAccessEvents([]);
       return;
     }
-    loadAccessEvents(selectedAccess.id);
-  }, [selectedAccess?.id]);
+    loadAccessEvents(selectedAccess.id, eventCredentialFilter);
+  }, [selectedAccess?.id, eventCredentialFilter]);
+
+  useEffect(() => {
+    if (eventCredentialFilter && !credentials.some((credential) => credential.id === eventCredentialFilter)) {
+      setEventCredentialFilter('');
+    }
+  }, [credentials, eventCredentialFilter]);
 
   const saveParams = async () => {
     if (!selectedAccess) return;
@@ -639,15 +648,27 @@ export function AccessControl() {
                   <Eye className="h-4 w-4 text-orange-500" />
                   QR Access Records
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => loadAccessEvents(selectedAccess.id)}
-                  disabled={eventsLoading}
-                  className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                >
-                  <RefreshCw className={cn("h-4 w-4", eventsLoading && "animate-spin")} />
-                  Refresh
-                </button>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <select
+                    value={eventCredentialFilter}
+                    onChange={(event) => setEventCredentialFilter(event.target.value)}
+                    className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  >
+                    <option value="">All QR Codes</option>
+                    {credentials.map((credential) => (
+                      <option key={credential.id} value={credential.id}>{credential.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => loadAccessEvents(selectedAccess.id, eventCredentialFilter)}
+                    disabled={eventsLoading}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <RefreshCw className={cn("h-4 w-4", eventsLoading && "animate-spin")} />
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               {eventsError && (
