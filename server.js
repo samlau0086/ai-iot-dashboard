@@ -1823,23 +1823,19 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
     if (currentNode.type === 'trigger') {
       const input = createWorkflowNodeInput(currentNode, event, context);
       const output = createWorkflowTriggerOutput(currentNode, event);
-      recordWorkflowNodeResult(context, nodeName, {
+      const step = {
         nodeId: currentNode.id,
         nodeName,
         type: currentNode.config?.type || 'trigger',
         status: 'success',
         input,
         output,
-      });
-      appendWorkflowLiveStep(workflow, {
-        nodeId: currentNode.id,
-        nodeName,
-        type: currentNode.config?.type || 'trigger',
-        status: 'success',
-        output: 'Trigger matched',
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
-      });
+      };
+      steps.push(step);
+      recordWorkflowNodeResult(context, nodeName, step);
+      appendWorkflowLiveStep(workflow, step);
       const nextEdge = outgoing.find((edge) => edge.type === 'next') || outgoing[0];
       currentNode = nodesById.get(nextEdge?.target);
       continue;
@@ -1969,23 +1965,19 @@ const executeWorkflow = async (workflow, trigger, event) => {
   const nodeNamesById = buildWorkflowNodeNameMap(workflow);
   const triggerName = nodeNamesById.get(trigger.id) || normalizeWorkflowNodeName(trigger, trigger.id);
   const triggerOutput = createWorkflowTriggerOutput(trigger, event);
-  recordWorkflowNodeResult(context, triggerName, {
+  const triggerStep = {
     nodeId: trigger.id,
     nodeName: triggerName,
     type: trigger.config?.type || 'trigger',
     status: 'success',
     input: createWorkflowNodeInput(trigger, event, context),
     output: triggerOutput,
-  });
-  appendWorkflowLiveStep(workflow, {
-    nodeId: trigger.id,
-    nodeName: triggerName,
-    type: trigger.config?.type || 'trigger',
-    status: 'success',
-    output: 'Trigger matched',
     startedAt,
     finishedAt: new Date().toISOString(),
-  });
+  };
+  steps.push(triggerStep);
+  recordWorkflowNodeResult(context, triggerName, triggerStep);
+  appendWorkflowLiveStep(workflow, triggerStep);
 
   if (branchConditions.length > 0) {
     const selectedActions = [];
