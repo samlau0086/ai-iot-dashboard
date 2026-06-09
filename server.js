@@ -477,6 +477,7 @@ const publicAccessCredential = (credential) => ({
   enabled: credential.enabled !== false,
   hasLink: Boolean(credential.token),
   hasLatestQrLink: Boolean(credential.latestToken),
+  rotateOnUse: Boolean(credential.rotateOnUse),
   refreshIntervalSeconds: Number(credential.refreshIntervalSeconds || 0),
   periodSeconds: Number(credential.periodSeconds || 3600),
   maxUses: Number(credential.maxUses || 1),
@@ -488,7 +489,10 @@ const publicAccessCredential = (credential) => ({
 });
 
 const createAccessToken = () => crypto.randomBytes(32).toString('base64url');
-const canUseLatestQrLink = (credential) => Number(credential?.refreshIntervalSeconds || 0) > 0 && Number(credential?.maxUses || 1) > 1;
+const canUseLatestQrLink = (credential) => (
+  (Number(credential?.refreshIntervalSeconds || 0) > 0 || Boolean(credential?.rotateOnUse))
+  && Number(credential?.maxUses || 1) > 1
+);
 
 const createAccessLink = (req, token) => {
   const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
@@ -2848,8 +2852,9 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
       name: String(payload.name || 'QR Code').trim(),
       token,
       tokenHash: hashToken(token),
-      latestToken: refreshIntervalSeconds > 0 && maxUses > 1 ? createAccessToken() : null,
+      latestToken: (refreshIntervalSeconds > 0 || Boolean(payload.rotateOnUse)) && maxUses > 1 ? createAccessToken() : null,
       enabled: payload.enabled !== false,
+      rotateOnUse: Boolean(payload.rotateOnUse),
       refreshIntervalSeconds,
       periodSeconds,
       maxUses,
@@ -2893,13 +2898,15 @@ app.put('/api/access-credentials/:credentialId', async (req, res) => {
       const nextRefreshIntervalSeconds = patch.refreshIntervalSeconds !== undefined
         ? Math.max(0, Number(patch.refreshIntervalSeconds || 0) || 0)
         : Number(credential.refreshIntervalSeconds || 0);
-      const shouldHaveLatestToken = nextRefreshIntervalSeconds > 0 && nextMaxUses > 1;
+      const nextRotateOnUse = patch.rotateOnUse !== undefined ? Boolean(patch.rotateOnUse) : Boolean(credential.rotateOnUse);
+      const shouldHaveLatestToken = (nextRefreshIntervalSeconds > 0 || nextRotateOnUse) && nextMaxUses > 1;
       return {
         ...credential,
         ...patch,
         periodSeconds: nextPeriodSeconds,
         maxUses: nextMaxUses,
         refreshIntervalSeconds: nextRefreshIntervalSeconds,
+        rotateOnUse: nextRotateOnUse,
         validUntil: hasValidUntilPatch
           ? requestedValidUntil.toISOString()
           : periodChanged
@@ -3570,7 +3577,10 @@ app.get('/q/:token', async (req, res) => {
 
     const accessLink = createAccessLink(req, rotated.credential.token);
     const expiresAt = rotated.credential.validUntil ? new Date(rotated.credential.validUntil).toLocaleString() : 'No expiry';
-    sendPage('Latest QR Code', `<h1>${rotated.credential.name || 'Latest QR Code'}</h1><p class="muted">Scan this QR code. It refreshes every ${rotated.credential.refreshIntervalSeconds}s.</p><img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(accessLink)}" alt="Latest QR"><p class="link">${accessLink}</p><p class="muted">Usage this period: ${rotated.credential.usedCount || 0}/${rotated.credential.maxUses || 1}<br>Valid until: ${expiresAt}</p>`);
+    const refreshText = Number(rotated.credential.refreshIntervalSeconds || 0) > 0
+      ? `It refreshes every ${rotated.credential.refreshIntervalSeconds}s.`
+      : 'It refreshes after each successful scan.';
+    sendPage('Latest QR Code', `<h1>${rotated.credential.name || 'Latest QR Code'}</h1><p class="muted">Scan this QR code. ${refreshText}</p><img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(accessLink)}" alt="Latest QR"><p class="link">${accessLink}</p><p class="muted">Usage this period: ${rotated.credential.usedCount || 0}/${rotated.credential.maxUses || 1}<br>Valid until: ${expiresAt}</p>`);
   } catch (error) {
     res.status(500).send(`<!doctype html><html><head><title>QR error</title></head><body><h1>QR error</h1><p>${error.message}</p></body></html>`);
   }
@@ -3635,9 +3645,17 @@ app.get('/a/:token', async (req, res) => {
     }
 
     const acceptedAt = now.toISOString();
+    const rotatedToken = credential.rotateOnUse ? createAccessToken() : null;
     const nextCredentials = accessCredentials.map((item) => (
       item.id === credential.id
-        ? {...item, usedCount: Number(item.usedCount || 0) + 1, lastUsedAt: acceptedAt}
+        ? {
+            ...item,
+            token: rotatedToken || item.token,
+            tokenHash: rotatedToken ? hashToken(rotatedToken) : item.tokenHash,
+            usedCount: Number(item.usedCount || 0) + 1,
+            lastRotatedAt: rotatedToken ? acceptedAt : item.lastRotatedAt,
+            lastUsedAt: acceptedAt,
+          }
         : item
     ));
     await patchAccessState({accesses, accessCredentials: nextCredentials});

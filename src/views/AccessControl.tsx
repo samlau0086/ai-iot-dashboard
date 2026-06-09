@@ -78,6 +78,7 @@ export function AccessControl() {
   const [refreshValue, setRefreshValue] = useState(0);
   const [refreshUnit, setRefreshUnit] = useState<DurationUnit>('minutes');
   const [maxUses, setMaxUses] = useState(1);
+  const [rotateOnUse, setRotateOnUse] = useState(false);
   const [lastLink, setLastLink] = useState('');
   const [lastLatestQrLink, setLastLatestQrLink] = useState('');
   const [credentialModal, setCredentialModal] = useState<{ mode: 'view' | 'edit'; credential: AccessCredential } | null>(null);
@@ -233,6 +234,7 @@ export function AccessControl() {
         validUntil: validMode === 'until' ? new Date(validUntilInput).toISOString() : undefined,
         refreshIntervalSeconds: computedRefreshSeconds,
         maxUses,
+        rotateOnUse,
       }),
     });
     const payload = await response.json();
@@ -294,6 +296,7 @@ export function AccessControl() {
         : new Date(Date.now() + nextPeriodSeconds * 1000).toISOString(),
       refreshIntervalSeconds: Number(credentialDraft.refreshIntervalSeconds || 0),
       maxUses: Number(credentialDraft.maxUses || 1),
+      rotateOnUse: Boolean(credentialDraft.rotateOnUse),
     });
     setCredentialModal(null);
     setCredentialDraft({});
@@ -607,6 +610,18 @@ export function AccessControl() {
                   />
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Maximum accepted scans during this QR period.</p>
                 </div>
+                <label className="flex min-h-[5.5rem] items-center justify-between gap-3 rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
+                  <span>
+                    <span className="block text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Invalidate QR After Scan</span>
+                    <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">After a successful scan, rotate the access link so the old QR code cannot be reused.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={rotateOnUse}
+                    onChange={(event) => setRotateOnUse(event.target.checked)}
+                    className="h-4 w-4 shrink-0 rounded border-slate-300 text-orange-600 focus:ring-orange-600"
+                  />
+                </label>
               </div>
 
               {lastLink && (
@@ -966,6 +981,18 @@ export function AccessControl() {
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
                   </div>
+                  <label className="flex items-center justify-between gap-3 rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
+                    <span>
+                      <span className="block font-medium text-slate-700 dark:text-slate-300">Invalidate QR After Scan</span>
+                      <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">Successful scans rotate the access link and invalidate the old QR code.</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(credentialDraft.rotateOnUse)}
+                      onChange={(event) => setCredentialDraft((current) => ({ ...current, rotateOnUse: event.target.checked }))}
+                      className="h-4 w-4 shrink-0 rounded border-slate-300 text-orange-600 focus:ring-orange-600"
+                    />
+                  </label>
                 </div>
                 <label className="flex items-center justify-between rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
                   <span className="font-medium text-slate-700 dark:text-slate-300">Enabled</span>

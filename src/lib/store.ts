@@ -86,6 +86,7 @@ export interface AccessCredential {
   enabled: boolean;
   hasLink?: boolean;
   hasLatestQrLink?: boolean;
+  rotateOnUse?: boolean;
   refreshIntervalSeconds: number;
   periodSeconds: number;
   maxUses: number;
