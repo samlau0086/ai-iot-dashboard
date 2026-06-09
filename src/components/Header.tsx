@@ -10,6 +10,7 @@ export function Header() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [readNotificationKeys, setReadNotificationKeys] = useState<string[]>([]);
   const [notificationReadStateReady, setNotificationReadStateReady] = useState(false);
+  const [systemNotificationsReady, setSystemNotificationsReady] = useState(false);
   const [systemNotifications, setSystemNotifications] = useState<Array<{ id: string; title: string; message: string; level: string; createdAt: string }>>([]);
   const alerts = useMemo(() => deriveAlertsFromDevices(devices), [devices]);
   const notifications = useMemo(() => [
@@ -34,15 +35,28 @@ export function Header() {
   const notificationKey = (notification: typeof notifications[number]) => `${notification.source}:${notification.id}:${notification.timestamp}`;
   const unreadAlerts = notifications.filter((notification) => !readNotificationKeys.includes(notificationKey(notification)));
   const hasUnreadNotifications = unreadAlerts.length > 0;
+  const persistReadNotificationKeys = (keys: string[]) => {
+    try {
+      window.localStorage.setItem(notificationStorageKey, JSON.stringify(keys));
+    } catch {
+      // Local read state is a convenience feature; failures should not block navigation.
+    }
+  };
   const markNotificationRead = (notification: typeof notifications[number]) => {
     const key = notificationKey(notification);
-    setReadNotificationKeys((current) => (
-      current.includes(key) ? current : [...current, key]
-    ));
+    setReadNotificationKeys((current) => {
+      const nextKeys = current.includes(key) ? current : [...current, key];
+      persistReadNotificationKeys(nextKeys);
+      return nextKeys;
+    });
   };
   const markAllNotificationsRead = () => {
     const keys = notifications.map(notificationKey);
-    setReadNotificationKeys((current) => Array.from(new Set([...current, ...keys])));
+    setReadNotificationKeys((current) => {
+      const nextKeys = Array.from(new Set([...current, ...keys]));
+      persistReadNotificationKeys(nextKeys);
+      return nextKeys;
+    });
   };
 
   useEffect(() => {
@@ -51,11 +65,15 @@ export function Header() {
       try {
         const response = await fetch('/api/system-notifications?limit=100');
         const payload = await response.json();
-        if (!cancelled && response.ok) {
-          setSystemNotifications(Array.isArray(payload.notifications) ? payload.notifications : []);
+        if (!cancelled) {
+          setSystemNotifications(response.ok && Array.isArray(payload.notifications) ? payload.notifications : []);
+          setSystemNotificationsReady(true);
         }
       } catch {
-        if (!cancelled) setSystemNotifications([]);
+        if (!cancelled) {
+          setSystemNotifications([]);
+          setSystemNotificationsReady(true);
+        }
       }
     };
     loadSystemNotifications();
@@ -80,7 +98,7 @@ export function Header() {
   }, [notificationStorageKey]);
 
   useEffect(() => {
-    if (!notificationReadStateReady) return;
+    if (!notificationReadStateReady || !systemNotificationsReady) return;
     try {
       const activeKeys = new Set(notifications.map(notificationKey));
       const nextReadKeys = readNotificationKeys.filter((key) => activeKeys.has(key));
@@ -91,7 +109,7 @@ export function Header() {
     } catch {
       // Local read state is a convenience feature; failures should not block navigation.
     }
-  }, [notifications, notificationReadStateReady, notificationStorageKey, readNotificationKeys]);
+  }, [notifications, notificationReadStateReady, notificationStorageKey, readNotificationKeys, systemNotificationsReady]);
 
   return (
     <header className="relative z-[40] flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-[#16191f]/80 sm:h-16 sm:gap-x-6 sm:px-6 lg:px-8">
