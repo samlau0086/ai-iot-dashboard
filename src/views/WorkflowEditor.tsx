@@ -107,6 +107,8 @@ const selectConfigOptions: Record<string, string[]> = {
   to: ['C', 'F', 'K', 'W', 'kW', 'Wh', 'kWh', 'bar', 'psi'],
 };
 
+const isStopWorkflowNode = (node?: WorkflowNode) => node?.type === 'action' && node.config?.type === 'stop_workflow';
+
 const createWebhookEndpoint = (workflowId: string) => {
   const bytes = new Uint8Array(16);
   window.crypto.getRandomValues(bytes);
@@ -333,6 +335,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
   const useBranchLayout = flowItems.some((item) => item.type === 'branch_group');
   const otherNodeGroups = toActionGroups(otherNodes.map((node, index) => ({ node, index: triggerNodes.length + index })));
+  const workflowEndsWithStop = isStopWorkflowNode(draft.nodes[draft.nodes.length - 1]);
 
   useEffect(() => {
     if (!isNew) {
@@ -443,6 +446,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
           }
 
           group.nodes.forEach((entry: any, nodeIndex: number) => {
+            if (isStopWorkflowNode(entry.node)) return;
             addEdge(entry.node.id, group.nodes[nodeIndex + 1]?.node.id || groupNext, 'next');
           });
         });
@@ -470,6 +474,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
           addEdge(branch.condition.id, firstBranchAction || nextStart, 'true');
           branch.nodes.forEach((entry, nodeIndex) => {
+            if (isStopWorkflowNode(entry.node)) return;
             addEdge(entry.node.id, branch.nodes[nodeIndex + 1]?.node.id || nextStart, nodeIndex === branch.nodes.length - 1 ? 'continue' : 'next');
           });
         });
@@ -487,6 +492,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
         addEdge(branch.condition.id, firstBranchAction || nextStart, 'true');
         branch.nodes.forEach((entry, nodeIndex) => {
+          if (isStopWorkflowNode(entry.node)) return;
           addEdge(entry.node.id, branch.nodes[nodeIndex + 1]?.node.id || nextStart, nodeIndex === branch.nodes.length - 1 ? 'continue' : 'next');
         });
       });
@@ -695,6 +701,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
   const renderBranchColumn = (branch: BranchGroup) => {
     const branchType = branch.condition.config.type;
+    const branchHasStopWorkflow = branch.nodes.some((item) => isStopWorkflowNode(item.node));
 
     return (
       <div key={branch.condition.id} className="flex min-w-[22rem] flex-col items-center">
@@ -704,14 +711,16 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
         <div className="mt-4 flex min-h-24 w-80 flex-col items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-white/60 p-3 dark:border-slate-700 dark:bg-[#1c2128]/60">
           {branch.nodes.map((item) => renderNodeCard(item.node))}
-          <button
-            type="button"
-            onClick={() => setShowSelector({ show: true, insertIndex: branch.endIndex, actionGroupId: branch.condition.id })}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm font-medium text-slate-500 transition-colors hover:border-blue-400 hover:bg-blue-50 hover:text-blue-600 dark:border-slate-700 dark:hover:bg-blue-500/10 dark:hover:text-blue-300"
-          >
-            <Plus className="h-4 w-4" />
-            Add action to {getActionLabel(branchType)}
-          </button>
+          {!branchHasStopWorkflow && (
+            <button
+              type="button"
+              onClick={() => setShowSelector({ show: true, insertIndex: branch.endIndex, actionGroupId: branch.condition.id })}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm font-medium text-slate-500 transition-colors hover:border-blue-400 hover:bg-blue-50 hover:text-blue-600 dark:border-slate-700 dark:hover:bg-blue-500/10 dark:hover:text-blue-300"
+            >
+              <Plus className="h-4 w-4" />
+              Add action to {getActionLabel(branchType)}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -849,7 +858,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     );
   };
 
-  const renderFlowNodeGroup = (group: any) => (
+  const renderFlowNodeGroup = (group: any) => {
+    const groupHasStopWorkflow = group.type === 'action_group' && group.nodes.some((item: any) => isStopWorkflowNode(item.node));
+
+    return (
     <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
       {group.type === 'condition' ? (
         <div className="flex flex-col items-center">
@@ -881,21 +893,25 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
           )}
 
           <div className="flex items-center gap-4 relative z-10 w-full justify-center">
-            <button
-              onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[0].index, actionGroupId: group.groupId })}
-              className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors shrink-0"
-            >
-              <Plus className="h-5 w-5 text-slate-400" />
-            </button>
+            {!groupHasStopWorkflow && (
+              <button
+                onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[0].index, actionGroupId: group.groupId })}
+                className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors shrink-0"
+              >
+                <Plus className="h-5 w-5 text-slate-400" />
+              </button>
+            )}
 
             {group.nodes.map((n: any) => renderNodeCard(n.node))}
 
-            <button
-              onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[group.nodes.length - 1].index + 1, actionGroupId: group.groupId })}
-              className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors shrink-0"
-            >
-              <Plus className="h-5 w-5 text-slate-400" />
-            </button>
+            {!groupHasStopWorkflow && (
+              <button
+                onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[group.nodes.length - 1].index + 1, actionGroupId: group.groupId })}
+                className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors shrink-0"
+              >
+                <Plus className="h-5 w-5 text-slate-400" />
+              </button>
+            )}
           </div>
 
           {group.nodes.length > 1 && (
@@ -907,21 +923,24 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </svg>
           )}
 
-          <div className={cn("w-px bg-slate-300 dark:bg-slate-600 relative transition-all", group.nodes.length > 1 ? "h-6 sm:h-8 my-0" : "h-8 sm:h-10 my-1 sm:my-2")}>
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
-              <button
-                onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[group.nodes.length - 1].index + 1 })}
-                className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
-              >
-                <Plus className="h-3 w-3" />
-              </button>
+          {!groupHasStopWorkflow && (
+            <div className={cn("w-px bg-slate-300 dark:bg-slate-600 relative transition-all", group.nodes.length > 1 ? "h-6 sm:h-8 my-0" : "h-8 sm:h-10 my-1 sm:my-2")}>
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
+                <button
+                  onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[group.nodes.length - 1].index + 1 })}
+                  className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
+              </div>
+              <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
             </div>
-            <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
-          </div>
+          )}
         </div>
       )}
     </React.Fragment>
-  );
+    );
+  };
 
   return (
     <div className="absolute inset-0 z-10 bg-slate-50 dark:bg-[#0f1115] flex flex-col sm:flex-row overflow-hidden border-t sm:border-t-0 border-slate-200 dark:border-slate-800 rounded-none sm:rounded-tl-2xl">
@@ -1060,79 +1079,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               : <React.Fragment key={`nodes-${index}`}>{item.groups.map(renderFlowNodeGroup)}</React.Fragment>
           ))}
 
-          {(!useBranchLayout ? otherNodeGroups : []).map((group) => (
-            <React.Fragment key={group.type === 'condition' ? group.node.id : group.groupId}>
-              {group.type === 'condition' ? (
-                <div className="flex flex-col items-center">
-                  {renderNodeCard(group.node)}
-                  <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
-                      <button 
-                        onClick={() => setShowSelector({ show: true, insertIndex: group.index + 1 })}
-                        className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </button>
-                    </div>
-                    <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center w-full">
-                  {group.nodes.length > 1 && (
-                    <svg height="24" style={{ width: `${(group.nodes.length - 1) * 336}px`, overflow: 'visible' }} className="text-slate-300 dark:text-slate-600 -mt-1 relative z-0">
-                      <path d={`M ${(group.nodes.length - 1) * 336 / 2} 0 L ${(group.nodes.length - 1) * 336 / 2} 10 Q ${(group.nodes.length - 1) * 336 / 2} 15 ${(group.nodes.length - 1) * 336 / 2 - 5} 15 L 10 15 Q 0 15 0 20 L 0 24 M ${(group.nodes.length - 1) * 336 / 2} 10 Q ${(group.nodes.length - 1) * 336 / 2} 15 ${(group.nodes.length - 1) * 336 / 2 + 5} 15 L ${(group.nodes.length - 1) * 336 - 10} 15 Q ${(group.nodes.length - 1) * 336} 15 ${(group.nodes.length - 1) * 336} 20 L ${(group.nodes.length - 1) * 336} 24`} fill="none" stroke="currentColor" strokeWidth="2" />
-                      {group.nodes.length > 2 && Array.from({ length: group.nodes.length - 2 }).map((_, i) => (
-                         <line key={i} x1={(i + 1) * 336} y1="15" x2={(i + 1) * 336} y2="24" stroke="currentColor" strokeWidth="2" />
-                      ))}
-                      {group.nodes.map((_: any, i: number) => (
-                        <polygon key={`arr-${i}`} points={`${i * 336 - 5},14 ${i * 336 + 5},14 ${i * 336},24`} fill="currentColor" />
-                      ))}
-                    </svg>
-                  )}
-
-                  <div className="flex items-center gap-4 relative z-10 w-full justify-center">
-                    <button 
-                      onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[0].index, actionGroupId: group.groupId })} 
-                      className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors shrink-0"
-                    >
-                      <Plus className="h-5 w-5 text-slate-400" />
-                    </button>
-
-                    {group.nodes.map((n: any) => renderNodeCard(n.node))}
-
-                    <button 
-                      onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[group.nodes.length - 1].index + 1, actionGroupId: group.groupId })} 
-                      className="w-10 h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center hover:border-blue-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors shrink-0"
-                    >
-                      <Plus className="h-5 w-5 text-slate-400" />
-                    </button>
-                  </div>
-
-                  {group.nodes.length > 1 && (
-                    <svg height="24" style={{ width: `${(group.nodes.length - 1) * 336}px`, overflow: 'visible' }} className="text-slate-300 dark:text-slate-600 relative z-0">
-                      <path d={`M 0 0 L 0 5 Q 0 10 10 10 L ${(group.nodes.length - 1) * 336 / 2 - 10} 10 Q ${(group.nodes.length - 1) * 336 / 2} 10 ${(group.nodes.length - 1) * 336 / 2} 15 L ${(group.nodes.length - 1) * 336 / 2} 24 M ${(group.nodes.length - 1) * 336} 0 L ${(group.nodes.length - 1) * 336} 5 Q ${(group.nodes.length - 1) * 336} 10 ${(group.nodes.length - 1) * 336 - 10} 10 L ${(group.nodes.length - 1) * 336 / 2 + 10} 10 Q ${(group.nodes.length - 1) * 336 / 2} 10 ${(group.nodes.length - 1) * 336 / 2} 15`} fill="none" stroke="currentColor" strokeWidth="2" />
-                      {group.nodes.length > 2 && Array.from({ length: group.nodes.length - 2 }).map((_, i) => (
-                        <line key={i} x1={(i + 1) * 336} y1="0" x2={(i + 1) * 336} y2="10" stroke="currentColor" strokeWidth="2" />
-                      ))}
-                    </svg>
-                  )}
-
-                  <div className={cn("w-px bg-slate-300 dark:bg-slate-600 relative transition-all", group.nodes.length > 1 ? "h-6 sm:h-8 my-0" : "h-8 sm:h-10 my-1 sm:my-2")}>
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
-                      <button 
-                        onClick={() => setShowSelector({ show: true, insertIndex: group.nodes[group.nodes.length - 1].index + 1 })}
-                        className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </button>
-                    </div>
-                    <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
-                  </div>
-                </div>
-              )}
-            </React.Fragment>
-          ))}
+          {(!useBranchLayout ? otherNodeGroups : []).map(renderFlowNodeGroup)}
 
           {/* Add Initial Block or End Block */}
           {draft.nodes.length === 0 ? (
@@ -1143,7 +1090,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               <Plus className="h-6 w-6" />
               <span className="font-medium">Add Trigger</span>
             </button>
-          ) : !useBranchLayout ? (
+          ) : !useBranchLayout && !workflowEndsWithStop ? (
             <button
               onClick={() => setShowSelector({ show: true, insertIndex: draft.nodes.length })}
               className="w-80 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 p-6 flex flex-col items-center justify-center gap-2 text-slate-500 hover:border-orange-500 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-500/5 transition-all bg-white/50 dark:bg-[#1c2128]/50 backdrop-blur-sm"
