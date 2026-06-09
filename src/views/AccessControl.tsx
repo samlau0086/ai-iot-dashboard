@@ -8,6 +8,8 @@ const createAccessDraft = (): AccessDefinition => ({
   name: 'New Access',
   enabled: true,
   method: 'qr',
+  grantedMessage: 'Access granted.',
+  deniedMessage: 'Access denied.',
   extraParams: { deviceId: 'DEV-001' },
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -401,6 +403,29 @@ export function AccessControl() {
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Access Granted Message</label>
+                  <input
+                    value={selectedAccess.grantedMessage || ''}
+                    onChange={(event) => patchAccess(selectedAccess.id, { grantedMessage: event.target.value })}
+                    placeholder="Access granted."
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Shown on the QR page after a successful access.</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Access Denied Message</label>
+                  <input
+                    value={selectedAccess.deniedMessage || ''}
+                    onChange={(event) => patchAccess(selectedAccess.id, { deniedMessage: event.target.value })}
+                    placeholder="Access denied."
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Shown on the QR page when this Access rejects a scan.</p>
                 </div>
               </div>
 

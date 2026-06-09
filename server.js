@@ -33,6 +33,13 @@ const splitTopics = (value) => Array.isArray(value)
   : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
 const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[char]));
 const telemetryMetadataKeys = new Set([
   'id',
   'device_id',
@@ -1142,6 +1149,66 @@ const createDeviceControlCommand = async ({
 
   await persistDeviceControlCommand(normalizedCommand);
   return await dispatchDeviceControlCommand(normalizedCommand, device);
+};
+
+const normalizeNotificationConfig = (channel = {}) => channel.config && typeof channel.config === 'object'
+  ? channel.config
+  : {};
+
+const sendBarkNotification = async (channel, payload = {}) => {
+  const config = normalizeNotificationConfig(channel);
+  const title = payload.title || 'AI IoT Dashboard';
+  const body = payload.body || 'Bark notification test message.';
+  const rawDeviceKey = String(config.deviceKey || channel.target || '').trim();
+  const serverUrl = String(config.serverUrl || 'https://api.day.app').trim().replace(/\/+$/, '');
+
+  if (!rawDeviceKey) {
+    return {ok: false, message: 'Bark Device Key is required.'};
+  }
+
+  const url = rawDeviceKey.startsWith('http://') || rawDeviceKey.startsWith('https://')
+    ? rawDeviceKey
+    : `${serverUrl}/${encodeURIComponent(rawDeviceKey)}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`;
+
+  const response = await fetch(url, {method: 'GET'});
+  const text = await response.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = null;
+  }
+
+  const barkOk = response.ok && (!parsed || parsed.code === 200 || parsed.code === 0 || parsed.message === 'success');
+  return {
+    ok: barkOk,
+    message: barkOk
+      ? 'Bark test notification sent.'
+      : `Bark test failed: ${parsed?.message || text || response.status}`,
+    status: response.status,
+  };
+};
+
+const testNotificationChannel = async (channel) => {
+  if (!channel?.enabled) return {ok: false, message: 'Channel is disabled.'};
+
+  if (channel.type === 'bark') {
+    return sendBarkNotification(channel);
+  }
+
+  if (channel.type === 'webhook') {
+    const config = normalizeNotificationConfig(channel);
+    const url = config.url || channel.target;
+    if (!url) return {ok: false, message: 'Webhook URL is required.'};
+    const response = await fetch(url, {
+      method: config.method || 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({title: 'AI IoT Dashboard', message: 'Notification channel test message.'}),
+    });
+    return {ok: response.ok, message: response.ok ? 'Webhook test sent.' : `Webhook test failed: ${response.status}`};
+  }
+
+  return {ok: false, message: `${channel.type || 'Unknown'} test connector is not implemented yet.`};
 };
 
 const normalizeWorkflowNodeName = (node, fallback = 'node') => String(node?.name || node?.config?.name || node?.config?.type || fallback)
@@ -3172,6 +3239,21 @@ app.post('/api/device-commands', async (req, res) => {
   }
 });
 
+app.post('/api/notification-channels/test', async (req, res) => {
+  try {
+    const channel = req.body?.channel;
+    if (!channel || typeof channel !== 'object') {
+      res.status(400).json({ok: false, message: 'Notification channel payload is required.'});
+      return;
+    }
+
+    const result = await testNotificationChannel(channel);
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (error) {
+    res.status(500).json({ok: false, message: error.message});
+  }
+});
+
 app.get('/api/state', async (_req, res) => {
   try {
     const state = await getAppState('dashboard_state');
@@ -3359,6 +3441,9 @@ app.get('/a/:token', async (req, res) => {
     const {accesses, accessCredentials} = await getAccessState();
     const credential = accessCredentials.find((item) => item.tokenHash === tokenHash && item.type === 'qr');
     const access = credential ? accesses.find((item) => item.id === credential.accessId) : null;
+    const renderAccessPage = (statusCode, title, heading, message, detail = '') => {
+      res.status(statusCode).send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0f1115;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}.card{max-width:420px;width:calc(100% - 32px);background:#1c2128;border:1px solid #273244;border-radius:12px;padding:24px;text-align:center}.ok{color:#34d399}.denied{color:#fb7185}.muted{color:#94a3b8;font-size:13px;line-height:1.5}.message{font-size:18px;line-height:1.5;white-space:pre-wrap}</style></head><body><main class="card"><h1 class="${statusCode < 400 ? 'ok' : 'denied'}">${escapeHtml(heading)}</h1><p class="message">${escapeHtml(message)}</p>${detail ? `<p class="muted">${escapeHtml(detail)}</p>` : ''}</main></body></html>`);
+    };
     const reject = async (statusCode, reason) => {
       await persistAccessEvent({
         id: createId('access-event'),
@@ -3371,7 +3456,8 @@ app.get('/a/:token', async (req, res) => {
         request: requestMeta,
         createdAt: now.toISOString(),
       });
-      res.status(statusCode).send(`<!doctype html><html><head><title>Access rejected</title></head><body><h1>Access rejected</h1><p>${reason}</p></body></html>`);
+      const deniedMessage = access?.deniedMessage || 'Access denied.';
+      renderAccessPage(statusCode, 'Access denied', 'Access denied', deniedMessage, reason);
     };
 
     if (!credential) {
@@ -3433,9 +3519,9 @@ app.get('/a/:token', async (req, res) => {
       receivedAt: acceptedAt,
     });
 
-    res.status(202).send(`<!doctype html><html><head><title>Access accepted</title></head><body><h1>Access accepted</h1><p>${access.name}</p></body></html>`);
+    renderAccessPage(202, 'Access accepted', 'Access accepted', access.grantedMessage || 'Access granted.', access.name);
   } catch (error) {
-    res.status(500).send(`<!doctype html><html><head><title>Access error</title></head><body><h1>Access error</h1><p>${error.message}</p></body></html>`);
+    res.status(500).send(`<!doctype html><html><head><title>Access error</title></head><body><h1>Access error</h1><p>${escapeHtml(error.message)}</p></body></html>`);
   }
 });
 

@@ -161,6 +161,7 @@ export function Settings() {
   const [ingestTokens, setIngestTokens] = useState<IngestToken[]>([]);
   const [tokenDraftName, setTokenDraftName] = useState('Device Gateway Token');
   const [tokenMessage, setTokenMessage] = useState('');
+  const [testingNotificationIds, setTestingNotificationIds] = useState<string[]>([]);
   const [channelDraft, setChannelDraft] = useState({
     type: 'email' as NotificationChannel['type'],
     name: '',
@@ -274,6 +275,15 @@ export function Settings() {
       enabled: true,
     });
     setChannelDraft({ type: 'email', name: '', config: { ...DEFAULT_NOTIFICATION_CONFIG.email } });
+  };
+
+  const handleTestNotificationChannel = async (channelId: string) => {
+    setTestingNotificationIds((current) => [...new Set([...current, channelId])]);
+    try {
+      await testNotificationChannel(channelId);
+    } finally {
+      setTestingNotificationIds((current) => current.filter((id) => id !== channelId));
+    }
   };
 
   const handleAddUser = () => {
@@ -1180,6 +1190,7 @@ export function Settings() {
                   <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
                     {notificationChannels.map((channel) => {
                       const channelConfig = notificationConfigFromChannel(channel);
+                      const isTesting = testingNotificationIds.includes(channel.id);
 
                       return (
                       <tr key={channel.id}>
@@ -1220,11 +1231,12 @@ export function Settings() {
                         <td className="px-4 py-3 align-top">
                           <button
                             type="button"
-                            onClick={() => testNotificationChannel(channel.id)}
-                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                            onClick={() => handleTestNotificationChannel(channel.id)}
+                            disabled={isTesting}
+                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                           >
-                            <Send className="h-3.5 w-3.5" />
-                            Test
+                            <Send className={cn("h-3.5 w-3.5", isTesting && "animate-pulse")} />
+                            {isTesting ? 'Testing' : 'Test'}
                           </button>
                           {channel.lastTestStatus && (
                             <div className={cn(
@@ -1232,7 +1244,7 @@ export function Settings() {
                               channel.lastTestStatus === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
                             )}>
                               <CheckCircle2 className="h-3.5 w-3.5" />
-                              {channel.lastTestStatus === 'success' ? 'Test passed' : 'Configuration required'}
+                              {channel.lastTestMessage || (channel.lastTestStatus === 'success' ? 'Test passed' : 'Configuration required')}
                             </div>
                           )}
                         </td>

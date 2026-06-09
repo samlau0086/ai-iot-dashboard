@@ -63,6 +63,7 @@ export interface NotificationChannel {
   enabled: boolean;
   lastTestStatus?: 'success' | 'failed';
   lastTestAt?: string;
+  lastTestMessage?: string;
 }
 
 export interface AccessDefinition {
@@ -70,6 +71,8 @@ export interface AccessDefinition {
   name: string;
   enabled: boolean;
   method: 'qr' | 'caller_id' | 'sms';
+  grantedMessage?: string;
+  deniedMessage?: string;
   extraParams: Record<string, any>;
   createdAt: string;
   updatedAt?: string;
@@ -551,7 +554,7 @@ interface AppState {
   addNotificationChannel: (channel: NotificationChannel) => void;
   updateNotificationChannel: (id: string, channel: Partial<NotificationChannel>) => void;
   deleteNotificationChannel: (id: string) => void;
-  testNotificationChannel: (id: string) => void;
+  testNotificationChannel: (id: string) => Promise<void>;
   // Devices
   devices: Device[];
   deviceDataSourceStatus: 'mock' | 'api' | 'mqtt' | 'error';
@@ -810,17 +813,60 @@ export const useAppStore = create<AppState>()(
       deleteNotificationChannel: (id) => set((state) => ({
         notificationChannels: state.notificationChannels.filter((item) => item.id !== id)
       })),
-      testNotificationChannel: (id) => set((state) => ({
-        notificationChannels: state.notificationChannels.map((item) => (
-          item.id === id
-            ? {
-              ...item,
-                lastTestStatus: item.enabled && isNotificationChannelConfigured(item) ? 'success' : 'failed',
-                lastTestAt: new Date().toISOString(),
-              }
-            : item
-        ))
-      })),
+      testNotificationChannel: async (id) => {
+        const channel = useAppStore.getState().notificationChannels.find((item) => item.id === id);
+        if (!channel) return;
+
+        if (!channel.enabled || !isNotificationChannelConfigured(channel)) {
+          set((state) => ({
+            notificationChannels: state.notificationChannels.map((item) => (
+              item.id === id
+                ? {
+                  ...item,
+                  lastTestStatus: 'failed',
+                  lastTestAt: new Date().toISOString(),
+                  lastTestMessage: !item.enabled ? 'Channel is disabled.' : 'Configuration required.',
+                }
+                : item
+            )),
+          }));
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/notification-channels/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel }),
+          });
+          const payload = await response.json();
+          set((state) => ({
+            notificationChannels: state.notificationChannels.map((item) => (
+              item.id === id
+                ? {
+                  ...item,
+                  lastTestStatus: response.ok && payload.ok ? 'success' : 'failed',
+                  lastTestAt: new Date().toISOString(),
+                  lastTestMessage: payload.message || (response.ok ? 'Test sent.' : 'Test failed.'),
+                }
+                : item
+            )),
+          }));
+        } catch (error) {
+          set((state) => ({
+            notificationChannels: state.notificationChannels.map((item) => (
+              item.id === id
+                ? {
+                  ...item,
+                  lastTestStatus: 'failed',
+                  lastTestAt: new Date().toISOString(),
+                  lastTestMessage: error instanceof Error ? error.message : 'Test failed.',
+                }
+                : item
+            )),
+          }));
+        }
+      },
 
       devices: mockDevices,
       deviceDataSourceStatus: 'mock',
