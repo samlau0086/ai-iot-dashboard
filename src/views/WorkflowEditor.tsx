@@ -449,6 +449,33 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         return;
       }
 
+      if (getBranchFamily(item.branches[0]?.condition.config.type || 'if') === 'switch') {
+        const switchBranch = item.branches[0];
+        const caseBranches = item.branches.slice(1);
+
+        if (caseBranches.length === 0) {
+          addEdge(switchBranch?.condition.id, nextStart, 'next');
+          return;
+        }
+
+        addEdge(switchBranch?.condition.id, caseBranches[0]?.condition.id, 'next');
+        caseBranches.forEach((branch, branchIndex) => {
+          const nextBranch = caseBranches[branchIndex + 1];
+          const firstBranchAction = branch.nodes[0]?.node.id;
+
+          if (nextBranch) {
+            addEdge(branch.condition.id, nextBranch.condition.id, 'false');
+            addEdge(branch.condition.id, nextBranch.condition.id, 'branch', 'OR');
+          }
+
+          addEdge(branch.condition.id, firstBranchAction || nextStart, 'true');
+          branch.nodes.forEach((entry, nodeIndex) => {
+            addEdge(entry.node.id, branch.nodes[nodeIndex + 1]?.node.id || nextStart, nodeIndex === branch.nodes.length - 1 ? 'continue' : 'next');
+          });
+        });
+        return;
+      }
+
       item.branches.forEach((branch, branchIndex) => {
         const nextBranch = item.branches[branchIndex + 1];
         const firstBranchAction = branch.nodes[0]?.node.id;
@@ -721,7 +748,68 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const renderBranchChain = (branches: BranchGroup[], endIndex: number) => {
     const branchFamily = getBranchFamily(branches[0]?.condition.config.type || 'if');
     const terminalType = branchFamily === 'switch' ? 'default' : 'else';
-    const groupHasTerminalBranch = branches.some((branch) => branch.condition.config.type === terminalType);
+    const switchBranch = branchFamily === 'switch' ? branches[0] : null;
+    const visibleBranches = switchBranch ? branches.slice(1) : branches;
+    const groupHasTerminalBranch = visibleBranches.some((branch) => branch.condition.config.type === terminalType);
+
+    if (switchBranch) {
+      return (
+        <div className="mb-8 flex w-max min-w-full flex-col items-center px-4 py-2">
+          {renderNodeCard(switchBranch.condition)}
+          <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
+              <button
+                type="button"
+                onClick={() => setShowSelector({ show: true, insertIndex: switchBranch.endIndex, branchOnly: true, allowedConditionTypes: groupHasTerminalBranch ? ['case'] : ['case', 'default'] })}
+                className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-indigo-500 hover:text-white transition-colors"
+                title="Add Case or Default"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
+            <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
+          </div>
+
+          {visibleBranches.length > 0 && (
+            <>
+              {renderBranchBrace(visibleBranches, 'down')}
+              <div className="flex items-start justify-center">
+                {visibleBranches.map((branch, index) => {
+                  const nextBranch = visibleBranches[index + 1];
+                  const connectorAllowedTypes = groupHasTerminalBranch ? ['case'] : ['case', 'default'];
+                  const isLastBranch = index === visibleBranches.length - 1;
+                  const canAppendBranch = isLastBranch && branch.condition.config.type !== terminalType;
+                  return (
+                    <React.Fragment key={branch.condition.id}>
+                      {renderBranchColumn(branch)}
+                      {nextBranch && renderBranchConnector(nextBranch.index, connectorAllowedTypes)}
+                      {canAppendBranch && renderBranchConnector(branch.endIndex, connectorAllowedTypes)}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+              {renderBranchBrace(visibleBranches, 'up')}
+            </>
+          )}
+
+          {visibleBranches.length > 0 && (
+            <div className="w-px h-8 sm:h-10 bg-slate-300 dark:bg-slate-600 relative my-1 sm:my-2">
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 dark:bg-[#0f1115] rounded-full flex items-center justify-center group z-10">
+                <button
+                  type="button"
+                  onClick={() => setShowSelector({ show: true, insertIndex: endIndex || draft.nodes.length, allowedConditionTypes: ['if', 'switch'] })}
+                  className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:bg-orange-500 hover:text-white transition-colors"
+                  title="Add next node after switch"
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
+              </div>
+              <ArrowDown className="absolute -bottom-2 -translate-x-1/2 left-1/2 h-4 w-4 text-slate-300 dark:text-slate-600" />
+            </div>
+          )}
+        </div>
+      );
+    }
 
     return (
     <div className="mb-8 flex w-max min-w-full flex-col items-center px-4 py-2">

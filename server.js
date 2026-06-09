@@ -658,7 +658,11 @@ const conditionMatchesEvent = (condition, event, context = {}) => {
     return true;
   }
 
-  if (config.type === 'switch' || config.type === 'case') {
+  if (config.type === 'switch') {
+    return true;
+  }
+
+  if (config.type === 'case') {
     const scope = {event, context, config};
     const value = getWorkflowScopedValue(config.property || 'event.message.status', scope);
     return compareValues(value, config.condition || '==', config.value);
@@ -1598,7 +1602,35 @@ const executeWorkflow = async (workflow, trigger, event) => {
           branches.push({condition, actions});
         }
 
-        const matchedBranch = branches.find(({condition}) => {
+        const branchFamily = getBranchFamily(branches[0]?.condition.config?.type || 'if');
+        const branchesToMatch = branchFamily === 'switch' ? branches.slice(1) : branches;
+
+        if (branchFamily === 'switch' && branches[0]) {
+          const condition = branches[0].condition;
+          const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
+          updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: condition.id});
+          const input = createWorkflowNodeInput(condition, event, context);
+          const step = {
+            nodeId: condition.id,
+            nodeName,
+            type: condition.config?.type || 'condition',
+            status: 'success',
+            input,
+            output: {
+              passed: true,
+              branch: condition.config?.type || 'switch',
+              value: getWorkflowScopedValue(input.config?.property || 'event.message.status', {event, context, config: input.config || {}}),
+              message: 'Switch evaluated',
+            },
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+          };
+          steps.push(step);
+          recordWorkflowNodeResult(context, nodeName, step);
+          appendWorkflowLiveStep(workflow, step);
+        }
+
+        const matchedBranch = branchesToMatch.find(({condition}) => {
           const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
           updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: condition.id});
           const input = createWorkflowNodeInput(condition, event, context);
