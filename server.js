@@ -847,8 +847,42 @@ const conditionMatchesEvent = (condition, event, context = {}) => {
   return true;
 };
 
+const sanitizeWorkflowLogValue = (value, options = {}) => {
+  const seen = new WeakSet();
+  const maxDepth = Number(options.maxDepth || 8);
+  const maxArrayLength = Number(options.maxArrayLength || 100);
+  const maxStringLength = Number(options.maxStringLength || 4000);
+
+  const sanitize = (item, depth) => {
+    if (item === null || item === undefined) return item;
+    if (typeof item === 'string') {
+      return item.length > maxStringLength ? `${item.slice(0, maxStringLength)}... [truncated]` : item;
+    }
+    if (typeof item === 'number' || typeof item === 'boolean') return item;
+    if (typeof item === 'bigint') return item.toString();
+    if (typeof item === 'function') return `[Function ${item.name || 'anonymous'}]`;
+    if (typeof item !== 'object') return String(item);
+    if (item instanceof Date) return item.toISOString();
+    if (Buffer.isBuffer(item)) return `[Buffer ${item.length} bytes]`;
+    if (seen.has(item)) return '[Circular]';
+    if (depth >= maxDepth) return '[MaxDepth]';
+
+    seen.add(item);
+    if (Array.isArray(item)) {
+      const result = item.slice(0, maxArrayLength).map((entry) => sanitize(entry, depth + 1));
+      if (item.length > maxArrayLength) result.push(`[${item.length - maxArrayLength} more items]`);
+      return result;
+    }
+
+    return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, sanitize(entry, depth + 1)]));
+  };
+
+  return sanitize(value, 0);
+};
+
 const persistWorkflowRun = async (run) => {
-  workflowRuns.unshift(run);
+  const safeRun = sanitizeWorkflowLogValue(run);
+  workflowRuns.unshift(safeRun);
   if (workflowRuns.length > maxWorkflowRuns) workflowRuns.splice(maxWorkflowRuns);
 
   if (!db) return;
@@ -857,16 +891,16 @@ const persistWorkflowRun = async (run) => {
     `INSERT INTO workflow_runs (id, workflow_id, workflow_name, trigger_type, event_source, status, event, steps, started_at, finished_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::timestamptz, $10::timestamptz)`,
     [
-      run.id,
-      run.workflowId,
-      run.workflowName,
-      run.triggerType,
-      run.eventSource,
-      run.status,
-      JSON.stringify(run.event),
-      JSON.stringify(run.steps),
-      run.startedAt,
-      run.finishedAt,
+      safeRun.id,
+      safeRun.workflowId,
+      safeRun.workflowName,
+      safeRun.triggerType,
+      safeRun.eventSource,
+      safeRun.status,
+      JSON.stringify(safeRun.event),
+      JSON.stringify(safeRun.steps),
+      safeRun.startedAt,
+      safeRun.finishedAt,
     ]
   );
 };
@@ -893,11 +927,12 @@ const updateWorkflowLiveState = (workflow, patch) => {
 
 const appendWorkflowLiveStep = (workflow, step) => {
   const current = workflowLiveStates.get(workflow.id);
-  const steps = [...(current?.steps || []), step].slice(-200);
+  const safeStep = sanitizeWorkflowLogValue(step);
+  const steps = [...(current?.steps || []), safeStep].slice(-200);
   updateWorkflowLiveState(workflow, {
     steps,
-    currentNodeId: step.nodeId,
-    status: step.status === 'failed' ? 'failed' : 'running',
+    currentNodeId: safeStep.nodeId,
+    status: safeStep.status === 'failed' ? 'failed' : 'running',
   });
 };
 
@@ -906,7 +941,7 @@ const completeWorkflowLiveState = (workflow, status, steps) => {
   updateWorkflowLiveState(workflow, {
     status,
     currentNodeId: null,
-    steps: steps || current?.steps || [],
+    steps: sanitizeWorkflowLogValue(steps || current?.steps || []),
     finishedAt: new Date().toISOString(),
   });
 };
@@ -1236,8 +1271,8 @@ const recordWorkflowNodeResult = (context, nodeName, step) => {
     nodeId: step.nodeId,
     type: step.type,
     status: step.status,
-    input: step.input,
-    output: step.output,
+    input: sanitizeWorkflowLogValue(step.input),
+    output: sanitizeWorkflowLogValue(step.output),
   };
 };
 
@@ -1304,15 +1339,16 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   if (config.type === 'debug') {
     const expression = String(config.expression || '').trim();
     const resolved = expression ? resolveWorkflowValue(expression, context) : context;
+    const contextSnapshot = sanitizeWorkflowLogValue(context);
     return {
       ...baseStep,
       status: 'success',
       output: {
         label: config.label || 'Debug snapshot',
         expression: expression || '$',
-        resolved,
-        context,
-        event,
+        resolved: sanitizeWorkflowLogValue(resolved),
+        context: contextSnapshot,
+        event: sanitizeWorkflowLogValue(event),
       },
     };
   }
