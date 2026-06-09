@@ -25,6 +25,7 @@ const workflowLiveStates = new Map();
 const deviceControlCommands = [];
 const accessEvents = [];
 const systemNotifications = [];
+const realtimeClients = new Set();
 const maxTelemetryMessages = Number(process.env.IOT_TELEMETRY_BUFFER_SIZE || 500);
 const maxWorkflowRuns = Number(process.env.WORKFLOW_RUN_BUFFER_SIZE || 500);
 const maxDeviceControlCommands = Number(process.env.DEVICE_CONTROL_BUFFER_SIZE || 500);
@@ -42,6 +43,27 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => 
   '"': '&quot;',
   "'": '&#39;',
 }[char]));
+
+const sendRealtimeEvent = (res, type, payload) => {
+  res.write(`event: ${type}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+};
+
+const broadcastRealtimeEvent = (type, payload) => {
+  const eventPayload = {
+    ...payload,
+    type,
+    emittedAt: new Date().toISOString(),
+  };
+
+  for (const client of realtimeClients) {
+    try {
+      sendRealtimeEvent(client, type, eventPayload);
+    } catch {
+      realtimeClients.delete(client);
+    }
+  }
+};
 const telemetryMetadataKeys = new Set([
   'id',
   'device_id',
@@ -2439,6 +2461,13 @@ const ingestTelemetryPayload = async (payload, source = 'http') => {
 
   await persistTelemetryMessages(accepted, source);
 
+  if (accepted.length > 0) {
+    broadcastRealtimeEvent('telemetry', {
+      source,
+      messages: accepted,
+    });
+  }
+
   await Promise.all(accepted.map(async (message) => {
     const deviceId = message.device_id || message.deviceId || message.id;
     const device = await findDashboardDevice(deviceId);
@@ -3449,6 +3478,34 @@ app.get('/api/system-notifications', async (req, res) => {
   } catch (error) {
     res.status(500).json({error: error.message, notifications: []});
   }
+});
+
+app.get('/api/realtime/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  realtimeClients.add(res);
+  sendRealtimeEvent(res, 'connected', {
+    type: 'connected',
+    connectedAt: new Date().toISOString(),
+  });
+
+  const keepAlive = setInterval(() => {
+    try {
+      res.write(': keep-alive\n\n');
+    } catch {
+      clearInterval(keepAlive);
+      realtimeClients.delete(res);
+    }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    realtimeClients.delete(res);
+  });
 });
 
 app.get('/api/state', async (_req, res) => {
