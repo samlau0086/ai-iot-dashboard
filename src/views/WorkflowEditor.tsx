@@ -328,6 +328,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     allowedConditionTypes?: string[];
   }>({ show: false, insertIndex: 0 });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeDraft, setSelectedNodeDraft] = useState<WorkflowNode | null>(null);
+  const [nodeSettingsDirty, setNodeSettingsDirty] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
   const [liveState, setLiveState] = useState<any>(null);
   const [liveNodeId, setLiveNodeId] = useState<string | null>(null);
@@ -353,6 +355,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     }
     return null;
   }, [workflowLogs, selectedNodeId]);
+  const cloneWorkflowNode = (node: WorkflowNode): WorkflowNode => JSON.parse(JSON.stringify(node));
 
   const isTriggerOnly = showSelector.isTriggerSelect || (showSelector.insertIndex === 0 && triggerNodes.length === 0);
   const isAfterTriggers = showSelector.insertIndex === triggerNodes.length;
@@ -563,6 +566,12 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     if (selectedNodeId) loadWorkflowLogs();
   }, [selectedNodeId, draft.id]);
 
+  useEffect(() => {
+    const node = draft.nodes.find((item) => item.id === selectedNodeId);
+    setSelectedNodeDraft(node ? cloneWorkflowNode(node) : null);
+    setNodeSettingsDirty(false);
+  }, [selectedNodeId]);
+
   const formatJson = (value: unknown) => {
     if (typeof value === 'string') return value;
     try {
@@ -719,10 +728,47 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   };
 
   const updateNodeConfig = (nodeId: string, patch: Record<string, any>) => {
+    if (selectedNodeDraft?.id === nodeId) {
+      setSelectedNodeDraft({
+        ...selectedNodeDraft,
+        config: { ...selectedNodeDraft.config, ...patch },
+      });
+      setNodeSettingsDirty(true);
+      return;
+    }
+
     const newNodes = draft.nodes.map(n =>
       n.id === nodeId ? { ...n, config: { ...n.config, ...patch } } : n
     );
     setDraft({ ...draft, nodes: newNodes });
+  };
+
+  const updateNodeDraft = (nodeId: string, patch: Partial<WorkflowNode>) => {
+    if (selectedNodeDraft?.id === nodeId) {
+      setSelectedNodeDraft({ ...selectedNodeDraft, ...patch });
+      setNodeSettingsDirty(true);
+      return;
+    }
+
+    setDraft({
+      ...draft,
+      nodes: draft.nodes.map((node) => node.id === nodeId ? { ...node, ...patch } : node),
+    });
+  };
+
+  const saveNodeSettings = () => {
+    if (!selectedNodeDraft) return;
+    setDraft({
+      ...draft,
+      nodes: draft.nodes.map((node) => node.id === selectedNodeDraft.id ? selectedNodeDraft : node),
+    });
+    setNodeSettingsDirty(false);
+  };
+
+  const resetNodeSettings = () => {
+    const node = draft.nodes.find((item) => item.id === selectedNodeId);
+    setSelectedNodeDraft(node ? cloneWorkflowNode(node) : null);
+    setNodeSettingsDirty(false);
   };
 
   const buildWorkflowControlPatch = (deviceId: string, controlId?: string) => {
@@ -1314,8 +1360,9 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </button>
           </div>
           <div className="p-4 sm:p-6 flex-1 overflow-y-auto">
-            {draft.nodes.map(node => {
-              if (node.id !== selectedNodeId) return null;
+            {draft.nodes.map(originalNode => {
+              if (originalNode.id !== selectedNodeId) return null;
+              const node = selectedNodeDraft?.id === originalNode.id ? selectedNodeDraft : originalNode;
               
               return (
                 <div key={node.id} className="space-y-6">
@@ -1332,16 +1379,13 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                         placeholder="e.g. CheckTemperature"
                         onChange={(event) => {
                           const newName = slugifyNodeName(event.target.value);
-                          const newNodes = draft.nodes.map(n =>
-                            n.id === node.id ? { ...n, name: newName } : n
-                          );
-                          setDraft({ ...draft, nodes: newNodes });
+                          updateNodeDraft(node.id, { name: newName });
                         }}
                         className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-white dark:ring-slate-700"
                       />
                     )}
                     <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
-                      Reference this node later with <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.input</span> or <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.output</span>.
+                      Current node shortcuts: <span className="font-mono">$.input</span> / <span className="font-mono">$.output</span>. Full reference: <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.input</span> / <span className="font-mono">$.{node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type) ? (getBranchRootName(node.id) || node.name || node.id) : (node.name || node.id)}.output</span>.
                     </p>
                   </div>
 
@@ -1673,12 +1717,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                             <DeviceSelect 
                               value={value as string}
                               onChange={(newDevice) => {
-                                const newNodes = draft.nodes.map(n => 
-                                  n.id === node.id 
-                                    ? { ...n, config: { ...n.config, [key]: newDevice } }
-                                    : n
-                                );
-                                setDraft({ ...draft, nodes: newNodes });
+                                updateNodeConfig(node.id, { [key]: newDevice });
                               }}
                               devices={devices}
                             />
@@ -1737,12 +1776,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                             readOnly={node.type === 'trigger' && node.config.type === 'webhook' && key === 'endpoint'}
                             onChange={(e) => {
                               const nextValue = typeof value === 'number' ? Number(e.target.value) : e.target.value;
-                              const newNodes = draft.nodes.map(n => 
-                                n.id === node.id 
-                                  ? { ...n, config: { ...n.config, [key]: nextValue } }
-                                  : n
-                              );
-                              setDraft({ ...draft, nodes: newNodes });
+                              updateNodeConfig(node.id, { [key]: nextValue });
                             }}
                             className={cn(
                               "block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-white dark:ring-slate-700",
@@ -1894,6 +1928,25 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                     <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                       Edit the parameters above to configure how this {node.type} behaves when executed in the workflow stream.
                     </p>
+                    <div className="mt-4 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={resetNodeSettings}
+                        disabled={!nodeSettingsDirty}
+                        className="rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
+                        onClick={saveNodeSettings}
+                        disabled={!nodeSettingsDirty}
+                        className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-500 disabled:cursor-default disabled:bg-slate-300 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
+                      >
+                        <Save className="h-4 w-4" />
+                        Save Node
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

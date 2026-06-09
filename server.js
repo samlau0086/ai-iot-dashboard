@@ -781,8 +781,21 @@ const parseConditionExpression = (expression) => {
   return {metric: match[1], operator: match[2], value: match[3].replace(/^["']|["']$/g, '')};
 };
 
-const conditionMatchesEvent = (condition, event, context = {}) => {
-  const config = resolveWorkflowValue(condition.config || {}, context);
+const conditionMatchesEvent = (condition, event, context = {}, nodeName = normalizeWorkflowNodeName(condition, condition?.id)) => {
+  const input = createWorkflowNodeInput(condition, event, context, nodeName);
+  let config = input.config || {};
+  const runtimeContext = {
+    ...context,
+    [nodeName]: {
+      ...(context[nodeName] || {}),
+      nodeId: condition.id,
+      type: config.type || condition.type,
+      status: 'running',
+      input: sanitizeWorkflowLogValue(input),
+    },
+  };
+  config = resolveWorkflowValue(config, runtimeContext, nodeName);
+  input.config = config;
 
   if (config.type === 'else' || config.type === 'default') {
     return true;
@@ -793,7 +806,7 @@ const conditionMatchesEvent = (condition, event, context = {}) => {
   }
 
   if (config.type === 'case') {
-    const scope = {event, context, config};
+    const scope = {input, event, context: runtimeContext, config, currentNodeName: nodeName};
     const value = getWorkflowScopedValue(config.property || 'event.message.status', scope);
     return compareValues(value, config.condition || '==', config.value);
   }
@@ -820,7 +833,9 @@ const conditionMatchesEvent = (condition, event, context = {}) => {
     }
 
     if (!config.metric) return true;
-    const metricValue = getMetricValue(event, config.metric);
+    const metricValue = String(config.metric).startsWith('$.')
+      ? getWorkflowScopedValue(config.metric, {input, event, context: runtimeContext, config, currentNodeName: nodeName})
+      : getMetricValue(event, config.metric);
     if (metricValue === undefined) return false;
     return compareValues(metricValue, config.condition || '>', config.value);
   }
@@ -1337,10 +1352,12 @@ const getObjectPath = (target, pathExpression = '') => {
     .reduce((value, key) => (value == null ? undefined : value[key]), target);
 };
 
-const resolveWorkflowReference = (expression, context) => {
-  const match = String(expression || '').trim().match(/^\$\.(.+?)\.(input|output|status|nodeId|type)(?:\.(.*))?$/);
+const resolveWorkflowReference = (expression, context, currentNodeName) => {
+  const match = String(expression || '').trim().match(/^\$\.(?:(.+?)\.)?(input|output|status|nodeId|type)(?:\.(.*))?$/);
   if (!match) return undefined;
-  const [, nodeName, section, pathExpression] = match;
+  const [, explicitNodeName, section, pathExpression] = match;
+  const nodeName = explicitNodeName || currentNodeName;
+  if (!nodeName) return undefined;
   const nodeContext = context[nodeName];
   if (!nodeContext) return undefined;
   return getObjectPath(nodeContext[section], pathExpression);
@@ -1390,32 +1407,33 @@ const unitConverters = {
 };
 
 const getWorkflowScopedValue = (pathExpression, scope) => {
-  const referenceValue = resolveWorkflowReference(pathExpression, scope.context || {});
+  const referenceValue = resolveWorkflowReference(pathExpression, scope.context || {}, scope.currentNodeName);
   if (referenceValue !== undefined) return referenceValue;
   return getObjectPath(scope, pathExpression);
 };
 
-const resolveWorkflowValue = (value, context) => {
+const resolveWorkflowValue = (value, context, currentNodeName) => {
   if (typeof value === 'string') {
-    const wholeReference = resolveWorkflowReference(value, context);
+    const wholeReference = resolveWorkflowReference(value, context, currentNodeName);
     if (wholeReference !== undefined) return wholeReference;
 
-    return value.replace(/\$\.(.+?)\.(input|output|status|nodeId|type)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?/g, (match) => {
-      const resolved = resolveWorkflowReference(match, context);
+    return value.replace(/\$\.(?:(.+?)\.)?(input|output|status|nodeId|type)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?/g, (match) => {
+      const resolved = resolveWorkflowReference(match, context, currentNodeName);
+      if (resolved === undefined) return match;
       return stringifyReferenceValue(resolved);
     });
   }
 
-  if (Array.isArray(value)) return value.map((item) => resolveWorkflowValue(item, context));
+  if (Array.isArray(value)) return value.map((item) => resolveWorkflowValue(item, context, currentNodeName));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveWorkflowValue(item, context)]));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveWorkflowValue(item, context, currentNodeName)]));
   }
 
   return value;
 };
 
-const createWorkflowNodeInput = (node, event, context) => ({
-  config: resolveWorkflowValue(node.config || {}, context),
+const createWorkflowNodeInput = (node, event, context, currentNodeName = normalizeWorkflowNodeName(node, node?.id)) => ({
+  config: resolveWorkflowValue(node.config || {}, context, currentNodeName),
   event,
 });
 
@@ -1467,8 +1485,20 @@ const getNodeExecutionPolicy = (node) => ({
 });
 
 const executeWorkflowAction = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id)) => {
-  const input = createWorkflowNodeInput(action, event, context);
-  const config = input.config || {};
+  const input = createWorkflowNodeInput(action, event, context, nodeName);
+  let config = input.config || {};
+  const runtimeContext = {
+    ...context,
+    [nodeName]: {
+      ...(context[nodeName] || {}),
+      nodeId: action.id,
+      type: config.type || action.type,
+      status: 'running',
+      input: sanitizeWorkflowLogValue(input),
+    },
+  };
+  config = resolveWorkflowValue(config, runtimeContext, nodeName);
+  input.config = config;
   const startedAt = new Date().toISOString();
   const baseStep = {
     nodeId: action.id,
@@ -1507,8 +1537,8 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
 
   if (config.type === 'debug') {
     const expression = String(config.expression || '').trim();
-    const resolved = expression ? resolveWorkflowValue(expression, context) : context;
-    const contextSnapshot = sanitizeWorkflowLogValue(context);
+    const resolved = expression ? resolveWorkflowValue(expression, runtimeContext, nodeName) : runtimeContext;
+    const contextSnapshot = sanitizeWorkflowLogValue(runtimeContext);
     return {
       ...baseStep,
       status: 'success',
@@ -1529,7 +1559,7 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
       ...(event.payload && typeof event.payload === 'object' ? event.payload : {}),
     };
     Object.entries(assignments).forEach(([pathExpression, assignmentValue]) => {
-      setObjectPath(base, pathExpression, resolveWorkflowValue(assignmentValue, context));
+      setObjectPath(base, pathExpression, resolveWorkflowValue(assignmentValue, runtimeContext, nodeName));
     });
     return {...baseStep, output: base};
   }
@@ -1545,7 +1575,7 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   }
 
   if (config.type === 'switch') {
-    const scope = {input, event, context, config};
+    const scope = {input, event, context: runtimeContext, config, currentNodeName: nodeName};
     const value = getWorkflowScopedValue(config.property, scope);
     const rules = parseJsonConfig(config.rules, []);
     const matched = (Array.isArray(rules) ? rules : []).filter((rule) => (
@@ -1563,7 +1593,7 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
       return {...baseStep, status: 'skipped', output: 'HTTP Request requires an http/https url.'};
     }
     const headers = parseJsonConfig(config.headers, {'content-type': 'application/json'});
-    const rawBody = config.body ? resolveWorkflowValue(config.body, context) : undefined;
+    const rawBody = config.body ? resolveWorkflowValue(config.body, runtimeContext, nodeName) : undefined;
     const bodyValue = typeof rawBody === 'string' ? parseJsonConfig(rawBody, rawBody) : rawBody;
     const response = await fetch(config.url, {
       method: config.method || 'POST',
@@ -1600,7 +1630,7 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   }
 
   if (config.type === 'unit_convert') {
-    const scope = {input, event, context, config};
+    const scope = {input, event, context: runtimeContext, config, currentNodeName: nodeName};
     const rawValue = getWorkflowScopedValue(config.metric, scope);
     const numericValue = Number(rawValue);
     const converterKey = `${config.from}:${config.to}`;
@@ -1645,7 +1675,7 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
 
   if (config.type === 'mqtt_publish') {
     const command = await createDeviceControlCommand({
-      deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, context) || event.deviceId || event.device?.id,
+      deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, runtimeContext, nodeName) || event.deviceId || event.device?.id,
       command: 'mqtt_publish',
       parameters: {topic: config.topic, payload: config.payload},
       requestedBy: `Workflow: ${workflow.name}`,
@@ -1657,8 +1687,8 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
 
   if (config.type === 'device_control') {
     const resolvedDeviceId = config.deviceSource === 'expression'
-      ? resolveWorkflowValue(config.deviceExpression, context)
-      : resolveWorkflowValue(config.device || config.target || config.deviceExpression, context);
+      ? resolveWorkflowValue(config.deviceExpression, runtimeContext, nodeName)
+      : resolveWorkflowValue(config.device || config.target || config.deviceExpression, runtimeContext, nodeName);
     const command = await createDeviceControlCommand({
       deviceId: resolvedDeviceId || event.deviceId || event.device?.id,
       command: config.controlId || config.command || 'device_control',
@@ -1674,7 +1704,7 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
 
   if (config.type === 'start_backup' || config.type === 'stop_device') {
     const command = await createDeviceControlCommand({
-      deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, context) || event.deviceId || event.device?.id,
+      deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, runtimeContext, nodeName) || event.deviceId || event.device?.id,
       command: config.type,
       parameters: {triggerEvent: event.type},
       requestedBy: `Workflow: ${workflow.name}`,
@@ -1732,7 +1762,7 @@ const executeWorkflowActionWithPolicy = async (workflow, action, event, context 
         nodeName,
         type: action.config?.type || 'action',
         status: 'failed',
-        input: createWorkflowNodeInput(action, event, context),
+        input: createWorkflowNodeInput(action, event, context, nodeName),
         output: error.message,
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
@@ -1825,7 +1855,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
     updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: currentNode.id});
 
     if (currentNode.type === 'trigger') {
-      const input = createWorkflowNodeInput(currentNode, event, context);
+      const input = createWorkflowNodeInput(currentNode, event, context, nodeName);
       const output = createWorkflowTriggerOutput(currentNode, event);
       const step = {
         nodeId: currentNode.id,
@@ -1846,8 +1876,8 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
     }
 
     if (currentNode.type === 'condition') {
-      const input = createWorkflowNodeInput(currentNode, event, context);
-      const passed = conditionMatchesEvent(currentNode, event, context);
+      const input = createWorkflowNodeInput(currentNode, event, context, nodeName);
+      const passed = conditionMatchesEvent(currentNode, event, context, nodeName);
       const step = {
         nodeId: currentNode.id,
         nodeName,
@@ -1894,7 +1924,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
           return;
         }
       } catch (error) {
-        const input = createWorkflowNodeInput(currentNode, event, context);
+        const input = createWorkflowNodeInput(currentNode, event, context, nodeName);
         const step = {
           nodeId: currentNode.id,
           nodeName,
@@ -1974,7 +2004,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
     nodeName: triggerName,
     type: trigger.config?.type || 'trigger',
     status: 'success',
-    input: createWorkflowNodeInput(trigger, event, context),
+    input: createWorkflowNodeInput(trigger, event, context, triggerName),
     output: triggerOutput,
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -2035,7 +2065,18 @@ const executeWorkflow = async (workflow, trigger, event) => {
           const condition = branches[0].condition;
           const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
           updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: condition.id});
-          const input = createWorkflowNodeInput(condition, event, context);
+          const input = createWorkflowNodeInput(condition, event, context, nodeName);
+          const switchRuntimeContext = {
+            ...context,
+            [nodeName]: {
+              ...(context[nodeName] || {}),
+              nodeId: condition.id,
+              type: input.config?.type || condition.type,
+              status: 'running',
+              input: sanitizeWorkflowLogValue(input),
+            },
+          };
+          input.config = resolveWorkflowValue(input.config || {}, switchRuntimeContext, nodeName);
           const step = {
             nodeId: condition.id,
             nodeName,
@@ -2045,7 +2086,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
             output: {
               passed: true,
               branch: condition.config?.type || 'switch',
-              value: getWorkflowScopedValue(input.config?.property || 'event.message.status', {event, context, config: input.config || {}}),
+              value: getWorkflowScopedValue(input.config?.property || 'event.message.status', {input, event, context: switchRuntimeContext, config: input.config || {}, currentNodeName: nodeName}),
               message: 'Switch evaluated',
             },
             startedAt: new Date().toISOString(),
@@ -2059,8 +2100,8 @@ const executeWorkflow = async (workflow, trigger, event) => {
         const matchedBranch = branchesToMatch.find(({condition}) => {
           const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
           updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: condition.id});
-          const input = createWorkflowNodeInput(condition, event, context);
-          const passed = conditionMatchesEvent(condition, event, context);
+          const input = createWorkflowNodeInput(condition, event, context, nodeName);
+          const passed = conditionMatchesEvent(condition, event, context, nodeName);
           const step = {
             nodeId: condition.id,
             nodeName,
@@ -2102,8 +2143,8 @@ const executeWorkflow = async (workflow, trigger, event) => {
       if (node.type === 'condition') {
         const nodeName = nodeNamesById.get(node.id) || normalizeWorkflowNodeName(node, node.id);
         updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: node.id});
-        const input = createWorkflowNodeInput(node, event, context);
-        const passed = conditionMatchesEvent(node, event, context);
+        const input = createWorkflowNodeInput(node, event, context, nodeName);
+        const passed = conditionMatchesEvent(node, event, context, nodeName);
         const step = {
           nodeId: node.id,
           nodeName,
@@ -2157,7 +2198,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
       } catch (error) {
         const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
         updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
-        const input = createWorkflowNodeInput(action, event, context);
+        const input = createWorkflowNodeInput(action, event, context, nodeName);
         const step = {
           nodeId: action.id,
           nodeName,
@@ -2198,8 +2239,8 @@ const executeWorkflow = async (workflow, trigger, event) => {
   for (const condition of conditions) {
     const nodeName = nodeNamesById.get(condition.id) || normalizeWorkflowNodeName(condition, condition.id);
     updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: condition.id});
-    const input = createWorkflowNodeInput(condition, event, context);
-    const passed = conditionMatchesEvent(condition, event, context);
+    const input = createWorkflowNodeInput(condition, event, context, nodeName);
+    const passed = conditionMatchesEvent(condition, event, context, nodeName);
     const step = {
       nodeId: condition.id,
       nodeName,
@@ -2245,7 +2286,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
     } catch (error) {
       const nodeName = nodeNamesById.get(action.id) || normalizeWorkflowNodeName(action, action.id);
       updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: action.id});
-      const input = createWorkflowNodeInput(action, event, context);
+      const input = createWorkflowNodeInput(action, event, context, nodeName);
       const step = {
         nodeId: action.id,
         nodeName,

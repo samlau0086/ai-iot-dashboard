@@ -40,6 +40,10 @@ export function Header() {
       current.includes(key) ? current : [...current, key]
     ));
   };
+  const markAllNotificationsRead = () => {
+    const keys = notifications.map(notificationKey);
+    setReadNotificationKeys((current) => Array.from(new Set([...current, ...keys])));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -173,11 +177,24 @@ export function Header() {
                         {hasUnreadNotifications ? `${unreadAlerts.length} unread` : 'All caught up'}
                       </p>
                     </div>
-                    {hasUnreadNotifications && (
-                      <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600 dark:bg-red-500/10 dark:text-red-300">
-                        New
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {hasUnreadNotifications && (
+                        <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600 dark:bg-red-500/10 dark:text-red-300">
+                          New
+                        </span>
+                      )}
+                      {notifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={markAllNotificationsRead}
+                          disabled={!hasUnreadNotifications}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Mark all as read
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     {notifications.map(notification => (
