@@ -484,6 +484,11 @@ export function AccessControl() {
                       {lastLatestQrLink && (
                         <div className="mt-4 rounded border border-orange-200 bg-white/70 p-3 dark:border-orange-500/30 dark:bg-slate-950/40">
                           <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">Latest QR Page</p>
+                          <img
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(lastLatestQrLink)}`}
+                            alt="Latest QR page code"
+                            className="mt-3 h-36 w-36 rounded bg-white p-2"
+                          />
                           <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{lastLatestQrLink}</p>
                           <button
                             type="button"
@@ -592,6 +597,11 @@ export function AccessControl() {
                       {credentialLatestQrLink && (
                         <div className="mt-4 rounded border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900">
                           <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Latest QR Page</label>
+                          <img
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(credentialLatestQrLink)}`}
+                            alt="Latest QR page code"
+                            className="mt-3 h-36 w-36 rounded bg-white p-2"
+                          />
                           <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{credentialLatestQrLink}</p>
                           <button
                             type="button"
