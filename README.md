@@ -685,3 +685,36 @@ Dashboard 后端不直接作为 Modbus、CAN、LoRa 或蜂窝网络驱动运行�
 - 将 AI Copilot 的模拟回复替换为真实 Gemini API 调用。
 - 为工作流增加后端执行器，支持真正的通知、工单、Webhook 和设备控制。
 - 增加用户鉴权、角色权限和多站点隔离。
+
+## Access Control
+
+Access Control adds QR-link based workflow triggers for visitor, operator, gate, or temporary device-control scenarios.
+
+1. Open `/access-control`.
+2. Create an Access entry and set `Extra Parameters JSON`, for example:
+
+   ```json
+   {
+     "deviceId": "DEV-001",
+     "action": "power_on",
+     "siteId": "factory-a"
+   }
+   ```
+
+3. Generate one or more QR credentials for the Access entry. Each credential can define `name`, `periodSeconds`, `refreshIntervalSeconds`, and `maxUses`.
+4. Copy the generated random link. The URL uses only a random token:
+
+   ```text
+   https://your-domain.com/a/<random-token>
+   ```
+
+   The link does not contain Access ID, device ID, device name, or other business identifiers.
+
+5. In Workflow Automation, add an `Access Trigger` node and bind it to an Access entry, or leave it as `Any Access`.
+6. In a `Device Control` node, set `Device Source` to `From workflow expression` and use:
+
+   ```text
+   $.access_trigger.output.params.deviceId
+   ```
+
+When the QR link is visited, the backend validates that the QR credential is enabled, within its valid period, still has remaining uses, and belongs to an enabled Access entry. If accepted, it dispatches an Access workflow event containing the Access extra parameters.

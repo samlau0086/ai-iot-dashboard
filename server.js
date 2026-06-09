@@ -23,13 +23,16 @@ const telemetryMessages = [];
 const workflowRuns = [];
 const workflowLiveStates = new Map();
 const deviceControlCommands = [];
+const accessEvents = [];
 const maxTelemetryMessages = Number(process.env.IOT_TELEMETRY_BUFFER_SIZE || 500);
 const maxWorkflowRuns = Number(process.env.WORKFLOW_RUN_BUFFER_SIZE || 500);
 const maxDeviceControlCommands = Number(process.env.DEVICE_CONTROL_BUFFER_SIZE || 500);
+const maxAccessEvents = Number(process.env.ACCESS_EVENT_BUFFER_SIZE || 500);
 const splitTopics = (value) => Array.isArray(value)
   ? value.map((topic) => String(topic).trim()).filter(Boolean)
   : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
 const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 const telemetryMetadataKeys = new Set([
   'id',
   'device_id',
@@ -199,11 +202,25 @@ const initDatabase = async () => {
       updated_at timestamptz NOT NULL
     )
   `);
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS access_events (
+      id text PRIMARY KEY,
+      access_id text,
+      credential_id text,
+      credential_type text NOT NULL,
+      status text NOT NULL,
+      reason text,
+      params_snapshot jsonb NOT NULL,
+      request_meta jsonb NOT NULL,
+      created_at timestamptz NOT NULL
+    )
+  `);
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_device_received ON telemetry_messages (device_id, received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_received ON telemetry_messages (received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_webhook_events_received ON workflow_webhook_events (workflow_id, received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_started ON workflow_runs (workflow_id, started_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_device_control_commands_created ON device_control_commands (created_at DESC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_access_events_created ON access_events (created_at DESC)');
 
   const dataSourceState = await getAppState('data_source_channels');
   if (dataSourceState) {
@@ -427,6 +444,71 @@ const findDeviceByApiPath = async (requestPath) => {
 
 const getDashboardState = async () => await getAppState('dashboard_state') || {};
 
+const getAccessState = async () => {
+  const state = await getDashboardState();
+  return {
+    accesses: Array.isArray(state.accesses) ? state.accesses : [],
+    accessCredentials: Array.isArray(state.accessCredentials) ? state.accessCredentials : [],
+  };
+};
+
+const patchAccessState = async (patch) => {
+  const state = await getDashboardState();
+  await setAppState('dashboard_state', {
+    ...state,
+    ...patch,
+  });
+};
+
+const publicAccessCredential = (credential) => ({
+  id: credential.id,
+  accessId: credential.accessId,
+  type: credential.type || 'qr',
+  name: credential.name,
+  enabled: credential.enabled !== false,
+  refreshIntervalSeconds: Number(credential.refreshIntervalSeconds || 0),
+  periodSeconds: Number(credential.periodSeconds || 3600),
+  maxUses: Number(credential.maxUses || 1),
+  usedCount: Number(credential.usedCount || 0),
+  createdAt: credential.createdAt,
+  validFrom: credential.validFrom,
+  validUntil: credential.validUntil,
+  lastUsedAt: credential.lastUsedAt || null,
+});
+
+const createAccessToken = () => crypto.randomBytes(32).toString('base64url');
+
+const createAccessLink = (req, token) => {
+  const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+  return `${proto}://${host}/a/${token}`;
+};
+
+const persistAccessEvent = async (event) => {
+  accessEvents.unshift(event);
+  if (accessEvents.length > maxAccessEvents) {
+    accessEvents.splice(maxAccessEvents);
+  }
+
+  if (db) {
+    await queryDb(
+      `INSERT INTO access_events (id, access_id, credential_id, credential_type, status, reason, params_snapshot, request_meta, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::timestamptz)`,
+      [
+        event.id,
+        event.accessId || null,
+        event.credentialId || null,
+        event.credentialType || 'qr',
+        event.status,
+        event.reason || null,
+        JSON.stringify(event.params || {}),
+        JSON.stringify(event.request || {}),
+        event.createdAt,
+      ]
+    );
+  }
+};
+
 const getDashboardWorkflows = async () => {
   const state = await getDashboardState();
   return Array.isArray(state.workflows) ? state.workflows : [];
@@ -614,6 +696,11 @@ const triggerMatchesEvent = (trigger, event) => {
     if (event.type !== 'webhook') return false;
     const endpointToken = extractWebhookToken(config.endpoint);
     return !endpointToken || endpointToken === event.token;
+  }
+
+  if (config.type === 'access') {
+    if (event.type !== 'access') return false;
+    return !config.accessId || config.accessId === event.accessId;
   }
 
   if (config.type === 'schedule') {
@@ -1323,7 +1410,7 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
 
   if (config.type === 'mqtt_publish') {
     const command = await createDeviceControlCommand({
-      deviceId: config.target || event.deviceId || event.device?.id,
+      deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, context) || event.deviceId || event.device?.id,
       command: 'mqtt_publish',
       parameters: {topic: config.topic, payload: config.payload},
       requestedBy: `Workflow: ${workflow.name}`,
@@ -1334,8 +1421,11 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   }
 
   if (config.type === 'device_control') {
+    const resolvedDeviceId = config.deviceSource === 'expression'
+      ? resolveWorkflowValue(config.deviceExpression, context)
+      : resolveWorkflowValue(config.device || config.target || config.deviceExpression, context);
     const command = await createDeviceControlCommand({
-      deviceId: config.device || config.target || event.deviceId || event.device?.id,
+      deviceId: resolvedDeviceId || event.deviceId || event.device?.id,
       command: config.controlId || config.command || 'device_control',
       parameters: config.parameters && typeof config.parameters === 'object'
         ? config.parameters
@@ -1349,7 +1439,7 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
 
   if (config.type === 'start_backup' || config.type === 'stop_device') {
     const command = await createDeviceControlCommand({
-      deviceId: config.target || event.deviceId || event.device?.id,
+      deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, context) || event.deviceId || event.device?.id,
       command: config.type,
       parameters: {triggerEvent: event.type},
       requestedBy: `Workflow: ${workflow.name}`,
@@ -2414,6 +2504,177 @@ app.post('/api/data-sources', async (req, res) => {
   }
 });
 
+app.get('/api/accesses', async (_req, res) => {
+  try {
+    const {accesses, accessCredentials} = await getAccessState();
+    res.status(200).json({
+      accesses,
+      credentials: accessCredentials.map(publicAccessCredential),
+    });
+  } catch (error) {
+    res.status(500).json({error: error.message, accesses: [], credentials: []});
+  }
+});
+
+app.post('/api/accesses', async (req, res) => {
+  try {
+    const {accesses, accessCredentials} = await getAccessState();
+    const now = new Date().toISOString();
+    const payload = req.body || {};
+    const access = {
+      id: payload.id || createId('access'),
+      name: String(payload.name || 'New Access').trim(),
+      enabled: payload.enabled !== false,
+      method: payload.method || 'qr',
+      extraParams: payload.extraParams && typeof payload.extraParams === 'object' ? payload.extraParams : {},
+      createdAt: now,
+      updatedAt: now,
+    };
+    const nextAccesses = [access, ...accesses.filter((item) => item.id !== access.id)];
+    await patchAccessState({accesses: nextAccesses, accessCredentials});
+    res.status(201).json({access, accesses: nextAccesses});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.put('/api/accesses/:accessId', async (req, res) => {
+  try {
+    const {accesses, accessCredentials} = await getAccessState();
+    const patch = req.body || {};
+    let found = false;
+    const nextAccesses = accesses.map((access) => {
+      if (access.id !== req.params.accessId) return access;
+      found = true;
+      return {
+        ...access,
+        ...patch,
+        extraParams: patch.extraParams && typeof patch.extraParams === 'object' ? patch.extraParams : access.extraParams,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (!found) {
+      res.status(404).json({error: 'access not found'});
+      return;
+    }
+    await patchAccessState({accesses: nextAccesses, accessCredentials});
+    res.status(200).json({accesses: nextAccesses});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.delete('/api/accesses/:accessId', async (req, res) => {
+  try {
+    const {accesses, accessCredentials} = await getAccessState();
+    const nextAccesses = accesses.filter((access) => access.id !== req.params.accessId);
+    const nextCredentials = accessCredentials.filter((credential) => credential.accessId !== req.params.accessId);
+    await patchAccessState({accesses: nextAccesses, accessCredentials: nextCredentials});
+    res.status(200).json({accesses: nextAccesses, credentials: nextCredentials.map(publicAccessCredential)});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.post('/api/accesses/:accessId/credentials', async (req, res) => {
+  try {
+    const {accesses, accessCredentials} = await getAccessState();
+    const access = accesses.find((item) => item.id === req.params.accessId);
+    if (!access) {
+      res.status(404).json({error: 'access not found'});
+      return;
+    }
+
+    const payload = req.body || {};
+    const token = createAccessToken();
+    const now = new Date();
+    const periodSeconds = Math.max(30, Math.min(Number(payload.periodSeconds || 3600) || 3600, 31536000));
+    const credential = {
+      id: createId('access-cred'),
+      accessId: access.id,
+      type: payload.type || 'qr',
+      name: String(payload.name || 'QR Code').trim(),
+      tokenHash: hashToken(token),
+      enabled: payload.enabled !== false,
+      refreshIntervalSeconds: Math.max(0, Number(payload.refreshIntervalSeconds || 0) || 0),
+      periodSeconds,
+      maxUses: Math.max(1, Math.min(Number(payload.maxUses || 1) || 1, 100000)),
+      usedCount: 0,
+      createdAt: now.toISOString(),
+      validFrom: now.toISOString(),
+      validUntil: new Date(now.getTime() + periodSeconds * 1000).toISOString(),
+      lastUsedAt: null,
+    };
+    const nextCredentials = [credential, ...accessCredentials];
+    await patchAccessState({accesses, accessCredentials: nextCredentials});
+    res.status(201).json({
+      credential: publicAccessCredential(credential),
+      credentials: nextCredentials.map(publicAccessCredential),
+      link: createAccessLink(req, token),
+    });
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.put('/api/access-credentials/:credentialId', async (req, res) => {
+  try {
+    const {accesses, accessCredentials} = await getAccessState();
+    const patch = req.body || {};
+    let found = false;
+    const nextCredentials = accessCredentials.map((credential) => {
+      if (credential.id !== req.params.credentialId) return credential;
+      found = true;
+      return {
+        ...credential,
+        ...patch,
+        tokenHash: credential.tokenHash,
+        usedCount: Number.isFinite(Number(patch.usedCount)) ? Number(patch.usedCount) : credential.usedCount,
+      };
+    });
+    if (!found) {
+      res.status(404).json({error: 'credential not found'});
+      return;
+    }
+    await patchAccessState({accesses, accessCredentials: nextCredentials});
+    res.status(200).json({credentials: nextCredentials.map(publicAccessCredential)});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.delete('/api/access-credentials/:credentialId', async (req, res) => {
+  try {
+    const {accesses, accessCredentials} = await getAccessState();
+    const nextCredentials = accessCredentials.filter((credential) => credential.id !== req.params.credentialId);
+    await patchAccessState({accesses, accessCredentials: nextCredentials});
+    res.status(200).json({credentials: nextCredentials.map(publicAccessCredential)});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.get('/api/access-events', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
+    if (db) {
+      const result = await queryDb(
+        `SELECT id, access_id AS "accessId", credential_id AS "credentialId", credential_type AS "credentialType",
+                status, reason, params_snapshot AS params, request_meta AS request, created_at AS "createdAt"
+         FROM access_events
+         ORDER BY created_at DESC
+         LIMIT $1`,
+        [limit]
+      );
+      res.status(200).json({events: result.rows});
+      return;
+    }
+    res.status(200).json({events: accessEvents.slice(0, limit)});
+  } catch (error) {
+    res.status(500).json({error: error.message, events: []});
+  }
+});
+
 app.get('/api/mqtt/config', (_req, res) => {
   const channel = mqttChannels[0] || sanitizeMqttChannel({});
   res.status(200).json({
@@ -2744,7 +3005,21 @@ app.get('/api/state', async (_req, res) => {
 
 app.put('/api/state', async (req, res) => {
   try {
-    await setAppState('dashboard_state', req.body || {});
+    const incomingState = req.body || {};
+    const currentState = await getDashboardState();
+    if (Array.isArray(incomingState.accessCredentials) && Array.isArray(currentState.accessCredentials)) {
+      const currentById = new Map(currentState.accessCredentials.map((credential) => [credential.id, credential]));
+      incomingState.accessCredentials = incomingState.accessCredentials.map((credential) => {
+        const current = currentById.get(credential.id);
+        if (!current) return credential;
+        const currentUsedCount = Number(current.usedCount || 0);
+        const incomingUsedCount = Number(credential.usedCount || 0);
+        return currentUsedCount > incomingUsedCount
+          ? {...credential, usedCount: currentUsedCount, lastUsedAt: current.lastUsedAt || credential.lastUsedAt}
+          : credential;
+      });
+    }
+    await setAppState('dashboard_state', incomingState);
     res.status(200).json({ok: true});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -2842,6 +3117,100 @@ app.get('/api/workflow-live/:workflowId', async (req, res) => {
     res.status(200).json({live: state});
   } catch (error) {
     res.status(500).json({error: error.message, live: null});
+  }
+});
+
+app.get('/a/:token', async (req, res) => {
+  const now = new Date();
+  const requestMeta = {
+    ip: req.ip,
+    userAgent: req.get('user-agent') || '',
+    method: 'GET',
+    path: req.path,
+  };
+
+  try {
+    const tokenHash = hashToken(req.params.token);
+    const {accesses, accessCredentials} = await getAccessState();
+    const credential = accessCredentials.find((item) => item.tokenHash === tokenHash && item.type === 'qr');
+    const access = credential ? accesses.find((item) => item.id === credential.accessId) : null;
+    const reject = async (statusCode, reason) => {
+      await persistAccessEvent({
+        id: createId('access-event'),
+        accessId: access?.id || credential?.accessId || null,
+        credentialId: credential?.id || null,
+        credentialType: credential?.type || 'qr',
+        status: 'rejected',
+        reason,
+        params: access?.extraParams || {},
+        request: requestMeta,
+        createdAt: now.toISOString(),
+      });
+      res.status(statusCode).send(`<!doctype html><html><head><title>Access rejected</title></head><body><h1>Access rejected</h1><p>${reason}</p></body></html>`);
+    };
+
+    if (!credential) {
+      await reject(404, 'QR code was not found.');
+      return;
+    }
+    if (!access || access.enabled === false) {
+      await reject(403, 'Access is disabled.');
+      return;
+    }
+    if (credential.enabled === false) {
+      await reject(403, 'QR code is disabled.');
+      return;
+    }
+    if (credential.validFrom && now < new Date(credential.validFrom)) {
+      await reject(403, 'QR code is not active yet.');
+      return;
+    }
+    if (credential.validUntil && now > new Date(credential.validUntil)) {
+      await reject(410, 'QR code has expired.');
+      return;
+    }
+    if (Number(credential.usedCount || 0) >= Number(credential.maxUses || 1)) {
+      await reject(429, 'QR code usage limit has been reached.');
+      return;
+    }
+
+    const acceptedAt = now.toISOString();
+    const nextCredentials = accessCredentials.map((item) => (
+      item.id === credential.id
+        ? {...item, usedCount: Number(item.usedCount || 0) + 1, lastUsedAt: acceptedAt}
+        : item
+    ));
+    await patchAccessState({accesses, accessCredentials: nextCredentials});
+
+    const accessEvent = {
+      id: createId('access-event'),
+      accessId: access.id,
+      credentialId: credential.id,
+      credentialType: credential.type || 'qr',
+      status: 'accepted',
+      reason: 'Access accepted',
+      params: access.extraParams || {},
+      request: requestMeta,
+      createdAt: acceptedAt,
+    };
+    await persistAccessEvent(accessEvent);
+
+    await dispatchWorkflowEvent({
+      type: 'access',
+      source: 'qr',
+      accessId: access.id,
+      accessName: access.name,
+      credentialId: credential.id,
+      credentialName: credential.name,
+      params: access.extraParams || {},
+      request: requestMeta,
+      accessEvent,
+      receivedAt: acceptedAt,
+    });
+
+    res.status(202).send(`<!doctype html><html><head><title>Access accepted</title></head><body><h1>Access accepted</h1><p>${access.name}</p></body></html>`);
+  } catch (error) {
+    res.status(500).send(`<!doctype html><html><head><title>Access error</title></head><body><h1>Access error</h1><p>${error.message}</p></body></html>`);
   }
 });
 

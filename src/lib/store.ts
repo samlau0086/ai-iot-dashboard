@@ -65,6 +65,32 @@ export interface NotificationChannel {
   lastTestAt?: string;
 }
 
+export interface AccessDefinition {
+  id: string;
+  name: string;
+  enabled: boolean;
+  method: 'qr' | 'caller_id' | 'sms';
+  extraParams: Record<string, any>;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AccessCredential {
+  id: string;
+  accessId: string;
+  type: 'qr' | 'caller_id' | 'sms';
+  name: string;
+  enabled: boolean;
+  refreshIntervalSeconds: number;
+  periodSeconds: number;
+  maxUses: number;
+  usedCount: number;
+  createdAt: string;
+  validFrom: string;
+  validUntil: string;
+  lastUsedAt?: string | null;
+}
+
 export interface ChartConfig {
   id: string;
   title: string;
@@ -540,6 +566,14 @@ interface AppState {
   addSite: (site: SiteTenant) => void;
   updateSite: (id: string, site: Partial<SiteTenant>) => void;
   deleteSite: (id: string) => void;
+  // Access Control
+  accesses: AccessDefinition[];
+  accessCredentials: AccessCredential[];
+  setAccesses: (accesses: AccessDefinition[]) => void;
+  setAccessCredentials: (credentials: AccessCredential[]) => void;
+  addAccess: (access: AccessDefinition) => void;
+  updateAccess: (id: string, access: Partial<AccessDefinition>) => void;
+  deleteAccess: (id: string) => void;
   // Users
   users: User[];
   addUser: (user: User) => void;
@@ -597,6 +631,8 @@ type BackendState = Partial<Pick<AppState,
   | 'sites'
   | 'activeSiteId'
   | 'users'
+  | 'accesses'
+  | 'accessCredentials'
   | 'charts'
   | 'overviewLayout'
   | 'overviewWidgets'
@@ -657,6 +693,8 @@ const pickBackendState = (state: AppState): BackendState => ({
   sites: state.sites,
   activeSiteId: state.activeSiteId,
   users: state.users,
+  accesses: state.accesses,
+  accessCredentials: state.accessCredentials,
   charts: state.charts,
   overviewLayout: state.overviewLayout,
   overviewWidgets: state.overviewWidgets,
@@ -725,6 +763,8 @@ export const useAppStore = create<AppState>()(
             sites,
             activeSiteId,
             charts: mergeDefaultCharts(state?.charts),
+            accesses: Array.isArray(state?.accesses) ? state.accesses : [],
+            accessCredentials: Array.isArray(state?.accessCredentials) ? state.accessCredentials : [],
             overviewDashboardsBySite,
             overviewLayout: cloneLayout(activeDashboard.layout),
             overviewWidgets: cloneWidgets(activeDashboard.widgets),
@@ -873,6 +913,21 @@ export const useAppStore = create<AppState>()(
           devices: state.devices.map((device) => device.siteId === id ? { ...device, siteId: fallbackSiteId } : device),
         };
       }),
+
+      accesses: [],
+      accessCredentials: [],
+      setAccesses: (accesses) => set({ accesses }),
+      setAccessCredentials: (accessCredentials) => set({ accessCredentials }),
+      addAccess: (access) => set((state) => ({ accesses: [access, ...state.accesses] })),
+      updateAccess: (id, access) => set((state) => ({
+        accesses: state.accesses.map((item) => (
+          item.id === id ? { ...item, ...access, updatedAt: new Date().toISOString() } : item
+        )),
+      })),
+      deleteAccess: (id) => set((state) => ({
+        accesses: state.accesses.filter((item) => item.id !== id),
+        accessCredentials: state.accessCredentials.filter((item) => item.accessId !== id),
+      })),
 
       users: DEFAULT_USERS,
       addUser: (user) => set((state) => ({ users: [...state.users, user] })),

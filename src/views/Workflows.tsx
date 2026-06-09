@@ -5,7 +5,7 @@ import {
   GitMerge, GitBranch, GitCommit, Settings2, Timer, Plus, Play, Square, Trash2, Edit2, 
   MessageCircle, Mail, Ticket, Power, Globe,
   FileText, BrainCircuit, Activity, AlertTriangle,
-  Clock, Zap, PowerOff, ArrowRight, Radio, Wifi, Bell
+  Clock, Zap, PowerOff, ArrowRight, Radio, Wifi, Bell, KeyRound
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { WorkflowEditor } from './WorkflowEditor';
@@ -28,6 +28,7 @@ export function Workflows() {
       case 'start_backup': return <Power className="h-4 w-4 text-orange-500" />;
       case 'stop_device': return <PowerOff className="h-4 w-4 text-red-500" />;
       case 'webhook': return <Globe className="h-4 w-4 text-indigo-500" />;
+      case 'access': return <KeyRound className="h-4 w-4 text-orange-500" />;
       case 'report': return <FileText className="h-4 w-4 text-slate-500" />;
       case 'ai_analyze': return <BrainCircuit className="h-4 w-4 text-orange-600" />;
       // triggers

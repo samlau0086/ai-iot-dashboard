@@ -8,6 +8,7 @@ import { Analytics } from './views/Analytics';
 import { RawData } from './views/RawData';
 import { Workflows } from './views/Workflows';
 import { ControlCenter } from './views/ControlCenter';
+import { AccessControl } from './views/AccessControl';
 import { Reports } from './views/Reports';
 import { AIInsights } from './views/AIInsights';
 import { Settings } from './views/Settings';
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="devices/:id" element={<DeviceDetails />} />
             <Route path="workflows" element={<Workflows />} />
             <Route path="control" element={<ControlCenter />} />
+            <Route path="access-control" element={<AccessControl />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="raw-data" element={<RawData />} />
             <Route path="alerts" element={<Alerts />} />

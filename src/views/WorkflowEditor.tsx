@@ -6,7 +6,7 @@ import {
   MessageCircle, Mail, Ticket, Power, Globe, FileText, BrainCircuit,
   Activity, Clock, Zap, PowerOff, ArrowDown, X, AlertTriangle, Settings,
   GitBranch, GitCommit, Settings2, Timer, ChevronDown, Radio, Wifi, Bell,
-  Code2, Shuffle, Ruler, Database, Repeat2, Ban, Braces, Route
+  Code2, Shuffle, Ruler, Database, Repeat2, Ban, Braces, Route, KeyRound
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
@@ -25,6 +25,7 @@ const getActionIcon = (type: string) => {
     case 'stop_device': return <PowerOff className="h-5 w-5 text-red-500" />;
     case 'device_control': return <Settings2 className="h-5 w-5 text-orange-500" />;
     case 'webhook': return <Globe className="h-5 w-5 text-indigo-500" />;
+    case 'access': return <KeyRound className="h-5 w-5 text-orange-500" />;
     case 'report': return <FileText className="h-5 w-5 text-slate-500" />;
     case 'ai_analyze': return <BrainCircuit className="h-5 w-5 text-orange-600" />;
     case 'threshold': return <Activity className="h-5 w-5 text-cyan-500" />;
@@ -65,13 +66,14 @@ const defaultConfigs: Record<string, any> = {
   schedule: { device: '', crontab: '0 * * * *' },
   ai: { device: '', anomalyType: 'all' },
   webhook: { device: '', endpoint: '/api/v1/webhook/' },
+  access: { accessId: '' },
   mqtt_message: { device: '', topic: 'sensors/+/data', payload_match: '{"status":"alert"}' },
   whatsapp: { target: '+1234567890', message: 'Alert triggered!' },
   email: { to: 'admin@factory.com', subject: 'Alert Notification' },
   ticket: { priority: 'high', assignee: 'maintenance' },
   start_backup: { target: '' },
   stop_device: { target: '' },
-  device_control: { device: '', controlId: '', value: '', parameterName: '', parameters: {} },
+  device_control: { deviceSource: 'static', device: '', deviceExpression: '$.access_trigger.output.params.deviceId', controlId: '', value: '', parameterName: '', parameters: {} },
   report: { frequency: 'weekly', recipient: 'manager@factory.com' },
   ai_analyze: { prompt: 'Analyze possible causes for the event.' },
   delay: { duration: '60s' },
@@ -204,7 +206,7 @@ function DeviceSelect({ value, onChange, devices }: { value: string, onChange: (
 }
 
 export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
-  const { language, workflows, addWorkflow, updateWorkflow, devices } = useAppStore();
+  const { language, workflows, addWorkflow, updateWorkflow, devices, accesses } = useAppStore();
   const t = translations[language];
   const isNew = workflowId === 'new';
 
@@ -556,7 +558,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const device = devices.find((item) => item.id === deviceId);
     const controls = getDeviceControlDefinitions(device);
     const control = controls.find((item) => item.id === controlId) || controls[0];
-    if (!control) return { device: deviceId, controlId: '', value: '', parameterName: '', parameters: {} };
+    if (!control) return { deviceSource: 'static', device: deviceId, controlId: '', value: '', parameterName: '', parameters: {} };
 
     const valueKey = control.valueType === 'parameter_group'
       ? ''
@@ -568,6 +570,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
     return {
       device: deviceId,
+      deviceSource: 'static',
       controlId: control.id,
       value: valueKey ? controlValues[valueKey] : '',
       parameterName: control.id === 'set_parameter' ? 'parameter' : '',
@@ -592,7 +595,9 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
     const newNode: WorkflowNode = {
       id: `n-${Date.now()}`,
-      name: getNodeDefaultName(type, draft.nodes),
+      name: type === 'access' && !draft.nodes.some((node) => node.name === 'access_trigger')
+        ? 'access_trigger'
+        : getNodeDefaultName(type === 'access' ? 'access_trigger' : type, draft.nodes),
       type: isTrigger ? 'trigger' : isCondition ? 'condition' : 'action',
       config: { type, ...nodeConfig }
     };
@@ -1174,7 +1179,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                   <div className="space-y-4">
                     <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Configuration</label>
                     {node.config.type === 'device_control' ? (() => {
-                      const selectedDevice = devices.find((device) => device.id === node.config.device);
+                      const deviceSource = node.config.deviceSource || 'static';
+                      const selectedDevice = deviceSource === 'static'
+                        ? devices.find((device) => device.id === node.config.device)
+                        : devices.find((device) => device.id === node.config.device || device.config?.externalDeviceId === node.config.device);
                       const controlDefinitions = getDeviceControlDefinitions(selectedDevice);
                       const selectedControl = controlDefinitions.find((control) => control.id === node.config.controlId) || controlDefinitions[0];
                       const controlValue = node.config.value ?? selectedControl?.defaultValue ?? '';
@@ -1215,14 +1223,80 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       return (
                         <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                           <div>
-                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Device</label>
-                            <DeviceSelect
-                              value={node.config.device || ''}
-                              onChange={(deviceId) => updateNodeConfig(node.id, buildWorkflowControlPatch(deviceId))}
-                              devices={devices}
-                            />
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Device Source</label>
+                            <select
+                              value={deviceSource}
+                              onChange={(event) => updateNodeConfig(node.id, { deviceSource: event.target.value })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            >
+                              <option value="static">Select / Enter Device ID</option>
+                              <option value="expression">From workflow expression</option>
+                            </select>
                           </div>
 
+                          {deviceSource === 'expression' ? (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Device ID Expression</label>
+                              <input
+                                value={node.config.deviceExpression || ''}
+                                onChange={(event) => updateNodeConfig(node.id, { deviceExpression: event.target.value })}
+                                placeholder="$.access_trigger.output.params.deviceId"
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Device</label>
+                                <DeviceSelect
+                                  value={devices.some((device) => device.id === node.config.device) ? node.config.device : ''}
+                                  onChange={(deviceId) => updateNodeConfig(node.id, buildWorkflowControlPatch(deviceId))}
+                                  devices={devices}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Manual Device ID</label>
+                                <input
+                                  value={node.config.device || ''}
+                                  onChange={(event) => updateNodeConfig(node.id, { device: event.target.value })}
+                                  placeholder="Device ID or external device ID"
+                                  className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {deviceSource === 'expression' && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Control Action ID</label>
+                              <input
+                                value={node.config.controlId || ''}
+                                onChange={(event) => updateNodeConfig(node.id, { controlId: event.target.value })}
+                                placeholder="power_on, set_mode, set_pressure..."
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                            </div>
+                          )}
+
+                          {deviceSource === 'expression' && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Parameters JSON</label>
+                              <textarea
+                                value={JSON.stringify(node.config.parameters || {}, null, 2)}
+                                onChange={(event) => {
+                                  try {
+                                    updateNodeConfig(node.id, { parameters: JSON.parse(event.target.value || '{}') });
+                                  } catch {
+                                    updateNodeConfig(node.id, { parametersText: event.target.value });
+                                  }
+                                }}
+                                rows={4}
+                                className="block w-full rounded-md border-0 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                            </div>
+                          )}
+
+                          {deviceSource === 'static' && (
                           <div>
                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Control Action</label>
                             <select
@@ -1237,6 +1311,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                               {controlDefinitions.length === 0 && <option value="">No controls available</option>}
                             </select>
                           </div>
+                          )}
 
                           {selectedControl && (
                             <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
@@ -1387,6 +1462,29 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                     {Object.entries(node.config).map(([key, value]) => {
                       if (node.config.type === 'device_control') return null;
                       if (key === 'type') return null;
+
+                      if (node.config.type === 'access' && key === 'accessId') {
+                        return (
+                          <div key={key}>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                              Access
+                            </label>
+                            <select
+                              value={value as string}
+                              onChange={(event) => updateNodeConfig(node.id, { accessId: event.target.value })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            >
+                              <option value="">Any Access</option>
+                              {accesses.map((access) => (
+                                <option key={access.id} value={access.id}>{access.name}</option>
+                              ))}
+                            </select>
+                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              Access extra parameters are available from this trigger output, for example $.access_trigger.output.params.deviceId.
+                            </p>
+                          </div>
+                        );
+                      }
                       
                       const isDeviceSelect = (key === 'device' && (node.type === 'trigger' || ['if', 'elif'].includes(node.config.type) || node.config.type === 'command_confirm')) ||
                                              (key === 'target' && (node.config.type === 'start_backup' || node.config.type === 'stop_device' || node.config.type === 'mqtt_publish')) ||

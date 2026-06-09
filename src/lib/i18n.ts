@@ -6,6 +6,7 @@ export const translations = {
       devices: 'Devices',
       workflows: 'Workflows',
       control: 'Control',
+      accessControl: 'Access Control',
       analytics: 'Analytics',
       rawData: 'Raw Data',
       alerts: 'Alerts',
@@ -121,6 +122,7 @@ export const translations = {
         schedule: 'Scheduled Task',
         ai: 'AI Anomaly Detected',
         webhook: 'Webhook Event',
+        access: 'Access Trigger',
         mqtt_message: 'MQTT Message',
       },
       conditionTypes: {
@@ -190,6 +192,7 @@ export const translations = {
       devices: '设备管理',
       workflows: '工作流自动化',
       control: '控制中心',
+      accessControl: 'Access Control',
       analytics: '数据分析',
       rawData: '原始数据',
       alerts: '告警中心',
