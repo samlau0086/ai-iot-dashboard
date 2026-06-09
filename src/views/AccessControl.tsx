@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Copy, KeyRound, Plus, QrCode, RefreshCw, Trash2 } from 'lucide-react';
+import { Copy, Edit2, Eye, KeyRound, Plus, QrCode, RefreshCw, Trash2, X } from 'lucide-react';
 import { useAppStore, type AccessCredential, type AccessDefinition } from '../lib/store';
 import { cn } from '../lib/utils';
 
@@ -20,6 +20,32 @@ const createDefaultQrName = () => {
   return `QR-${datePart}-${randomPart}`;
 };
 
+type DurationUnit = 'seconds' | 'minutes' | 'hours' | 'days' | 'months';
+
+const durationUnits: Array<{ value: DurationUnit; label: string; multiplier: number }> = [
+  { value: 'seconds', label: 'Seconds', multiplier: 1 },
+  { value: 'minutes', label: 'Minutes', multiplier: 60 },
+  { value: 'hours', label: 'Hours', multiplier: 3600 },
+  { value: 'days', label: 'Days', multiplier: 86400 },
+  { value: 'months', label: 'Months', multiplier: 2592000 },
+];
+
+const durationToSeconds = (value: number, unit: DurationUnit) => {
+  const multiplier = durationUnits.find((item) => item.value === unit)?.multiplier || 1;
+  return Math.max(0, Math.round((Number(value) || 0) * multiplier));
+};
+
+const toDateTimeLocalValue = (date: Date) => {
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
+
+const secondsToDuration = (seconds: number): { value: number; unit: DurationUnit } => {
+  const normalized = Math.max(0, Number(seconds || 0));
+  const unit = [...durationUnits].reverse().find((item) => normalized >= item.multiplier && normalized % item.multiplier === 0) || durationUnits[0];
+  return { value: normalized / unit.multiplier, unit: unit.value };
+};
+
 export function AccessControl() {
   const {
     accesses,
@@ -31,10 +57,19 @@ export function AccessControl() {
   const [selectedAccessId, setSelectedAccessId] = useState(accesses[0]?.id || '');
   const [paramsDraft, setParamsDraft] = useState('{}');
   const [qrName, setQrName] = useState(createDefaultQrName());
-  const [periodSeconds, setPeriodSeconds] = useState(3600);
-  const [refreshIntervalSeconds, setRefreshIntervalSeconds] = useState(0);
+  const [validMode, setValidMode] = useState<'duration' | 'until'>('duration');
+  const [periodValue, setPeriodValue] = useState(1);
+  const [periodUnit, setPeriodUnit] = useState<DurationUnit>('hours');
+  const [validUntilInput, setValidUntilInput] = useState(toDateTimeLocalValue(new Date(Date.now() + 3600 * 1000)));
+  const [refreshValue, setRefreshValue] = useState(0);
+  const [refreshUnit, setRefreshUnit] = useState<DurationUnit>('minutes');
   const [maxUses, setMaxUses] = useState(1);
   const [lastLink, setLastLink] = useState('');
+  const [lastLatestQrLink, setLastLatestQrLink] = useState('');
+  const [credentialModal, setCredentialModal] = useState<{ mode: 'view' | 'edit'; credential: AccessCredential } | null>(null);
+  const [credentialDraft, setCredentialDraft] = useState<Partial<AccessCredential>>({});
+  const [credentialLink, setCredentialLink] = useState('');
+  const [credentialLatestQrLink, setCredentialLatestQrLink] = useState('');
   const [message, setMessage] = useState('');
 
   const selectedAccess = accesses.find((access) => access.id === selectedAccessId) || accesses[0];
@@ -122,6 +157,10 @@ export function AccessControl() {
   const generateCredential = async () => {
     if (!selectedAccess) return;
     setMessage('');
+    const computedPeriodSeconds = validMode === 'until'
+      ? Math.max(30, Math.round((new Date(validUntilInput).getTime() - Date.now()) / 1000))
+      : Math.max(30, durationToSeconds(periodValue, periodUnit));
+    const computedRefreshSeconds = refreshValue > 0 ? durationToSeconds(refreshValue, refreshUnit) : 0;
     await fetch(`/api/accesses/${selectedAccess.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -133,8 +172,9 @@ export function AccessControl() {
       body: JSON.stringify({
         type: 'qr',
         name: qrName,
-        periodSeconds,
-        refreshIntervalSeconds,
+        periodSeconds: computedPeriodSeconds,
+        validUntil: validMode === 'until' ? new Date(validUntilInput).toISOString() : undefined,
+        refreshIntervalSeconds: computedRefreshSeconds,
         maxUses,
       }),
     });
@@ -145,8 +185,9 @@ export function AccessControl() {
     }
     setAccessCredentials(payload.credentials || []);
     setLastLink(payload.link || '');
+    setLastLatestQrLink(payload.latestQrLink || '');
     setQrName(createDefaultQrName());
-    setMessage('QR link generated. Copy it now; the raw token is shown only once.');
+    setMessage(payload.latestQrLink ? 'QR link generated. Latest QR page is available for rotating displays.' : 'QR link generated.');
   };
 
   const updateCredential = async (credentialId: string, patch: Partial<AccessCredential>) => {
@@ -157,6 +198,40 @@ export function AccessControl() {
     });
     const payload = await response.json();
     if (response.ok) setAccessCredentials(payload.credentials || []);
+  };
+
+  const openCredentialModal = async (mode: 'view' | 'edit', credential: AccessCredential) => {
+    setCredentialModal({ mode, credential });
+    setCredentialDraft({ ...credential });
+    setCredentialLink('');
+    setCredentialLatestQrLink('');
+    setMessage('');
+    if (mode === 'view') {
+      const response = await fetch(`/api/access-credentials/${credential.id}/link`);
+      const payload = await response.json();
+      if (response.ok) {
+        setCredentialLink(payload.link || '');
+        setCredentialLatestQrLink(payload.latestQrLink || '');
+        if (payload.credentials) setAccessCredentials(payload.credentials);
+      } else {
+        setMessage(payload.error || 'QR link is not available.');
+      }
+    }
+  };
+
+  const saveCredentialDraft = async () => {
+    if (!credentialModal) return;
+    await updateCredential(credentialModal.credential.id, {
+      name: credentialDraft.name,
+      enabled: credentialDraft.enabled,
+      periodSeconds: Number(credentialDraft.periodSeconds || 3600),
+      validUntil: credentialDraft.validUntil,
+      refreshIntervalSeconds: Number(credentialDraft.refreshIntervalSeconds || 0),
+      maxUses: Number(credentialDraft.maxUses || 1),
+    });
+    setCredentialModal(null);
+    setCredentialDraft({});
+    setMessage('QR credential updated.');
   };
 
   const deleteCredential = async (credentialId: string) => {
@@ -315,27 +390,64 @@ export function AccessControl() {
                   />
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Internal display name for this QR credential.</p>
                 </div>
-                <div>
-                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Valid Period (seconds)</label>
-                  <input
-                    type="number"
-                    min={30}
-                    value={periodSeconds}
-                    onChange={(event) => setPeriodSeconds(Number(event.target.value))}
-                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-                  />
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">How long this generated link remains valid.</p>
+                <div className="md:col-span-2">
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Validity</label>
+                  <div className="mt-1 grid gap-2 sm:grid-cols-[8rem_1fr]">
+                    <select
+                      value={validMode}
+                      onChange={(event) => setValidMode(event.target.value as 'duration' | 'until')}
+                      className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    >
+                      <option value="duration">Duration</option>
+                      <option value="until">Valid Until</option>
+                    </select>
+                    {validMode === 'duration' ? (
+                      <div className="grid grid-cols-[1fr_8rem] gap-2">
+                        <input
+                          type="number"
+                          min={1}
+                          value={periodValue}
+                          onChange={(event) => setPeriodValue(Number(event.target.value))}
+                          className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                        />
+                        <select
+                          value={periodUnit}
+                          onChange={(event) => setPeriodUnit(event.target.value as DurationUnit)}
+                          className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                        >
+                          {durationUnits.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}
+                        </select>
+                      </div>
+                    ) : (
+                      <input
+                        type="datetime-local"
+                        value={validUntilInput}
+                        onChange={(event) => setValidUntilInput(event.target.value)}
+                        className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                      />
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Set how long this QR credential remains valid.</p>
                 </div>
                 <div>
-                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Refresh Interval (seconds)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={refreshIntervalSeconds}
-                    onChange={(event) => setRefreshIntervalSeconds(Number(event.target.value))}
-                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-                  />
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Reserved for rotating QR displays. Use 0 for no auto refresh.</p>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Refresh Interval</label>
+                  <div className="mt-1 grid grid-cols-[1fr_8rem] gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      value={refreshValue}
+                      onChange={(event) => setRefreshValue(Number(event.target.value))}
+                      className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                    <select
+                      value={refreshUnit}
+                      onChange={(event) => setRefreshUnit(event.target.value as DurationUnit)}
+                      className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    >
+                      {durationUnits.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}
+                    </select>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Use 0 for no refresh. Rotating QR pages require Allowed Visits greater than 1.</p>
                 </div>
                 <div>
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Allowed Visits</label>
@@ -359,7 +471,7 @@ export function AccessControl() {
                       className="h-40 w-40 rounded bg-white p-2"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">One-time visible link</p>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">QR Access Link</p>
                       <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{lastLink}</p>
                       <button
                         type="button"
@@ -369,6 +481,20 @@ export function AccessControl() {
                         <Copy className="h-4 w-4" />
                         Copy Link
                       </button>
+                      {lastLatestQrLink && (
+                        <div className="mt-4 rounded border border-orange-200 bg-white/70 p-3 dark:border-orange-500/30 dark:bg-slate-950/40">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">Latest QR Page</p>
+                          <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{lastLatestQrLink}</p>
+                          <button
+                            type="button"
+                            onClick={() => navigator.clipboard.writeText(lastLatestQrLink)}
+                            className="mt-3 inline-flex items-center gap-2 rounded border border-orange-300 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-50 dark:border-orange-500/40 dark:text-orange-300 dark:hover:bg-orange-500/10"
+                          >
+                            <Copy className="h-4 w-4" />
+                            Copy Latest QR Page
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -391,8 +517,13 @@ export function AccessControl() {
                         <td className="px-3 py-2 text-slate-500">{credential.usedCount}/{credential.maxUses}</td>
                         <td className="px-3 py-2 text-slate-500">{new Date(credential.validUntil).toLocaleString()}</td>
                         <td className="px-3 py-2 text-right">
-                          <button type="button" onClick={() => updateCredential(credential.id, { enabled: !credential.enabled })} className="mr-2 rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700">
-                            {credential.enabled ? 'Disable' : 'Enable'}
+                          <button type="button" onClick={() => openCredentialModal('view', credential)} className="mr-2 inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700">
+                            <Eye className="h-3 w-3" />
+                            View
+                          </button>
+                          <button type="button" onClick={() => openCredentialModal('edit', credential)} className="mr-2 inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700">
+                            <Edit2 className="h-3 w-3" />
+                            Edit
                           </button>
                           <button type="button" onClick={() => deleteCredential(credential.id)} className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 dark:border-red-500/30">
                             Delete
@@ -412,6 +543,187 @@ export function AccessControl() {
           </section>
         )}
       </div>
+
+      {credentialModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+                  {credentialModal.mode === 'view' ? 'View QR Credential' : 'Edit QR Credential'}
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{credentialModal.credential.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCredentialModal(null);
+                  setCredentialDraft({});
+                  setCredentialLink('');
+                }}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {credentialModal.mode === 'view' ? (
+              <div className="space-y-4 p-5">
+                {credentialLink ? (
+                  <div className="flex flex-col gap-4 sm:flex-row">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(credentialLink)}`}
+                      alt="QR credential"
+                      className="h-44 w-44 rounded bg-white p-2"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">QR Link</label>
+                      <p className="mt-2 break-all rounded border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+                        {credentialLink}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => navigator.clipboard.writeText(credentialLink)}
+                        className="mt-3 inline-flex items-center gap-2 rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500"
+                      >
+                        <Copy className="h-4 w-4" />
+                        Copy Link
+                      </button>
+                      {credentialLatestQrLink && (
+                        <div className="mt-4 rounded border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900">
+                          <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Latest QR Page</label>
+                          <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{credentialLatestQrLink}</p>
+                          <button
+                            type="button"
+                            onClick={() => navigator.clipboard.writeText(credentialLatestQrLink)}
+                            className="mt-3 inline-flex items-center gap-2 rounded border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                          >
+                            <Copy className="h-4 w-4" />
+                            Copy Latest QR Page
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+                    {message || 'QR link is not available for this credential.'}
+                  </div>
+                )}
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
+                    <span className="block text-xs text-slate-500">Usage</span>
+                    <span className="font-semibold text-slate-900 dark:text-white">{credentialModal.credential.usedCount}/{credentialModal.credential.maxUses}</span>
+                  </div>
+                  <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
+                    <span className="block text-xs text-slate-500">Valid Until</span>
+                    <span className="font-semibold text-slate-900 dark:text-white">{new Date(credentialModal.credential.validUntil).toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4 p-5">
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">QR Name</label>
+                  <input
+                    value={credentialDraft.name || ''}
+                    onChange={(event) => setCredentialDraft((current) => ({ ...current, name: event.target.value }))}
+                    className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div>
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Valid Period</label>
+                    <div className="mt-1 grid grid-cols-[1fr_7.5rem] gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        value={secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).value}
+                        onChange={(event) => {
+                          const currentUnit = secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).unit;
+                          setCredentialDraft((current) => ({ ...current, periodSeconds: durationToSeconds(Number(event.target.value), currentUnit) }));
+                        }}
+                        className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                      />
+                      <select
+                        value={secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).unit}
+                        onChange={(event) => {
+                          const currentValue = secondsToDuration(Number(credentialDraft.periodSeconds || 3600)).value;
+                          setCredentialDraft((current) => ({ ...current, periodSeconds: durationToSeconds(currentValue, event.target.value as DurationUnit) }));
+                        }}
+                        className="h-10 rounded border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                      >
+                        {durationUnits.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Refresh Interval</label>
+                    <div className="mt-1 grid grid-cols-[1fr_7.5rem] gap-2">
+                      <input
+                        type="number"
+                        min={0}
+                        value={secondsToDuration(Number(credentialDraft.refreshIntervalSeconds || 0)).value}
+                        onChange={(event) => {
+                          const currentUnit = secondsToDuration(Number(credentialDraft.refreshIntervalSeconds || 0)).unit;
+                          setCredentialDraft((current) => ({ ...current, refreshIntervalSeconds: durationToSeconds(Number(event.target.value), currentUnit) }));
+                        }}
+                        className="h-10 rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                      />
+                      <select
+                        value={secondsToDuration(Number(credentialDraft.refreshIntervalSeconds || 0)).unit}
+                        onChange={(event) => {
+                          const currentValue = secondsToDuration(Number(credentialDraft.refreshIntervalSeconds || 0)).value;
+                          setCredentialDraft((current) => ({ ...current, refreshIntervalSeconds: durationToSeconds(currentValue, event.target.value as DurationUnit) }));
+                        }}
+                        className="h-10 rounded border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                      >
+                        {durationUnits.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Allowed Visits</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={credentialDraft.maxUses ?? 1}
+                      onChange={(event) => setCredentialDraft((current) => ({ ...current, maxUses: Number(event.target.value) }))}
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+                <label className="flex items-center justify-between rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Enabled</span>
+                  <input
+                    type="checkbox"
+                    checked={credentialDraft.enabled !== false}
+                    onChange={(event) => setCredentialDraft((current) => ({ ...current, enabled: event.target.checked }))}
+                    className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-600"
+                  />
+                </label>
+                <div className="flex justify-end gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setCredentialModal(null)}
+                    className="rounded border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveCredentialDraft}
+                    className="rounded bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500"
+                  >
+                    Save QR
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -81,6 +81,8 @@ export interface AccessCredential {
   type: 'qr' | 'caller_id' | 'sms';
   name: string;
   enabled: boolean;
+  hasLink?: boolean;
+  hasLatestQrLink?: boolean;
   refreshIntervalSeconds: number;
   periodSeconds: number;
   maxUses: number;

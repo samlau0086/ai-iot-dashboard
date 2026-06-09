@@ -466,6 +466,8 @@ const publicAccessCredential = (credential) => ({
   type: credential.type || 'qr',
   name: credential.name,
   enabled: credential.enabled !== false,
+  hasLink: Boolean(credential.token),
+  hasLatestQrLink: Boolean(credential.latestToken),
   refreshIntervalSeconds: Number(credential.refreshIntervalSeconds || 0),
   periodSeconds: Number(credential.periodSeconds || 3600),
   maxUses: Number(credential.maxUses || 1),
@@ -477,11 +479,39 @@ const publicAccessCredential = (credential) => ({
 });
 
 const createAccessToken = () => crypto.randomBytes(32).toString('base64url');
+const canUseLatestQrLink = (credential) => Number(credential?.refreshIntervalSeconds || 0) > 0 && Number(credential?.maxUses || 1) > 1;
 
 const createAccessLink = (req, token) => {
   const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
   const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
   return `${proto}://${host}/a/${token}`;
+};
+
+const createLatestQrLink = (req, token) => {
+  const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+  return `${proto}://${host}/q/${token}`;
+};
+
+const rotateCredentialIfNeeded = (credential, now = new Date()) => {
+  if (!canUseLatestQrLink(credential)) return {credential, rotated: false};
+  const refreshMs = Number(credential.refreshIntervalSeconds || 0) * 1000;
+  const lastRotatedAt = Date.parse(credential.lastRotatedAt || credential.createdAt || credential.validFrom || '');
+  if (!Number.isFinite(lastRotatedAt) || now.getTime() - lastRotatedAt < refreshMs) {
+    return {credential, rotated: false};
+  }
+
+  const token = createAccessToken();
+  return {
+    credential: {
+      ...credential,
+      token,
+      tokenHash: hashToken(token),
+      usedCount: 0,
+      lastRotatedAt: now.toISOString(),
+    },
+    rotated: true,
+  };
 };
 
 const persistAccessEvent = async (event) => {
@@ -2587,22 +2617,31 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
 
     const payload = req.body || {};
     const token = createAccessToken();
+    const refreshIntervalSeconds = Math.max(0, Number(payload.refreshIntervalSeconds || 0) || 0);
+    const maxUses = Math.max(1, Math.min(Number(payload.maxUses || 1) || 1, 100000));
     const now = new Date();
-    const periodSeconds = Math.max(30, Math.min(Number(payload.periodSeconds || 3600) || 3600, 31536000));
+    const requestedValidUntil = payload.validUntil ? new Date(payload.validUntil) : null;
+    const validUntil = requestedValidUntil && Number.isFinite(requestedValidUntil.getTime()) && requestedValidUntil > now
+      ? requestedValidUntil
+      : new Date(now.getTime() + Math.max(30, Math.min(Number(payload.periodSeconds || 3600) || 3600, 31536000)) * 1000);
+    const periodSeconds = Math.max(30, Math.ceil((validUntil.getTime() - now.getTime()) / 1000));
     const credential = {
       id: createId('access-cred'),
       accessId: access.id,
       type: payload.type || 'qr',
       name: String(payload.name || 'QR Code').trim(),
+      token,
       tokenHash: hashToken(token),
+      latestToken: refreshIntervalSeconds > 0 && maxUses > 1 ? createAccessToken() : null,
       enabled: payload.enabled !== false,
-      refreshIntervalSeconds: Math.max(0, Number(payload.refreshIntervalSeconds || 0) || 0),
+      refreshIntervalSeconds,
       periodSeconds,
-      maxUses: Math.max(1, Math.min(Number(payload.maxUses || 1) || 1, 100000)),
+      maxUses,
       usedCount: 0,
       createdAt: now.toISOString(),
       validFrom: now.toISOString(),
-      validUntil: new Date(now.getTime() + periodSeconds * 1000).toISOString(),
+      validUntil: validUntil.toISOString(),
+      lastRotatedAt: now.toISOString(),
       lastUsedAt: null,
     };
     const nextCredentials = [credential, ...accessCredentials];
@@ -2611,6 +2650,7 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
       credential: publicAccessCredential(credential),
       credentials: nextCredentials.map(publicAccessCredential),
       link: createAccessLink(req, token),
+      latestQrLink: credential.latestToken ? createLatestQrLink(req, credential.latestToken) : null,
     });
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -2625,9 +2665,32 @@ app.put('/api/access-credentials/:credentialId', async (req, res) => {
     const nextCredentials = accessCredentials.map((credential) => {
       if (credential.id !== req.params.credentialId) return credential;
       found = true;
+      const nextPeriodSeconds = patch.periodSeconds !== undefined
+        ? Math.max(30, Math.min(Number(patch.periodSeconds || 3600) || 3600, 31536000))
+        : credential.periodSeconds;
+      const requestedValidUntil = patch.validUntil ? new Date(patch.validUntil) : null;
+      const hasValidUntilPatch = requestedValidUntil && Number.isFinite(requestedValidUntil.getTime()) && requestedValidUntil > new Date();
+      const periodChanged = hasValidUntilPatch || (patch.periodSeconds !== undefined && Number(patch.periodSeconds) !== Number(credential.periodSeconds));
+      const nextMaxUses = patch.maxUses !== undefined
+        ? Math.max(1, Math.min(Number(patch.maxUses || 1) || 1, 100000))
+        : credential.maxUses;
+      const nextRefreshIntervalSeconds = patch.refreshIntervalSeconds !== undefined
+        ? Math.max(0, Number(patch.refreshIntervalSeconds || 0) || 0)
+        : Number(credential.refreshIntervalSeconds || 0);
+      const shouldHaveLatestToken = nextRefreshIntervalSeconds > 0 && nextMaxUses > 1;
       return {
         ...credential,
         ...patch,
+        periodSeconds: nextPeriodSeconds,
+        maxUses: nextMaxUses,
+        refreshIntervalSeconds: nextRefreshIntervalSeconds,
+        validUntil: hasValidUntilPatch
+          ? requestedValidUntil.toISOString()
+          : periodChanged
+            ? new Date(Date.now() + nextPeriodSeconds * 1000).toISOString()
+            : credential.validUntil,
+        token: credential.token,
+        latestToken: shouldHaveLatestToken ? (credential.latestToken || createAccessToken()) : null,
         tokenHash: credential.tokenHash,
         usedCount: Number.isFinite(Number(patch.usedCount)) ? Number(patch.usedCount) : credential.usedCount,
       };
@@ -2638,6 +2701,34 @@ app.put('/api/access-credentials/:credentialId', async (req, res) => {
     }
     await patchAccessState({accesses, accessCredentials: nextCredentials});
     res.status(200).json({credentials: nextCredentials.map(publicAccessCredential)});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
+  try {
+    const {accesses, accessCredentials} = await getAccessState();
+    const credential = accessCredentials.find((item) => item.id === req.params.credentialId);
+    if (!credential) {
+      res.status(404).json({error: 'credential not found'});
+      return;
+    }
+    if (!credential.token) {
+      res.status(409).json({error: 'this credential was created before QR link viewing was supported; generate a new QR credential'});
+      return;
+    }
+    const rotated = rotateCredentialIfNeeded(credential, new Date());
+    let nextCredentials = accessCredentials;
+    if (rotated.rotated) {
+      nextCredentials = accessCredentials.map((item) => item.id === credential.id ? rotated.credential : item);
+      await patchAccessState({accesses, accessCredentials: nextCredentials});
+    }
+    res.status(200).json({
+      link: createAccessLink(req, rotated.credential.token),
+      latestQrLink: rotated.credential.latestToken ? createLatestQrLink(req, rotated.credential.latestToken) : null,
+      credentials: nextCredentials.map(publicAccessCredential),
+    });
   } catch (error) {
     res.status(500).json({error: error.message});
   }
@@ -3014,9 +3105,15 @@ app.put('/api/state', async (req, res) => {
         if (!current) return credential;
         const currentUsedCount = Number(current.usedCount || 0);
         const incomingUsedCount = Number(credential.usedCount || 0);
-        return currentUsedCount > incomingUsedCount
-          ? {...credential, usedCount: currentUsedCount, lastUsedAt: current.lastUsedAt || credential.lastUsedAt}
-          : credential;
+        return {
+          ...credential,
+          token: current.token,
+          tokenHash: current.tokenHash,
+          latestToken: current.latestToken,
+          lastRotatedAt: current.lastRotatedAt || credential.lastRotatedAt,
+          usedCount: Math.max(currentUsedCount, incomingUsedCount),
+          lastUsedAt: current.lastUsedAt || credential.lastUsedAt,
+        };
       });
     }
     await setAppState('dashboard_state', incomingState);
@@ -3117,6 +3214,47 @@ app.get('/api/workflow-live/:workflowId', async (req, res) => {
     res.status(200).json({live: state});
   } catch (error) {
     res.status(500).json({error: error.message, live: null});
+  }
+});
+
+app.get('/q/:token', async (req, res) => {
+  try {
+    const now = new Date();
+    const {accesses, accessCredentials} = await getAccessState();
+    const credential = accessCredentials.find((item) => item.latestToken === req.params.token && item.type === 'qr');
+    const access = credential ? accesses.find((item) => item.id === credential.accessId) : null;
+    const sendPage = (title, body) => {
+      res.status(200).send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0f1115;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}.card{max-width:420px;width:calc(100% - 32px);background:#1c2128;border:1px solid #273244;border-radius:12px;padding:24px;text-align:center}.qr{background:#fff;border-radius:8px;padding:10px;width:220px;height:220px}.link{word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#cbd5e1}.muted{color:#94a3b8;font-size:13px}</style></head><body><main class="card">${body}</main></body></html>`);
+    };
+
+    if (!credential || !access) {
+      sendPage('QR unavailable', '<h1>QR unavailable</h1><p class="muted">This latest QR link was not found.</p>');
+      return;
+    }
+    if (credential.maxUses <= 1 || !canUseLatestQrLink(credential)) {
+      sendPage('QR unavailable', '<h1>QR unavailable</h1><p class="muted">One-time QR credentials do not expose a latest QR link.</p>');
+      return;
+    }
+    if (access.enabled === false || credential.enabled === false) {
+      sendPage('QR disabled', '<h1>QR disabled</h1><p class="muted">This access or QR credential is disabled.</p>');
+      return;
+    }
+    if (credential.validUntil && now > new Date(credential.validUntil)) {
+      sendPage('QR expired', '<h1>QR expired</h1><p class="muted">This QR credential has expired.</p>');
+      return;
+    }
+
+    const rotated = rotateCredentialIfNeeded(credential, now);
+    if (rotated.rotated) {
+      const nextCredentials = accessCredentials.map((item) => item.id === credential.id ? rotated.credential : item);
+      await patchAccessState({accesses, accessCredentials: nextCredentials});
+    }
+
+    const accessLink = createAccessLink(req, rotated.credential.token);
+    const expiresAt = rotated.credential.validUntil ? new Date(rotated.credential.validUntil).toLocaleString() : 'No expiry';
+    sendPage('Latest QR Code', `<h1>${rotated.credential.name || 'Latest QR Code'}</h1><p class="muted">Scan this QR code. It refreshes every ${rotated.credential.refreshIntervalSeconds}s.</p><img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(accessLink)}" alt="Latest QR"><p class="link">${accessLink}</p><p class="muted">Usage this period: ${rotated.credential.usedCount || 0}/${rotated.credential.maxUses || 1}<br>Valid until: ${expiresAt}</p>`);
+  } catch (error) {
+    res.status(500).send(`<!doctype html><html><head><title>QR error</title></head><body><h1>QR error</h1><p>${error.message}</p></body></html>`);
   }
 });
 
