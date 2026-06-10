@@ -8,8 +8,9 @@ import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import type { Device } from '../types';
 
-const CANVAS_WIDTH = 1100;
-const CANVAS_HEIGHT = 620;
+const CANVAS_WIDTH = 2200;
+const CANVAS_HEIGHT = 1400;
+const CANVAS_ZOOM_OPTIONS = [0.35, 0.5, 0.75, 1, 1.25, 1.5, 2];
 const SNAP_DISTANCE = 28;
 const DETACH_DISTANCE = 52;
 
@@ -180,7 +181,7 @@ const getPrimitiveCenter = (primitive: ScadaShapePrimitive) => ({
 });
 const embeddedSvgCache = new Map<string, { body: string; viewBox: { x: number; y: number; width: number; height: number } }>();
 const getEmbeddedSvg = (svg = '') => {
-  if (embeddedSvgCache.has(svg)) return embeddedSvgCache.get(svg);
+  if (embeddedSvgCache.has(svg)) return embeddedSvgCache.get(svg)!;
   const viewBoxMatch = svg.match(/\bviewBox=["']([^"']+)["']/i);
   const values = (viewBoxMatch?.[1] || '0 0 100 100').split(/[\s,]+/).map(Number);
   const viewBox = {
@@ -254,7 +255,9 @@ export function ScadaView() {
   const [selectedPrimitiveId, setSelectedPrimitiveId] = useState('');
   const [selectedEndpointId, setSelectedEndpointId] = useState('');
   const [selectedIconPresetId, setSelectedIconPresetId] = useState(scadaIconPresets[0]?.id || '');
+  const [importedIconPresets, setImportedIconPresets] = useState<Array<{ id: string; name: string; url?: string; svg?: string }>>([]);
   const [svgIconMarkupByUrl, setSvgIconMarkupByUrl] = useState<Record<string, string>>({});
+  const [canvasZoom, setCanvasZoom] = useState(0.75);
   const [shapeEditorDragState, setShapeEditorDragState] = useState<ShapeEditorDragState | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const shapeEditorSvgRef = useRef<SVGSVGElement | null>(null);
@@ -302,6 +305,19 @@ export function ScadaView() {
       cancelled = true;
     };
   }, [shapeManagerOpen, scadaShapePresets, editingShape, svgIconMarkupByUrl]);
+
+  const allScadaIconPresets = useMemo(
+    () => [...importedIconPresets, ...scadaIconPresets],
+    [importedIconPresets]
+  );
+  const stepCanvasZoom = (direction: 1 | -1) => {
+    setCanvasZoom((current) => {
+      const currentIndex = CANVAS_ZOOM_OPTIONS.findIndex((value) => value >= current);
+      const safeIndex = currentIndex >= 0 ? currentIndex : CANVAS_ZOOM_OPTIONS.length - 1;
+      const nextIndex = Math.max(0, Math.min(CANVAS_ZOOM_OPTIONS.length - 1, safeIndex + direction));
+      return CANVAS_ZOOM_OPTIONS[nextIndex];
+    });
+  };
 
   const siteDevices = useMemo(
     () => devices.filter((device) => !activeSite || device.siteId === activeSite.id || device.tags?.includes(activeSite.id)),
@@ -547,13 +563,37 @@ export function ScadaView() {
   };
 
   const addEditingIconPreset = () => {
-    const preset = scadaIconPresets.find((item) => item.id === selectedIconPresetId) || scadaIconPresets[0];
+    const preset = allScadaIconPresets.find((item) => item.id === selectedIconPresetId) || allScadaIconPresets[0];
     if (!preset) return;
     const primitive = {
       ...createPrimitive('svgIcon'),
       iconUrl: preset.url,
-      iconSvg: svgIconMarkupByUrl[preset.url],
+      iconSvg: preset.svg || svgIconMarkupByUrl[preset.url || ''],
       iconName: preset.name,
+    };
+    setEditingShape((current) => current ? { ...current, primitives: [...current.primitives, primitive] } : current);
+    setSelectedPrimitiveId(primitive.id);
+    setSelectedEndpointId('');
+  };
+
+  const importSvgPreset = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.svg')) return;
+    const svg = await file.text();
+    const name = file.name.replace(/\.svg$/i, '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Imported SVG';
+    const preset = {
+      id: `imported-svg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      svg,
+    };
+    setImportedIconPresets((current) => [preset, ...current]);
+    setSelectedIconPresetId(preset.id);
+    const primitive = {
+      ...createPrimitive('svgIcon'),
+      iconSvg: svg,
+      iconName: name,
+      fillMode: 'custom' as const,
+      fillColor: '#f97316',
+      strokeMode: 'none' as const,
     };
     setEditingShape((current) => current ? { ...current, primitives: [...current.primitives, primitive] } : current);
     setSelectedPrimitiveId(primitive.id);
@@ -684,6 +724,7 @@ export function ScadaView() {
   const activateInnerPart = (event: React.MouseEvent, element: ScadaElement, part: ScadaEditablePart) => {
     if (!editMode || (element.type !== 'device' && element.type !== 'metric')) return;
     if (part === 'icon' && element.type !== 'device') return;
+    event.preventDefault();
     event.stopPropagation();
     setSelectedElementId(element.id);
     setActiveInnerPart({ id: element.id, part });
@@ -795,8 +836,20 @@ export function ScadaView() {
     }
 
     if (dragState.type === 'resize') {
-      const nextWidth = Math.max(60, Math.min(CANVAS_WIDTH, dragState.startWidth + point.x - dragState.startX));
-      const nextHeight = Math.max(36, Math.min(CANVAS_HEIGHT, dragState.startHeight + point.y - dragState.startY));
+      let nextWidth = Math.max(60, Math.min(CANVAS_WIDTH, dragState.startWidth + point.x - dragState.startX));
+      let nextHeight = Math.max(36, Math.min(CANVAS_HEIGHT, dragState.startHeight + point.y - dragState.startY));
+      if (event.shiftKey) {
+        const ratio = dragState.startWidth / Math.max(1, dragState.startHeight);
+        const widthDrivenHeight = nextWidth / ratio;
+        const heightDrivenWidth = nextHeight * ratio;
+        if (Math.abs(nextWidth - dragState.startWidth) >= Math.abs(nextHeight - dragState.startHeight)) {
+          nextHeight = widthDrivenHeight;
+        } else {
+          nextWidth = heightDrivenWidth;
+        }
+        nextWidth = Math.max(60, Math.min(CANVAS_WIDTH, nextWidth));
+        nextHeight = Math.max(36, Math.min(CANVAS_HEIGHT, nextHeight));
+      }
       updateElement(dragState.id, {
         width: Math.round(nextWidth),
         height: Math.round(nextHeight),
@@ -930,6 +983,7 @@ export function ScadaView() {
         onClick={(event) => canEdit && event.stopPropagation()}
         onDoubleClick={(event) => activateInnerPart(event, element, part)}
         onPointerDown={(event) => handleInnerPartPointerDown(event, element, part)}
+        style={{ userSelect: 'none' }}
       >
         <text
           x={element.x + (layout.x || 0)}
@@ -938,6 +992,7 @@ export function ScadaView() {
           fontSize={fontSize}
           fontWeight={options.fontWeight}
           fontFamily={options.fontFamily}
+          style={{ userSelect: 'none' }}
         >
           {text}
         </text>
@@ -1706,17 +1761,42 @@ export function ScadaView() {
                       <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Preset Shapes</div>
                       <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
                         <select value={selectedIconPresetId} onChange={(event) => setSelectedIconPresetId(event.target.value)} className="h-9 rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                          {scadaIconPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                          {allScadaIconPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
                         </select>
-                        <button type="button" onClick={addEditingIconPreset} className="rounded bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600">
-                          Add Preset
-                        </button>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={addEditingIconPreset} className="rounded bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600">
+                            Add Preset
+                          </button>
+                          <label className="inline-flex cursor-pointer items-center justify-center rounded border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">
+                            Import SVG
+                            <input
+                              type="file"
+                              accept=".svg,image/svg+xml"
+                              className="hidden"
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (file) importSvgPreset(file);
+                                event.currentTarget.value = '';
+                              }}
+                            />
+                          </label>
+                        </div>
                       </div>
                       <div className="mt-2 max-h-24 overflow-auto rounded bg-slate-950 p-2">
                         <div className="grid grid-cols-8 gap-2">
-                          {scadaIconPresets.slice(0, 32).map((preset) => (
+                          {allScadaIconPresets.slice(0, 32).map((preset) => (
                             <button key={preset.id} type="button" onClick={() => setSelectedIconPresetId(preset.id)} className={cn('flex h-8 items-center justify-center rounded border bg-white p-1', selectedIconPresetId === preset.id ? 'border-orange-500' : 'border-slate-700')}>
-                              <img src={preset.url} alt={preset.name} className="h-full w-full object-contain" />
+                              {preset.svg ? (
+                                <svg viewBox="0 0 100 100" className="h-full w-full text-orange-500">
+                                  <g
+                                    transform={`translate(0 0) scale(${100 / getEmbeddedSvg(preset.svg)?.viewBox.width} ${100 / getEmbeddedSvg(preset.svg)?.viewBox.height}) translate(${-(getEmbeddedSvg(preset.svg)?.viewBox.x || 0)} ${-(getEmbeddedSvg(preset.svg)?.viewBox.y || 0)})`}
+                                    fill="currentColor"
+                                    dangerouslySetInnerHTML={{ __html: getEmbeddedSvg(preset.svg)?.body || '' }}
+                                  />
+                                </svg>
+                              ) : (
+                                <img src={preset.url || ''} alt={preset.name} className="h-full w-full object-contain" />
+                              )}
                             </button>
                           ))}
                         </div>
@@ -1802,14 +1882,14 @@ export function ScadaView() {
                           <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
                             Preset Shape
                             <select
-                              value={scadaIconPresets.find((preset) => preset.url === selectedPrimitive.iconUrl)?.id || ''}
+                              value={allScadaIconPresets.find((preset) => (preset.url && preset.url === selectedPrimitive.iconUrl) || (preset.svg && preset.svg === selectedPrimitive.iconSvg))?.id || ''}
                               onChange={(event) => {
-                                const preset = scadaIconPresets.find((item) => item.id === event.target.value);
-                                if (preset) updateEditingPrimitive(selectedPrimitive.id, { iconUrl: preset.url, iconSvg: svgIconMarkupByUrl[preset.url], iconName: preset.name });
+                                const preset = allScadaIconPresets.find((item) => item.id === event.target.value);
+                                if (preset) updateEditingPrimitive(selectedPrimitive.id, { iconUrl: preset.url, iconSvg: preset.svg || svgIconMarkupByUrl[preset.url || ''], iconName: preset.name });
                               }}
                               className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                             >
-                              {scadaIconPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                              {allScadaIconPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
                             </select>
                           </label>
                         )}
@@ -2051,6 +2131,31 @@ export function ScadaView() {
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{activeSite.name} dynamic operations map driven by realtime telemetry.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex h-9 items-center overflow-hidden rounded border border-slate-300 bg-white text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+            <button
+              type="button"
+              onClick={() => stepCanvasZoom(-1)}
+              className="h-full px-3 hover:bg-slate-50 dark:hover:bg-slate-800"
+            >
+              -
+            </button>
+            <select
+              value={canvasZoom}
+              onChange={(event) => setCanvasZoom(Number(event.target.value))}
+              className="h-full border-x border-slate-200 bg-transparent px-2 text-sm dark:border-slate-700"
+            >
+              {CANVAS_ZOOM_OPTIONS.map((value) => (
+                <option key={value} value={value}>{Math.round(value * 100)}%</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => stepCanvasZoom(1)}
+              className="h-full px-3 hover:bg-slate-50 dark:hover:bg-slate-800"
+            >
+              +
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => setEditMode((value) => !value)}
@@ -2075,7 +2180,13 @@ export function ScadaView() {
             <svg
               ref={svgRef}
               viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
-              className="min-h-[520px] w-full min-w-[900px] touch-none bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:22px_22px]"
+              className="max-w-none touch-none bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:22px_22px]"
+              style={{
+                width: `${CANVAS_WIDTH * canvasZoom}px`,
+                height: `${CANVAS_HEIGHT * canvasZoom}px`,
+                minWidth: '900px',
+                minHeight: '520px',
+              }}
               onPointerMove={handlePointerMove}
               onPointerUp={() => setDragState(null)}
               onPointerLeave={() => setDragState(null)}
@@ -2098,8 +2209,8 @@ export function ScadaView() {
                 </marker>
               </defs>
               <rect x="0" y="0" width={CANVAS_WIDTH} height={CANVAS_HEIGHT} fill="url(#scada-bg)" opacity="0.72" />
-              <rect x="36" y="110" width="1028" height="420" rx="18" fill="rgba(15,23,42,0.46)" stroke="#1e293b" strokeWidth="2" />
-              <text x="54" y="558" fill="#64748b" fontSize="12">Click devices to open details. Enable Edit Mode to move and bind elements.</text>
+              <rect x="36" y="110" width={CANVAS_WIDTH - 72} height={CANVAS_HEIGHT - 190} rx="18" fill="rgba(15,23,42,0.46)" stroke="#1e293b" strokeWidth="2" />
+              <text x="54" y={CANVAS_HEIGHT - 62} fill="#64748b" fontSize="12">Click devices to open details. Enable Edit Mode to move and bind elements.</text>
               {draft.elements.map(renderElement)}
               {renderDeviceAnchors()}
             </svg>
