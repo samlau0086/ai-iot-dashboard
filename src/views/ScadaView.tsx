@@ -87,7 +87,16 @@ const scadaIconByDeviceType: Record<string, string> = {
   temperature_sensor: 'thermometer',
 };
 
-const getScadaDeviceIcon = (device?: Device) => getDeviceIcon(device?.icon || scadaIconByDeviceType[device?.type || ''] || 'server');
+const getScadaDeviceIcon = (device?: Device) => getDeviceIcon(
+  device?.scadaIcon?.mode === 'preset'
+    ? device.scadaIcon.iconId
+    : scadaIconByDeviceType[device?.type || ''] || 'server'
+);
+const getScadaSvgHref = (device?: Device) => (
+  device?.scadaIcon?.mode === 'svg' && device.scadaIcon.svg
+    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(device.scadaIcon.svg)}`
+    : ''
+);
 
 const isLineElement = (element: ScadaElement) => element.type === 'pipe' || element.type === 'power';
 const getElementSize = (element: ScadaElement) => ({
@@ -332,6 +341,7 @@ export function ScadaView() {
     const x = element.x;
     const y = element.y;
     const Icon = getScadaDeviceIcon(device);
+    const svgHref = getScadaSvgHref(device);
     const stroke = isSelected ? '#fb923c' : style.stroke;
     const commonProps = {
       fill: style.fill,
@@ -343,6 +353,11 @@ export function ScadaView() {
     const iconX = x + width / 2 - iconSize / 2;
     const iconY = y + Math.max(16, height * 0.34 - iconSize / 2);
     const deviceType = device?.type || 'default';
+    const renderIcon = (iconOverrideX = iconX, iconOverrideY = iconY, size = iconSize) => (
+      svgHref
+        ? <image href={svgHref} x={iconOverrideX} y={iconOverrideY} width={size} height={size} preserveAspectRatio="xMidYMid meet" />
+        : <Icon x={iconOverrideX} y={iconOverrideY} width={size} height={size} color={style.text} strokeWidth={2.2} />
+    );
 
     if (deviceType === 'air_compressor') {
       return (
@@ -351,7 +366,7 @@ export function ScadaView() {
           <circle cx={x + width - 28} cy={y + 20} r={12} fill="#0f172a" stroke={stroke} strokeWidth="2" />
           <line x1={x + 34} y1={y + height - 16} x2={x + 34} y2={y + height - 8} stroke={stroke} strokeWidth="3" strokeLinecap="round" />
           <line x1={x + width - 34} y1={y + height - 16} x2={x + width - 34} y2={y + height - 8} stroke={stroke} strokeWidth="3" strokeLinecap="round" />
-          <Icon x={iconX} y={iconY} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+          {renderIcon()}
         </>
       );
     }
@@ -363,7 +378,7 @@ export function ScadaView() {
           <circle cx={x + 46} cy={y + height / 2} r={radius} {...commonProps} />
           <rect x={x + 58} y={y + height * 0.28} width={width - 72} height={height * 0.44} rx={8} {...commonProps} />
           <circle cx={x + 46} cy={y + height / 2} r={radius * 0.42} fill="#020617" stroke={stroke} strokeWidth="2" />
-          <Icon x={x + width - iconSize - 22} y={iconY} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+          {renderIcon(x + width - iconSize - 22, iconY)}
         </>
       );
     }
@@ -375,7 +390,7 @@ export function ScadaView() {
         <>
           <rect x={sensorX} y={y + 8} width={sensorWidth} height={height - 16} rx={sensorWidth / 2} {...commonProps} />
           <circle cx={x + width / 2} cy={y + height - 24} r={sensorWidth * 0.28} fill="#020617" stroke={stroke} strokeWidth="2" />
-          <Icon x={iconX} y={y + 18} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+          {renderIcon(iconX, y + 18)}
         </>
       );
     }
@@ -388,7 +403,7 @@ export function ScadaView() {
           <circle cx={x + 32} cy={y + height - 22} r={4} fill={style.badge} />
           <circle cx={x + 46} cy={y + height - 22} r={4} fill="#334155" />
           <circle cx={x + 60} cy={y + height - 22} r={4} fill="#334155" />
-          <Icon x={iconX} y={iconY + 2} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+          {renderIcon(iconX, iconY + 2)}
         </>
       );
     }
@@ -399,7 +414,7 @@ export function ScadaView() {
           <rect x={x + 14} y={y + 8} width={width - 28} height={height - 16} rx={8} {...commonProps} />
           <rect x={x + 28} y={y + 22} width={width - 56} height={18} rx={4} fill="#020617" stroke="rgba(148,163,184,0.35)" />
           <line x1={x + 28} y1={y + height - 22} x2={x + width - 28} y2={y + height - 22} stroke={stroke} strokeWidth="2" strokeDasharray="4 4" />
-          <Icon x={iconX} y={iconY + 4} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+          {renderIcon(iconX, iconY + 4)}
         </>
       );
     }
@@ -407,7 +422,7 @@ export function ScadaView() {
     return (
       <>
         <rect x={x} y={y} width={width} height={height} rx={10} {...commonProps} />
-        <Icon x={iconX} y={iconY} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+        {renderIcon()}
       </>
     );
   };

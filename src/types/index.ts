@@ -87,6 +87,12 @@ export interface Device {
   lastSeen: string;
   firmwareVersion: string;
   icon?: string;
+  scadaIcon?: {
+    mode: 'auto' | 'preset' | 'svg';
+    iconId?: string;
+    svg?: string;
+    fileName?: string;
+  };
   config?: DeviceConfig;
 }
 

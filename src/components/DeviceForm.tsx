@@ -3,7 +3,7 @@ import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { Device, DeviceType } from '../types';
 import { IOT_ICONS } from '../lib/icons';
-import { ArrowLeft, Copy } from 'lucide-react';
+import { ArrowLeft, Copy, Upload, X } from 'lucide-react';
 
 interface DeviceFormProps {
   deviceId?: string; // If provided, it's edit mode
@@ -22,6 +22,18 @@ const INDUSTRIAL_PROTOCOL_OPTIONS = [
   'WiFi',
   'Manual / Mock',
 ];
+
+const sanitizeSvgIcon = (svg: string) => svg
+  .replace(/<script[\s\S]*?<\/script>/gi, '')
+  .replace(/\son\w+="[^"]*"/gi, '')
+  .replace(/\son\w+='[^']*'/gi, '')
+  .trim();
+
+const SCADA_ICON_MODES = [
+  { mode: 'auto', label: 'Auto by Type' },
+  { mode: 'preset', label: 'Preset Icon' },
+  { mode: 'svg', label: 'Uploaded SVG' },
+] as const;
 
 export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   const { language, devices, addDevice, updateDevice, currentUser, sites, activeSiteId } = useAppStore();
@@ -54,6 +66,7 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   
   const [tagInput, setTagInput] = useState('');
   const [copyMessage, setCopyMessage] = useState('');
+  const [scadaIconMessage, setScadaIconMessage] = useState('');
 
   const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === 'Tab') {
@@ -205,6 +218,9 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
   };
 
   const buildTelemetryExample = () => configData.dataSource === 'mqtt' ? buildMqttExample() : buildCurlRequest();
+  const scadaSvgPreview = formData.scadaIcon?.mode === 'svg' && formData.scadaIcon.svg
+    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(formData.scadaIcon.svg)}`
+    : '';
 
   const handleCopyTelemetryExample = async () => {
     setCopyMessage('');
@@ -214,6 +230,40 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
     } catch (error) {
       setCopyMessage('Copy failed. Select the example text and copy it manually.');
     }
+  };
+
+  const handleScadaSvgUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    setScadaIconMessage('');
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.svg') && file.type !== 'image/svg+xml') {
+      setScadaIconMessage('Please upload an SVG file.');
+      return;
+    }
+    if (file.size > 80 * 1024) {
+      setScadaIconMessage('SVG icon must be smaller than 80 KB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const svg = sanitizeSvgIcon(String(reader.result || ''));
+      if (!svg.startsWith('<svg') || !svg.includes('</svg>')) {
+        setScadaIconMessage('Invalid SVG file.');
+        return;
+      }
+      setFormData((prev) => ({
+        ...prev,
+        scadaIcon: {
+          mode: 'svg',
+          svg,
+          fileName: file.name,
+        },
+      }));
+      setScadaIconMessage(`${file.name} uploaded for SCADA.`);
+    };
+    reader.onerror = () => setScadaIconMessage('Failed to read SVG file.');
+    reader.readAsText(file);
   };
 
   const handleSave = () => {
@@ -236,6 +286,7 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
       status: existingDevice?.status || 'offline',
       lastSeen: existingDevice?.lastSeen || new Date().toISOString(),
       firmwareVersion: existingDevice?.firmwareVersion || 'v1.0.0',
+      scadaIcon: formData.scadaIcon,
       metrics: existingDevice?.metrics || {}
     };
 
@@ -543,8 +594,93 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
             })}
           </div>
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-            Used in device lists, device details, control panels, and the SCADA operations view.
+            Used in device lists, device details, and control panels.
           </p>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/40">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">SCADA Icon</label>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Dedicated icon for SCADA operations. It does not affect the normal device icon.
+              </p>
+            </div>
+            {scadaSvgPreview && (
+              <div className="flex h-16 w-16 items-center justify-center rounded-md border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-950">
+                <img src={scadaSvgPreview} alt="SCADA SVG preview" className="max-h-full max-w-full" />
+              </div>
+            )}
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {SCADA_ICON_MODES.map((option) => (
+              <button
+                key={option.mode}
+                type="button"
+                onClick={() => setFormData((prev) => ({
+                  ...prev,
+                  scadaIcon: option.mode === 'auto'
+                    ? { mode: 'auto' }
+                    : option.mode === 'preset'
+                      ? { mode: 'preset', iconId: prev.scadaIcon?.iconId || prev.icon || 'server' }
+                      : { mode: 'svg', svg: prev.scadaIcon?.svg, fileName: prev.scadaIcon?.fileName },
+                }))}
+                className={`rounded-md border px-3 py-2 text-xs font-semibold transition-colors ${
+                  (formData.scadaIcon?.mode || 'auto') === option.mode
+                    ? 'border-orange-500 bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-300'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          {(formData.scadaIcon?.mode || 'auto') === 'preset' && (
+            <div className="mt-3 flex flex-wrap gap-3">
+              {Object.keys(IOT_ICONS).map((iconId) => {
+                const IconComp = IOT_ICONS[iconId];
+                return (
+                  <button
+                    key={`scada-${iconId}`}
+                    type="button"
+                    onClick={() => setFormData((prev) => ({ ...prev, scadaIcon: { mode: 'preset', iconId } }))}
+                    className={`rounded-md border p-3 transition-colors ${
+                      formData.scadaIcon?.iconId === iconId
+                        ? 'border-orange-500 bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-500'
+                        : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <IconComp className="h-5 w-5" />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {(formData.scadaIcon?.mode || 'auto') === 'svg' && (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800">
+                <Upload className="h-4 w-4 text-orange-500" />
+                Upload SVG
+                <input type="file" accept=".svg,image/svg+xml" className="hidden" onChange={handleScadaSvgUpload} />
+              </label>
+              {formData.scadaIcon?.fileName && (
+                <span className="inline-flex items-center gap-2 rounded bg-slate-200 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                  {formData.scadaIcon.fileName}
+                  <button
+                    type="button"
+                    onClick={() => setFormData((prev) => ({ ...prev, scadaIcon: { mode: 'svg' } }))}
+                    className="text-slate-500 hover:text-red-500"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              )}
+              {scadaIconMessage && <span className="text-xs text-slate-500 dark:text-slate-400">{scadaIconMessage}</span>}
+            </div>
+          )}
         </div>
 
         {/* Config / Advanced */}
