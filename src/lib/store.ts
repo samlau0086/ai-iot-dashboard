@@ -211,7 +211,7 @@ export interface ScadaShapePrimitive {
     centerY?: number;
   };
   animation?: {
-    type?: 'none' | 'rotate' | 'scale' | 'translate' | 'visibility';
+    type?: 'none' | 'rotate' | 'scale' | 'translate' | 'visibility' | 'pulse' | 'strokeFlow';
     trigger?: 'always' | 'deviceOnline' | 'metricNonZero' | 'metricGreaterThan' | 'metricEquals' | 'deviceStatus';
     metricKey?: string;
     operatorValue?: string | number;
@@ -282,6 +282,9 @@ export interface ScadaElement {
     start?: { elementId: string; anchor: string };
     end?: { elementId: string; anchor: string };
   };
+  lineWidth?: number;
+  lineAnimation?: 'none' | 'flow' | 'pulse' | 'glow';
+  lineAnimationSpeed?: number;
   deviceId?: string;
   metricKey?: string;
   unit?: string;

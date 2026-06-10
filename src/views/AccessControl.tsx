@@ -313,7 +313,7 @@ export function AccessControl() {
 
   const removeAccess = async (accessId: string) => {
     const access = accesses.find((item) => item.id === accessId);
-    if (!confirmDelete({ title: 'Delete access', itemName: access?.name || 'this access', description: 'Credentials, QR/NFC links, and access records for this access will be removed.' })) return;
+    if (!(await confirmDelete({ title: 'Delete access', itemName: access?.name || 'this access', description: 'Credentials, QR/NFC links, and access records for this access will be removed.' }))) return;
     const response = await fetch(`/api/accesses/${accessId}`, { method: 'DELETE' });
     const payload = await response.json();
     if (!response.ok) {
@@ -425,7 +425,7 @@ export function AccessControl() {
 
   const deleteCredential = async (credentialId: string) => {
     const credential = accessCredentials.find((item) => item.id === credentialId);
-    if (!confirmDelete({ title: 'Delete credential', itemName: credential?.name || 'this credential', description: 'The credential link and related access logs will be removed.' })) return;
+    if (!(await confirmDelete({ title: 'Delete credential', itemName: credential?.name || 'this credential', description: 'The credential link and related access logs will be removed.' }))) return;
     const response = await fetch(`/api/access-credentials/${credentialId}`, { method: 'DELETE' });
     const payload = await response.json();
     if (response.ok) {
@@ -437,11 +437,11 @@ export function AccessControl() {
 
   const clearAccessEvents = async () => {
     if (!selectedAccess) return;
-    if (!confirmDelete({
+    if (!(await confirmDelete({
       title: 'Clear access records',
       itemName: eventCredentialFilter ? 'records for the selected credential' : `all records for ${selectedAccess.name}`,
       description: 'Access history will be permanently cleared.',
-    })) return;
+    }))) return;
     const params = new URLSearchParams({ accessId: selectedAccess.id });
     if (eventCredentialFilter) params.set('credentialId', eventCredentialFilter);
     const response = await fetch(`/api/access-events?${params.toString()}`, { method: 'DELETE' });

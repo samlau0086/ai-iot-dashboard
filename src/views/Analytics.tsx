@@ -73,7 +73,9 @@ export function Analytics() {
         {charts.map((chartConf) => (
           <div key={chartConf.id} className="bg-white dark:bg-[#1c2128] p-6 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm relative group">
             <button 
-              onClick={() => confirmDelete({ title: 'Delete chart', itemName: chartConf.title || 'this chart', description: 'The chart report configuration will be removed.' }) && removeChart(chartConf.id)}
+              onClick={async () => {
+                if (await confirmDelete({ title: 'Delete chart', itemName: chartConf.title || 'this chart', description: 'The chart report configuration will be removed.' })) removeChart(chartConf.id);
+              }}
               className="absolute top-4 right-4 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity z-10 block"
             >
               ×

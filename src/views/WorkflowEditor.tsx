@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAppStore, Workflow, WorkflowEdge, WorkflowNode, type AccessDefinition } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
@@ -496,16 +496,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeDraft, setSelectedNodeDraft] = useState<WorkflowNode | null>(null);
   const [nodeSettingsDirty, setNodeSettingsDirty] = useState(false);
-  const [liveMode, setLiveMode] = useState(false);
-  const [liveState, setLiveState] = useState<any>(null);
-  const [liveNodeId, setLiveNodeId] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [workflowLogs, setWorkflowLogs] = useState<WorkflowRunLog[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState('');
-  const lastLiveRunKeyRef = useRef('');
-  const liveReplayTimersRef = useRef<number[]>([]);
 
   const triggerNodes = draft.nodes.filter(n => n.type === 'trigger');
   const otherNodes = draft.nodes.filter(n => n.type !== 'trigger');
@@ -640,71 +635,6 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     }
   }, [workflowId, workflows, isNew]);
 
-  useEffect(() => {
-    return () => {
-      liveReplayTimersRef.current.forEach(window.clearTimeout);
-      liveReplayTimersRef.current = [];
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!liveMode) {
-      liveReplayTimersRef.current.forEach(window.clearTimeout);
-      liveReplayTimersRef.current = [];
-      setLiveState(null);
-      setLiveNodeId(null);
-      return;
-    }
-
-    let stopped = false;
-    const loadLiveState = async () => {
-      try {
-        const response = await fetch(`/api/workflow-live/${draft.id}`);
-        const payload = await response.json();
-        if (stopped) return;
-
-        const live = payload.live || null;
-        setLiveState(live);
-        if (!live) {
-          setLiveNodeId(null);
-          return;
-        }
-
-        if (live.status === 'running' && live.currentNodeId) {
-          liveReplayTimersRef.current.forEach(window.clearTimeout);
-          liveReplayTimersRef.current = [];
-          lastLiveRunKeyRef.current = live.runId || '';
-          setLiveNodeId(live.currentNodeId);
-          return;
-        }
-
-        const steps = Array.isArray(live.steps) ? live.steps : [];
-        const runKey = `${live.runId || ''}:${live.finishedAt || live.updatedAt || ''}:${steps.length}`;
-        if (steps.length > 0 && runKey !== lastLiveRunKeyRef.current) {
-          lastLiveRunKeyRef.current = runKey;
-          liveReplayTimersRef.current.forEach(window.clearTimeout);
-          liveReplayTimersRef.current = [];
-          steps.forEach((step: any, index: number) => {
-            const timer = window.setTimeout(() => setLiveNodeId(step.nodeId), index * 450);
-            liveReplayTimersRef.current.push(timer);
-          });
-          const clearTimer = window.setTimeout(() => setLiveNodeId(null), steps.length * 450 + 900);
-          liveReplayTimersRef.current.push(clearTimer);
-        }
-      } catch {
-        if (!stopped) setLiveState(null);
-      }
-    };
-
-    loadLiveState();
-    const timer = window.setInterval(loadLiveState, 1000);
-
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-  }, [liveMode, draft.id]);
-
   const loadWorkflowLogs = async () => {
     setLogsLoading(true);
     setLogsError('');
@@ -719,6 +649,28 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       setWorkflowLogs([]);
       setSelectedRunId('');
       setLogsError(error instanceof Error ? error.message : 'Failed to load workflow logs.');
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  const clearWorkflowLogs = async () => {
+    if (!(await confirmDelete({
+      title: 'Clear workflow logs',
+      itemName: draft.name || 'this workflow',
+      description: 'All saved execution logs for this workflow will be removed.',
+      confirmLabel: 'Clear Logs',
+    }))) return;
+    setLogsLoading(true);
+    setLogsError('');
+    try {
+      const response = await fetch(`/api/workflow-runs?workflowId=${encodeURIComponent(draft.id)}`, { method: 'DELETE' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Failed to clear workflow logs.');
+      setWorkflowLogs([]);
+      setSelectedRunId('');
+    } catch (error) {
+      setLogsError(error instanceof Error ? error.message : 'Failed to clear workflow logs.');
     } finally {
       setLogsLoading(false);
     }
@@ -999,16 +951,16 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     setShowSelector({ show: false, insertIndex: 0 });
   };
 
-  const deleteNode = (id: string, e: React.MouseEvent) => {
+  const deleteNode = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const targetNode = draft.nodes.find((node) => node.id === id);
-    if (!confirmDelete({
+    if (!(await confirmDelete({
       title: 'Delete workflow node',
       itemName: targetNode?.name || targetNode?.config?.type || 'this node',
       description: targetNode?.type === 'condition'
         ? 'Related branch nodes may also be removed.'
         : 'This node will be removed from the workflow graph.',
-    })) return;
+    }))) return;
     const idsToDelete = new Set<string>([id]);
 
     if (targetNode?.type === 'condition' && branchConditionTypes.has(targetNode.config.type)) {
@@ -1051,7 +1003,6 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
           isTrigger && !isSelected && "border-orange-200 dark:border-orange-900/50",
           isCondition && !isSelected && !isLogic && "border-indigo-200 dark:border-indigo-900/50",
           isLogic && !isSelected && "border-purple-300 dark:border-purple-800",
-          liveMode && liveNodeId === node.id && "workflow-live-node border-emerald-400 dark:border-emerald-400 shadow-emerald-500/20"
         )}
       >
         <div className="flex items-center gap-4 min-w-0">
@@ -1391,28 +1342,6 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             >
               <ListTree className="h-4 w-4" />
               Logs
-            </button>
-            {liveMode && (
-              <span className="hidden md:inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
-                {liveState?.status === 'running'
-                  ? `Running${liveState?.currentNodeId ? `: ${draft.nodes.find((node) => node.id === liveState.currentNodeId)?.name || liveState.currentNodeId}` : ''}`
-                  : liveState?.status
-                    ? `Last run: ${liveState.status}`
-                    : 'Waiting for trigger'}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={() => setLiveMode((value) => !value)}
-              className={cn(
-                "px-3 py-1.5 rounded-md border text-sm font-medium flex items-center gap-2 transition-colors",
-                liveMode
-                  ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20 text-emerald-700 dark:text-emerald-400"
-                  : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
-              )}
-            >
-              <Activity className="h-4 w-4" />
-              Live
             </button>
             <button
               onClick={() => setDraft({ ...draft, enabled: !draft.enabled })}
@@ -2155,6 +2084,15 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                 >
                   <RefreshCw className={cn("h-4 w-4", logsLoading && "animate-spin")} />
                   Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={clearWorkflowLogs}
+                  disabled={logsLoading || workflowLogs.length === 0}
+                  className="inline-flex items-center gap-2 rounded-md border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/10"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Clear Logs
                 </button>
                 <button
                   type="button"

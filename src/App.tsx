@@ -17,6 +17,7 @@ import { Profile } from './views/Profile';
 import { useAppStore } from './lib/store';
 import { useDeviceDataConnection } from './hooks/useDeviceDataConnection';
 import { Auth } from './views/Auth';
+import { ConfirmDeleteDialog } from './components/ConfirmDeleteDialog';
 
 import { DeviceDetails } from './views/DeviceDetails';
 
@@ -66,6 +67,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <ConfirmDeleteDialog />
       <Routes>
         <Route path="/login" element={<Auth mode="login" />} />
         <Route path="/register" element={<Auth mode="register" />} />

@@ -408,9 +408,9 @@ export function ScadaView() {
     setEditMode(true);
   };
 
-  const removeElement = (id: string) => {
+  const removeElement = async (id: string) => {
     const element = draft.elements.find((item) => item.id === id);
-    if (!confirmDelete({ title: 'Delete SCADA element', itemName: element?.label || 'this SCADA element', description: 'The element will be removed from the current SCADA scene.' })) return;
+    if (!(await confirmDelete({ title: 'Delete SCADA element', itemName: element?.label || 'this SCADA element', description: 'The element will be removed from the current SCADA scene.' }))) return;
     setDraft((current) => ({ ...current, elements: current.elements.filter((element) => element.id !== id) }));
     setSelectedElementId('');
     setActiveInnerPart(null);
@@ -579,9 +579,9 @@ export function ScadaView() {
     setSelectedPrimitiveId('');
   };
 
-  const removeEditingEndpoint = (id: string) => {
+  const removeEditingEndpoint = async (id: string) => {
     const endpoint = (editingShape?.endpoints || defaultElementEndpoints).find((item) => item.id === id);
-    if (!confirmDelete({ title: 'Delete connection endpoint', itemName: endpoint?.label || 'this endpoint', description: 'Lines will no longer snap to this custom endpoint.' })) return;
+    if (!(await confirmDelete({ title: 'Delete connection endpoint', itemName: endpoint?.label || 'this endpoint', description: 'Lines will no longer snap to this custom endpoint.' }))) return;
     setEditingShape((current) => {
       if (!current) return current;
       const endpoints = (current.endpoints || defaultElementEndpoints).filter((endpoint) => endpoint.id !== id);
@@ -590,9 +590,9 @@ export function ScadaView() {
     });
   };
 
-  const removeEditingPrimitive = (id: string) => {
+  const removeEditingPrimitive = async (id: string) => {
     const primitive = editingShape?.primitives.find((item) => item.id === id);
-    if (!confirmDelete({ title: 'Delete shape layer', itemName: primitive?.type || 'this layer', description: 'This primitive will be removed from the custom shape.' })) return;
+    if (!(await confirmDelete({ title: 'Delete shape layer', itemName: primitive?.type || 'this layer', description: 'This primitive will be removed from the custom shape.' }))) return;
     setEditingShape((current) => {
       if (!current || current.primitives.length <= 1) return current;
       const nextPrimitives = current.primitives.filter((primitive) => primitive.id !== id);
@@ -654,8 +654,8 @@ export function ScadaView() {
     setSelectedEndpointId('');
   };
 
-  const deleteShape = (preset: ScadaShapePreset) => {
-    if (!confirmDelete({ title: 'Delete custom shape', itemName: preset.name, description: 'Elements using this shape will fall back to the default SCADA frame.' })) return;
+  const deleteShape = async (preset: ScadaShapePreset) => {
+    if (!(await confirmDelete({ title: 'Delete custom shape', itemName: preset.name, description: 'Elements using this shape will fall back to the default SCADA frame.' }))) return;
     deleteScadaShapePreset(preset.id);
     if (editingShape?.id === preset.id) {
       setEditingShape(null);
@@ -865,11 +865,29 @@ export function ScadaView() {
     const isSelected = selectedElementId === element.id;
     const startConnected = Boolean(element.connections?.start);
     const endConnected = Boolean(element.connections?.end);
+    const lineWidth = Math.max(2, element.lineWidth || 8);
+    const lineAnimation = element.lineAnimation || 'flow';
+    const animationActive = active && lineAnimation !== 'none';
+    const lineClassName = cn(
+      animationActive && lineAnimation === 'flow' && 'scada-flow-line',
+      animationActive && lineAnimation === 'pulse' && 'scada-line-pulse',
+      animationActive && lineAnimation === 'glow' && 'scada-line-glow',
+    );
 
     return (
       <g key={element.id} onClick={(event) => { event.stopPropagation(); setSelectedElementId(element.id); }} className={cn(editMode && 'cursor-pointer')}>
-        <path d={path} fill="none" stroke="rgba(15,23,42,0.75)" strokeWidth={18} strokeLinecap="round" />
-        <path d={path} fill="none" stroke={style.stroke} strokeWidth={8} strokeLinecap="round" strokeDasharray={element.type === 'power' ? '12 10' : '18 12'} markerEnd={element.type === 'power' ? 'url(#scada-arrow-power)' : 'url(#scada-arrow-pipe)'} className={active ? 'scada-flow-line' : ''} />
+        <path d={path} fill="none" stroke="rgba(15,23,42,0.75)" strokeWidth={lineWidth + 10} strokeLinecap="round" />
+        <path
+          d={path}
+          fill="none"
+          stroke={style.stroke}
+          strokeWidth={lineWidth}
+          strokeLinecap="round"
+          strokeDasharray={element.type === 'power' ? '12 10' : '18 12'}
+          markerEnd={element.type === 'power' ? 'url(#scada-arrow-power)' : 'url(#scada-arrow-pipe)'}
+          className={lineClassName}
+          style={{ animationDuration: `${Math.max(0.2, element.lineAnimationSpeed || 1.4)}s` }}
+        />
         <text x={(points[0].x + points[points.length - 1].x) / 2} y={(points[0].y + points[points.length - 1].y) / 2 - 14} fill="#94a3b8" fontSize="12" textAnchor="middle">{element.label}</text>
         {editMode && isSelected && (
           <>
@@ -984,6 +1002,24 @@ export function ScadaView() {
             dur={`${totalSeconds}s`}
             repeatCount="indefinite"
           />
+          {content}
+        </g>
+      );
+    }
+
+    if (animation?.type === 'pulse') {
+      return (
+        <g key={primitive.id} transform={staticRotation}>
+          <animate attributeName="opacity" values=".45;1;.45" dur={`${duration}s`} repeatCount="indefinite" />
+          {content}
+        </g>
+      );
+    }
+
+    if (animation?.type === 'strokeFlow') {
+      return (
+        <g key={primitive.id} transform={staticRotation} strokeDasharray={primitive.dash || '10 8'}>
+          <animate attributeName="stroke-dashoffset" values="0;-36" dur={`${duration}s`} repeatCount="indefinite" />
           {content}
         </g>
       );
@@ -1842,7 +1878,7 @@ export function ScadaView() {
                             <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
                               Type
                               <select value={selectedPrimitive.animation?.type || 'none'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), type: event.target.value as NonNullable<ScadaShapePrimitive['animation']>['type'] } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                                {['none', 'rotate', 'scale', 'translate', 'visibility'].map((value) => <option key={value} value={value}>{value}</option>)}
+                                {['none', 'rotate', 'scale', 'translate', 'visibility', 'pulse', 'strokeFlow'].map((value) => <option key={value} value={value}>{value}</option>)}
                               </select>
                             </label>
                             <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
@@ -1999,7 +2035,11 @@ export function ScadaView() {
       <style>{`
         @keyframes scada-flow { to { stroke-dashoffset: -60; } }
         @keyframes scada-alarm { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+        @keyframes scada-line-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+        @keyframes scada-line-glow { 0%, 100% { filter: drop-shadow(0 0 1px currentColor); opacity: .75; } 50% { filter: drop-shadow(0 0 9px currentColor); opacity: 1; } }
         .scada-flow-line { animation: scada-flow 1.4s linear infinite; }
+        .scada-line-pulse { animation: scada-line-pulse 1.4s ease-in-out infinite; }
+        .scada-line-glow { animation: scada-line-glow 1.4s ease-in-out infinite; }
         .scada-alarm-pulse { animation: scada-alarm 1s ease-in-out infinite; }
       `}</style>
       <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 lg:flex-row lg:items-center lg:justify-between">
@@ -2131,6 +2171,45 @@ export function ScadaView() {
                       min={36}
                       value={Math.round((selectedElement.height || getElementSize(selectedElement).height))}
                       onChange={(event) => updateElement(selectedElement.id, { height: Math.max(36, Number(event.target.value) || 36) })}
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                  </label>
+                </div>
+              )}
+              {isLineElement(selectedElement) && (
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                    Line Width
+                    <input
+                      type="number"
+                      min={2}
+                      max={28}
+                      value={selectedElement.lineWidth || 8}
+                      onChange={(event) => updateElement(selectedElement.id, { lineWidth: Math.max(2, Math.min(28, Number(event.target.value) || 8)) })}
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                  </label>
+                  <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                    Animation
+                    <select
+                      value={selectedElement.lineAnimation || 'flow'}
+                      onChange={(event) => updateElement(selectedElement.id, { lineAnimation: event.target.value as ScadaElement['lineAnimation'] })}
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    >
+                      <option value="none">None</option>
+                      <option value="flow">Flow</option>
+                      <option value="pulse">Pulse</option>
+                      <option value="glow">Glow</option>
+                    </select>
+                  </label>
+                  <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                    Speed
+                    <input
+                      type="number"
+                      min={0.2}
+                      step={0.1}
+                      value={selectedElement.lineAnimationSpeed || 1.4}
+                      onChange={(event) => updateElement(selectedElement.id, { lineAnimationSpeed: Math.max(0.2, Number(event.target.value) || 1.4) })}
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
                   </label>

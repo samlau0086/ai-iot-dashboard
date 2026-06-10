@@ -89,6 +89,28 @@ export function Workflows() {
     setLogsError('');
   };
 
+  const clearWorkflowLogs = async (workflowId: string) => {
+    if (!(await confirmDelete({
+      title: 'Clear workflow logs',
+      itemName: activeLogsWorkflow?.name || 'this workflow',
+      description: 'All saved execution logs for this workflow will be removed.',
+      confirmLabel: 'Clear Logs',
+    }))) return;
+    setLogsLoading(true);
+    setLogsError('');
+    try {
+      const response = await fetch(`/api/workflow-runs?workflowId=${encodeURIComponent(workflowId)}`, { method: 'DELETE' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Failed to clear workflow logs.');
+      setWorkflowLogs([]);
+      setSelectedRunId('');
+    } catch (error) {
+      setLogsError(error instanceof Error ? error.message : 'Failed to clear workflow logs.');
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
   const formatJson = (value: unknown) => {
     if (typeof value === 'string') return value;
     try {
@@ -365,7 +387,9 @@ export function Workflows() {
                   >
                     <ListTree className="h-4 w-4" />
                   </button>
-                  <button onClick={() => confirmDelete({ title: 'Delete workflow', itemName: workflow.name || 'this workflow', description: 'Workflow nodes, settings, and saved workflow definition will be removed.' }) && deleteWorkflow(workflow.id)} className="p-1.5 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-red-600 hover:border-red-200 dark:hover:bg-slate-800 transition-colors">
+                  <button onClick={async () => {
+                    if (await confirmDelete({ title: 'Delete workflow', itemName: workflow.name || 'this workflow', description: 'Workflow nodes, settings, and saved workflow definition will be removed.' })) deleteWorkflow(workflow.id);
+                  }} className="p-1.5 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-red-600 hover:border-red-200 dark:hover:bg-slate-800 transition-colors">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
@@ -442,6 +466,15 @@ export function Workflows() {
                 >
                   <RefreshCw className={cn("h-4 w-4", logsLoading && "animate-spin")} />
                   Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => clearWorkflowLogs(activeLogsWorkflow.id)}
+                  disabled={logsLoading || workflowLogs.length === 0}
+                  className="inline-flex items-center gap-2 rounded-md border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/10"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Clear Logs
                 </button>
                 <button
                   type="button"

@@ -196,9 +196,9 @@ export function DeviceDetails() {
     setControlFieldsDraft('');
   };
 
-  const deleteControlDefinition = (controlId: string) => {
+  const deleteControlDefinition = async (controlId: string) => {
     const control = controlDefinitions.find((item) => item.id === controlId);
-    if (!confirmDelete({ title: 'Delete control action', itemName: control?.label || 'this control action', description: 'This control will be removed from the device configuration.' })) return;
+    if (!(await confirmDelete({ title: 'Delete control action', itemName: control?.label || 'this control action', description: 'This control will be removed from the device configuration.' }))) return;
     const nextDefinitions = controlDefinitions
       .filter((control) => control.id !== controlId)
       .map(sanitizeControlDefinition);

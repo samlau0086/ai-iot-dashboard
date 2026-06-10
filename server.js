@@ -3793,6 +3793,27 @@ app.get('/api/workflow-runs', async (req, res) => {
   }
 });
 
+app.delete('/api/workflow-runs', async (req, res) => {
+  try {
+    const workflowId = typeof req.query.workflowId === 'string' ? req.query.workflowId : '';
+    if (db) {
+      if (workflowId) {
+        await queryDb('DELETE FROM workflow_runs WHERE workflow_id = $1', [workflowId]);
+      } else {
+        await queryDb('DELETE FROM workflow_runs');
+      }
+    }
+
+    for (let index = workflowRuns.length - 1; index >= 0; index -= 1) {
+      if (!workflowId || workflowRuns[index].workflowId === workflowId) workflowRuns.splice(index, 1);
+    }
+
+    res.status(200).json({ok: true, runs: []});
+  } catch (error) {
+    res.status(500).json({error: error.message, runs: []});
+  }
+});
+
 app.get('/api/workflow-live/:workflowId', async (req, res) => {
   try {
     const state = workflowLiveStates.get(req.params.workflowId);
