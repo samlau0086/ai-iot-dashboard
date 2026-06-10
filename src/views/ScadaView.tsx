@@ -26,6 +26,9 @@ type DragState =
   | { type: 'endpoint'; id: string; endpoint: LineEndpoint; lockedAnchor?: ScadaAnchor | null }
   | { type: 'innerPart'; id: string; part: ScadaEditablePart; dx: number; dy: number }
   | { type: 'resize'; id: string; startX: number; startY: number; startWidth: number; startHeight: number };
+type ShapeEditorDragState =
+  | { type: 'move'; id: string; dx: number; dy: number }
+  | { type: 'resize'; id: string; startX: number; startY: number; startWidth: number; startHeight: number };
 
 const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> = [
   { type: 'device', label: 'Device', icon: Cpu },
@@ -55,10 +58,18 @@ const createPrimitiveId = () => `primitive-${Date.now()}-${Math.random().toStrin
 const createPrimitive = (type: ScadaShapePrimitiveType): ScadaShapePrimitive => {
   const base = { id: createPrimitiveId(), type, x: 12, y: 12, strokeMode: 'state' as const, fillMode: 'panel' as const, strokeWidth: 2, opacity: 1 };
   if (type === 'ellipse') return { ...base, width: 42, height: 38, fillMode: 'state' };
-  if (type === 'line') return { ...base, y: 50, width: 88, height: 50, fillMode: 'none', strokeMode: 'muted' };
-  if (type === 'polygon') return { ...base, x: 0, y: 0, points: [{ x: 14, y: 0 }, { x: 86, y: 0 }, { x: 100, y: 50 }, { x: 86, y: 100 }, { x: 14, y: 100 }, { x: 0, y: 50 }], fillMode: 'state' };
+  if (type === 'line') return { ...base, x: 16, y: 50, width: 68, height: 0, fillMode: 'none', strokeMode: 'muted' };
+  if (type === 'polygon') return { ...base, x: 16, y: 16, width: 68, height: 68, points: [{ x: 14, y: 0 }, { x: 86, y: 0 }, { x: 100, y: 50 }, { x: 86, y: 100 }, { x: 14, y: 100 }, { x: 0, y: 50 }], fillMode: 'state' };
+  if (type === 'propeller') return { ...base, x: 30, y: 28, width: 40, height: 44, fillMode: 'accent', strokeMode: 'state' };
+  if (type === 'valve') return { ...base, x: 18, y: 32, width: 64, height: 36, fillMode: 'panel', strokeMode: 'state' };
+  if (type === 'arrow') return { ...base, x: 16, y: 38, width: 68, height: 24, fillMode: 'accent', strokeMode: 'accent' };
+  if (type === 'busbar') return { ...base, x: 18, y: 28, width: 64, height: 44, fillMode: 'none', strokeMode: 'state', strokeWidth: 3 };
+  if (type === 'terminal') return { ...base, x: 22, y: 28, width: 56, height: 44, fillMode: 'panel', strokeMode: 'state' };
+  if (type === 'bracket') return { ...base, x: 12, y: 18, width: 76, height: 64, fillMode: 'none', strokeMode: 'muted', strokeWidth: 3 };
+  if (type === 'tank') return { ...base, x: 24, y: 12, width: 52, height: 76, fillMode: 'state', strokeMode: 'state' };
   return { ...base, width: 76, height: 76, rx: 8, fillMode: 'state' };
 };
+const primitiveTypes: ScadaShapePrimitiveType[] = ['rect', 'ellipse', 'line', 'polygon', 'propeller', 'valve', 'arrow', 'busbar', 'terminal', 'bracket', 'tank'];
 
 const createElementId = (type: ScadaElementType) => `scada-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 const createBlankScene = (siteId: string, siteName: string): ScadaScene => ({
@@ -161,6 +172,7 @@ const getElementAnchors = (element: ScadaElement): ScadaAnchor[] => {
   ];
 };
 const distanceBetween = (first: { x: number; y: number }, second: { x: number; y: number }) => Math.hypot(first.x - second.x, first.y - second.y);
+const clampPercent = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 
 export function ScadaView() {
   const navigate = useNavigate();
@@ -186,7 +198,9 @@ export function ScadaView() {
   const [shapeManagerOpen, setShapeManagerOpen] = useState(false);
   const [editingShape, setEditingShape] = useState<ScadaShapePreset | null>(null);
   const [selectedPrimitiveId, setSelectedPrimitiveId] = useState('');
+  const [shapeEditorDragState, setShapeEditorDragState] = useState<ShapeEditorDragState | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const shapeEditorSvgRef = useRef<SVGSVGElement | null>(null);
 
   useEffect(() => {
     if (storeScene) {
@@ -260,6 +274,16 @@ export function ScadaView() {
     return { x: transformed.x, y: transformed.y };
   };
 
+  const toShapeEditorPoint = (clientX: number, clientY: number) => {
+    const svg = shapeEditorSvgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const point = svg.createSVGPoint();
+    point.x = clientX;
+    point.y = clientY;
+    const transformed = point.matrixTransform(svg.getScreenCTM()?.inverse());
+    return { x: transformed.x, y: transformed.y };
+  };
+
   const updateElement = (id: string, patch: Partial<ScadaElement>) => {
     setDraft((current) => ({
       ...current,
@@ -314,6 +338,49 @@ export function ScadaView() {
       ...current,
       primitives: current.primitives.map((primitive) => primitive.id === id ? { ...primitive, ...patch } : primitive),
     } : current);
+  };
+
+  const handleShapePrimitivePointerDown = (event: React.PointerEvent, primitive: ScadaShapePrimitive) => {
+    event.stopPropagation();
+    const point = toShapeEditorPoint(event.clientX, event.clientY);
+    setSelectedPrimitiveId(primitive.id);
+    setShapeEditorDragState({ type: 'move', id: primitive.id, dx: point.x - primitive.x, dy: point.y - primitive.y });
+  };
+
+  const handleShapePrimitiveResizePointerDown = (event: React.PointerEvent, primitive: ScadaShapePrimitive) => {
+    event.stopPropagation();
+    const point = toShapeEditorPoint(event.clientX, event.clientY);
+    setSelectedPrimitiveId(primitive.id);
+    setShapeEditorDragState({
+      type: 'resize',
+      id: primitive.id,
+      startX: point.x,
+      startY: point.y,
+      startWidth: primitive.width ?? 32,
+      startHeight: primitive.height ?? 32,
+    });
+  };
+
+  const handleShapeEditorPointerMove = (event: React.PointerEvent) => {
+    if (!shapeEditorDragState) return;
+    const point = toShapeEditorPoint(event.clientX, event.clientY);
+    const primitive = editingShape?.primitives.find((item) => item.id === shapeEditorDragState.id);
+    if (!primitive) return;
+
+    if (shapeEditorDragState.type === 'move') {
+      const width = primitive.width ?? 24;
+      const height = primitive.height ?? 24;
+      updateEditingPrimitive(primitive.id, {
+        x: clampPercent(Math.min(100 - width, point.x - shapeEditorDragState.dx)),
+        y: clampPercent(Math.min(100 - height, point.y - shapeEditorDragState.dy)),
+      });
+      return;
+    }
+
+    updateEditingPrimitive(primitive.id, {
+      width: Math.max(4, Math.min(100 - primitive.x, Math.round(shapeEditorDragState.startWidth + point.x - shapeEditorDragState.startX))),
+      height: Math.max(primitive.type === 'line' ? 0 : 4, Math.min(100 - primitive.y, Math.round(shapeEditorDragState.startHeight + point.y - shapeEditorDragState.startY))),
+    });
   };
 
   const addEditingPrimitive = (type: ScadaShapePrimitiveType) => {
@@ -689,16 +756,83 @@ export function ScadaView() {
         <g>
           {customShape.primitives.map((primitive) => {
             const paint = primitivePaint(primitive);
+            const primitiveWidth = primitive.width ?? 32;
+            const primitiveHeight = primitive.height ?? 32;
+            const primitiveX = toX(primitive.x);
+            const primitiveY = toY(primitive.y);
+            const scaledWidth = (primitiveWidth / 100) * width;
+            const scaledHeight = (primitiveHeight / 100) * height;
+            const centerX = primitiveX + scaledWidth / 2;
+            const centerY = primitiveY + scaledHeight / 2;
+            const scaleX = scaledWidth / 100;
+            const scaleY = scaledHeight / 100;
+            if (primitive.type === 'propeller') {
+              return (
+                <g key={primitive.id} transform={`translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY})`} {...paint}>
+                  <path d="M 0 -8 C 18 -38 38 -42 46 -28 C 32 -18 18 -12 4 -2 Z" />
+                  <path d="M 7 5 C 38 14 48 32 38 46 C 22 40 12 28 2 8 Z" />
+                  <path d="M -8 5 C -34 28 -54 28 -60 12 C -45 4 -26 -2 -4 -4 Z" />
+                  <circle cx="0" cy="0" r="9" fill="#020617" stroke={paint.stroke} strokeWidth="3" />
+                </g>
+              );
+            }
+            if (primitive.type === 'valve') {
+              return (
+                <g key={primitive.id} {...paint}>
+                  <polygon points={`${primitiveX},${centerY} ${centerX},${primitiveY} ${centerX},${primitiveY + scaledHeight} ${primitiveX},${centerY}`} />
+                  <polygon points={`${primitiveX + scaledWidth},${centerY} ${centerX},${primitiveY} ${centerX},${primitiveY + scaledHeight} ${primitiveX + scaledWidth},${centerY}`} />
+                  <line x1={centerX} y1={primitiveY - scaledHeight * 0.28} x2={centerX} y2={primitiveY} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
+                  <line x1={centerX - scaledWidth * 0.18} y1={primitiveY - scaledHeight * 0.28} x2={centerX + scaledWidth * 0.18} y2={primitiveY - scaledHeight * 0.28} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
+                </g>
+              );
+            }
+            if (primitive.type === 'arrow') {
+              return <polygon key={primitive.id} points={`${primitiveX},${centerY - scaledHeight * 0.22} ${primitiveX + scaledWidth * 0.66},${centerY - scaledHeight * 0.22} ${primitiveX + scaledWidth * 0.66},${primitiveY} ${primitiveX + scaledWidth},${centerY} ${primitiveX + scaledWidth * 0.66},${primitiveY + scaledHeight} ${primitiveX + scaledWidth * 0.66},${centerY + scaledHeight * 0.22} ${primitiveX},${centerY + scaledHeight * 0.22}`} {...paint} />;
+            }
+            if (primitive.type === 'busbar') {
+              return (
+                <g key={primitive.id} {...paint}>
+                  {[0.18, 0.5, 0.82].map((ratio) => <line key={ratio} x1={primitiveX} y1={primitiveY + scaledHeight * ratio} x2={primitiveX + scaledWidth} y2={primitiveY + scaledHeight * ratio} strokeLinecap="round" />)}
+                  <line x1={primitiveX + scaledWidth * 0.16} y1={primitiveY} x2={primitiveX + scaledWidth * 0.16} y2={primitiveY + scaledHeight} strokeLinecap="round" />
+                  <line x1={primitiveX + scaledWidth * 0.84} y1={primitiveY} x2={primitiveX + scaledWidth * 0.84} y2={primitiveY + scaledHeight} strokeLinecap="round" />
+                </g>
+              );
+            }
+            if (primitive.type === 'terminal') {
+              return (
+                <g key={primitive.id} {...paint}>
+                  <rect x={primitiveX} y={primitiveY} width={scaledWidth} height={scaledHeight} rx={Math.min(scaledWidth, scaledHeight) * 0.12} />
+                  {[0.25, 0.5, 0.75].map((ratio) => <circle key={ratio} cx={primitiveX + scaledWidth * ratio} cy={centerY} r={Math.min(scaledWidth, scaledHeight) * 0.08} fill="#020617" stroke={paint.stroke} strokeWidth={paint.strokeWidth} />)}
+                </g>
+              );
+            }
+            if (primitive.type === 'bracket') {
+              return (
+                <g key={primitive.id} fill="none" stroke={paint.stroke} strokeWidth={paint.strokeWidth} opacity={paint.opacity}>
+                  <path d={`M ${primitiveX + scaledWidth * 0.24} ${primitiveY} L ${primitiveX} ${primitiveY} L ${primitiveX} ${primitiveY + scaledHeight} L ${primitiveX + scaledWidth * 0.24} ${primitiveY + scaledHeight}`} strokeLinecap="round" strokeLinejoin="round" />
+                  <path d={`M ${primitiveX + scaledWidth * 0.76} ${primitiveY} L ${primitiveX + scaledWidth} ${primitiveY} L ${primitiveX + scaledWidth} ${primitiveY + scaledHeight} L ${primitiveX + scaledWidth * 0.76} ${primitiveY + scaledHeight}`} strokeLinecap="round" strokeLinejoin="round" />
+                </g>
+              );
+            }
+            if (primitive.type === 'tank') {
+              return (
+                <g key={primitive.id} {...paint}>
+                  <ellipse cx={centerX} cy={primitiveY + scaledHeight * 0.12} rx={scaledWidth / 2} ry={scaledHeight * 0.12} />
+                  <rect x={primitiveX} y={primitiveY + scaledHeight * 0.12} width={scaledWidth} height={scaledHeight * 0.76} />
+                  <ellipse cx={centerX} cy={primitiveY + scaledHeight * 0.88} rx={scaledWidth / 2} ry={scaledHeight * 0.12} />
+                </g>
+              );
+            }
             if (primitive.type === 'ellipse') {
-              const primitiveWidth = primitive.width ?? 30;
-              const primitiveHeight = primitive.height ?? 30;
               return <ellipse key={primitive.id} cx={toX(primitive.x + primitiveWidth / 2)} cy={toY(primitive.y + primitiveHeight / 2)} rx={(primitiveWidth / 100) * width / 2} ry={(primitiveHeight / 100) * height / 2} {...paint} />;
             }
             if (primitive.type === 'line') {
-              return <line key={primitive.id} x1={toX(primitive.x)} y1={toY(primitive.y)} x2={toX(primitive.width ?? primitive.x)} y2={toY(primitive.height ?? primitive.y)} strokeLinecap="round" {...paint} />;
+              return <line key={primitive.id} x1={toX(primitive.x)} y1={toY(primitive.y)} x2={toX(primitive.x + (primitive.width ?? 0))} y2={toY(primitive.y + (primitive.height ?? 0))} strokeLinecap="round" {...paint} />;
             }
             if (primitive.type === 'polygon') {
-              const primitivePoints = (primitive.points || []).map((point) => `${toX(point.x)},${toY(point.y)}`).join(' ');
+              const primitivePoints = primitive.width && primitive.height
+                ? (primitive.points || []).map((point) => `${toX(primitive.x + point.x * primitiveWidth / 100)},${toY(primitive.y + point.y * primitiveHeight / 100)}`).join(' ')
+                : (primitive.points || []).map((point) => `${toX(point.x)},${toY(point.y)}`).join(' ');
               return <polygon key={primitive.id} points={primitivePoints} {...paint} />;
             }
             return <rect key={primitive.id} x={toX(primitive.x)} y={toY(primitive.y)} width={((primitive.width ?? 40) / 100) * width} height={((primitive.height ?? 40) / 100) * height} rx={primitive.rx ?? 0} {...paint} />;
@@ -945,18 +1079,105 @@ export function ScadaView() {
       opacity: primitive.opacity ?? 1,
       strokeDasharray: primitive.dash || undefined,
     };
+    const width = primitive.width ?? 32;
+    const height = primitive.height ?? 32;
+    const centerX = primitive.x + width / 2;
+    const centerY = primitive.y + height / 2;
+    const scaleX = width / 100;
+    const scaleY = height / 100;
+    if (primitive.type === 'propeller') {
+      return (
+        <g key={primitive.id} transform={`translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY})`} {...paint}>
+          <path d="M 0 -8 C 18 -38 38 -42 46 -28 C 32 -18 18 -12 4 -2 Z" />
+          <path d="M 7 5 C 38 14 48 32 38 46 C 22 40 12 28 2 8 Z" />
+          <path d="M -8 5 C -34 28 -54 28 -60 12 C -45 4 -26 -2 -4 -4 Z" />
+          <circle cx="0" cy="0" r="9" fill="#020617" stroke={paint.stroke} strokeWidth="3" />
+        </g>
+      );
+    }
+    if (primitive.type === 'valve') {
+      return (
+        <g key={primitive.id} {...paint}>
+          <polygon points={`${primitive.x},${centerY} ${centerX},${primitive.y} ${centerX},${primitive.y + height} ${primitive.x},${centerY}`} />
+          <polygon points={`${primitive.x + width},${centerY} ${centerX},${primitive.y} ${centerX},${primitive.y + height} ${primitive.x + width},${centerY}`} />
+          <line x1={centerX} y1={primitive.y - height * 0.28} x2={centerX} y2={primitive.y} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
+          <line x1={centerX - width * 0.18} y1={primitive.y - height * 0.28} x2={centerX + width * 0.18} y2={primitive.y - height * 0.28} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
+        </g>
+      );
+    }
+    if (primitive.type === 'arrow') {
+      return <polygon key={primitive.id} points={`${primitive.x},${centerY - height * 0.22} ${primitive.x + width * 0.66},${centerY - height * 0.22} ${primitive.x + width * 0.66},${primitive.y} ${primitive.x + width},${centerY} ${primitive.x + width * 0.66},${primitive.y + height} ${primitive.x + width * 0.66},${centerY + height * 0.22} ${primitive.x},${centerY + height * 0.22}`} {...paint} />;
+    }
+    if (primitive.type === 'busbar') {
+      return (
+        <g key={primitive.id} {...paint}>
+          {[0.18, 0.5, 0.82].map((ratio) => <line key={ratio} x1={primitive.x} y1={primitive.y + height * ratio} x2={primitive.x + width} y2={primitive.y + height * ratio} strokeLinecap="round" />)}
+          <line x1={primitive.x + width * 0.16} y1={primitive.y} x2={primitive.x + width * 0.16} y2={primitive.y + height} strokeLinecap="round" />
+          <line x1={primitive.x + width * 0.84} y1={primitive.y} x2={primitive.x + width * 0.84} y2={primitive.y + height} strokeLinecap="round" />
+        </g>
+      );
+    }
+    if (primitive.type === 'terminal') {
+      return (
+        <g key={primitive.id} {...paint}>
+          <rect x={primitive.x} y={primitive.y} width={width} height={height} rx={Math.min(width, height) * 0.12} />
+          {[0.25, 0.5, 0.75].map((ratio) => <circle key={ratio} cx={primitive.x + width * ratio} cy={centerY} r={Math.min(width, height) * 0.08} fill="#020617" stroke={paint.stroke} strokeWidth={paint.strokeWidth} />)}
+        </g>
+      );
+    }
+    if (primitive.type === 'bracket') {
+      return (
+        <g key={primitive.id} fill="none" stroke={paint.stroke} strokeWidth={paint.strokeWidth} opacity={paint.opacity}>
+          <path d={`M ${primitive.x + width * 0.24} ${primitive.y} L ${primitive.x} ${primitive.y} L ${primitive.x} ${primitive.y + height} L ${primitive.x + width * 0.24} ${primitive.y + height}`} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={`M ${primitive.x + width * 0.76} ${primitive.y} L ${primitive.x + width} ${primitive.y} L ${primitive.x + width} ${primitive.y + height} L ${primitive.x + width * 0.76} ${primitive.y + height}`} strokeLinecap="round" strokeLinejoin="round" />
+        </g>
+      );
+    }
+    if (primitive.type === 'tank') {
+      return (
+        <g key={primitive.id} {...paint}>
+          <ellipse cx={centerX} cy={primitive.y + height * 0.12} rx={width / 2} ry={height * 0.12} />
+          <rect x={primitive.x} y={primitive.y + height * 0.12} width={width} height={height * 0.76} />
+          <ellipse cx={centerX} cy={primitive.y + height * 0.88} rx={width / 2} ry={height * 0.12} />
+        </g>
+      );
+    }
     if (primitive.type === 'ellipse') {
-      const width = primitive.width ?? 30;
-      const height = primitive.height ?? 30;
       return <ellipse key={primitive.id} cx={primitive.x + width / 2} cy={primitive.y + height / 2} rx={width / 2} ry={height / 2} {...paint} />;
     }
     if (primitive.type === 'line') {
-      return <line key={primitive.id} x1={primitive.x} y1={primitive.y} x2={primitive.width ?? primitive.x} y2={primitive.height ?? primitive.y} strokeLinecap="round" {...paint} />;
+      return <line key={primitive.id} x1={primitive.x} y1={primitive.y} x2={primitive.x + (primitive.width ?? 0)} y2={primitive.y + (primitive.height ?? 0)} strokeLinecap="round" {...paint} />;
     }
     if (primitive.type === 'polygon') {
-      return <polygon key={primitive.id} points={(primitive.points || []).map((point) => `${point.x},${point.y}`).join(' ')} {...paint} />;
+      const points = primitive.width && primitive.height
+        ? (primitive.points || []).map((point) => `${primitive.x + point.x * width / 100},${primitive.y + point.y * height / 100}`).join(' ')
+        : (primitive.points || []).map((point) => `${point.x},${point.y}`).join(' ');
+      return <polygon key={primitive.id} points={points} {...paint} />;
     }
     return <rect key={primitive.id} x={primitive.x} y={primitive.y} width={primitive.width ?? 40} height={primitive.height ?? 40} rx={primitive.rx ?? 0} {...paint} />;
+  };
+
+  const renderPrimitiveSelection = (primitive: ScadaShapePrimitive) => {
+    const width = primitive.width ?? 32;
+    const height = primitive.height ?? 32;
+    const selectionHeight = Math.max(8, height);
+    return (
+      <g>
+        <rect x={primitive.x - 2} y={primitive.y - 2} width={width + 4} height={selectionHeight + 4} fill="none" stroke="#fb923c" strokeWidth={1.4} strokeDasharray="3 2" pointerEvents="none" />
+        <rect
+          x={primitive.x + width - 3}
+          y={primitive.y + selectionHeight - 3}
+          width={7}
+          height={7}
+          rx={1.5}
+          fill="#fb923c"
+          stroke="#020617"
+          strokeWidth={1}
+          className="cursor-nwse-resize"
+          onPointerDown={(event) => handleShapePrimitiveResizePointerDown(event, primitive)}
+        />
+      </g>
+    );
   };
 
   const renderShapeManager = () => {
@@ -970,7 +1191,7 @@ export function ScadaView() {
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
             <div>
               <h2 className="text-base font-semibold text-slate-900 dark:text-white">Custom SCADA Shape Presets</h2>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Build reusable frames from rectangles, ellipses, lines, and polygons. Coordinates are relative from 0 to 100.</p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Build reusable frames from basic geometry and industrial symbols. Drag or resize shapes directly on the canvas; coordinates stay relative from 0 to 100.</p>
             </div>
             <button type="button" onClick={() => { setShapeManagerOpen(false); setEditingShape(null); }} className="rounded px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Close</button>
           </div>
@@ -1009,17 +1230,30 @@ export function ScadaView() {
                       <input value={editingShape.name} onChange={(event) => setEditingShape({ ...editingShape, name: event.target.value })} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
                     </label>
                     <div className="rounded border border-slate-200 bg-slate-950 p-4 dark:border-slate-800">
-                      <svg viewBox="0 0 100 100" className="h-72 w-full rounded bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:10px_10px]">
+                      <svg
+                        ref={shapeEditorSvgRef}
+                        viewBox="0 0 100 100"
+                        className="h-72 w-full touch-none rounded bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:10px_10px]"
+                        onPointerMove={handleShapeEditorPointerMove}
+                        onPointerUp={() => setShapeEditorDragState(null)}
+                        onPointerLeave={() => setShapeEditorDragState(null)}
+                        onPointerDown={() => setSelectedPrimitiveId('')}
+                      >
                         <rect x="0" y="0" width="100" height="100" fill="rgba(2,6,23,0.5)" />
                         {editingShape.primitives.map((primitive) => (
-                          <g key={primitive.id} onClick={() => setSelectedPrimitiveId(primitive.id)} className="cursor-pointer">
+                          <g
+                            key={primitive.id}
+                            onPointerDown={(event) => handleShapePrimitivePointerDown(event, primitive)}
+                            className="cursor-move"
+                          >
                             {renderShapePreviewPrimitive(primitive, primitive.id === selectedPrimitiveId)}
+                            {primitive.id === selectedPrimitiveId && renderPrimitiveSelection(primitive)}
                           </g>
                         ))}
                       </svg>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {(['rect', 'ellipse', 'line', 'polygon'] as ScadaShapePrimitiveType[]).map((type) => (
+                      {primitiveTypes.map((type) => (
                         <button key={type} type="button" onClick={() => addEditingPrimitive(type)} className="rounded border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
                           Add {type}
                         </button>

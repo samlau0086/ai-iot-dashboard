@@ -172,7 +172,18 @@ export interface OverviewDashboardState {
 
 export type ScadaElementType = 'device' | 'metric' | 'pipe' | 'power' | 'label';
 
-export type ScadaShapePrimitiveType = 'rect' | 'ellipse' | 'line' | 'polygon';
+export type ScadaShapePrimitiveType =
+  | 'rect'
+  | 'ellipse'
+  | 'line'
+  | 'polygon'
+  | 'propeller'
+  | 'valve'
+  | 'arrow'
+  | 'busbar'
+  | 'terminal'
+  | 'bracket'
+  | 'tank';
 
 export interface ScadaShapePrimitive {
   id: string;
