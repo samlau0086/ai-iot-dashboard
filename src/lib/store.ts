@@ -196,9 +196,12 @@ export interface ScadaShapePrimitive {
   rx?: number;
   points?: Array<{ x: number; y: number }>;
   iconUrl?: string;
+  iconSvg?: string;
   iconName?: string;
-  strokeMode?: 'state' | 'muted' | 'accent' | 'none';
-  fillMode?: 'state' | 'panel' | 'accent' | 'none';
+  strokeMode?: 'state' | 'muted' | 'accent' | 'custom' | 'none';
+  fillMode?: 'state' | 'panel' | 'accent' | 'custom' | 'none';
+  strokeColor?: string;
+  fillColor?: string;
   strokeWidth?: number;
   opacity?: number;
   dash?: string;

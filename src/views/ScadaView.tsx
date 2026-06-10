@@ -178,6 +178,33 @@ const getPrimitiveCenter = (primitive: ScadaShapePrimitive) => ({
   x: primitive.x + (primitive.width ?? 32) / 2,
   y: primitive.y + (primitive.height ?? 32) / 2,
 });
+const embeddedSvgCache = new Map<string, { body: string; viewBox: { x: number; y: number; width: number; height: number } }>();
+const getEmbeddedSvg = (svg = '') => {
+  if (embeddedSvgCache.has(svg)) return embeddedSvgCache.get(svg);
+  const viewBoxMatch = svg.match(/\bviewBox=["']([^"']+)["']/i);
+  const values = (viewBoxMatch?.[1] || '0 0 100 100').split(/[\s,]+/).map(Number);
+  const viewBox = {
+    x: Number.isFinite(values[0]) ? values[0] : 0,
+    y: Number.isFinite(values[1]) ? values[1] : 0,
+    width: Number.isFinite(values[2]) && values[2] !== 0 ? values[2] : 100,
+    height: Number.isFinite(values[3]) && values[3] !== 0 ? values[3] : 100,
+  };
+  const body = svg
+    .replace(/<\?xml[\s\S]*?\?>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, '')
+    .replace(/\son\w+=["'][^"']*["']/gi, '')
+    .replace(/<svg\b[^>]*>/i, '')
+    .replace(/<\/svg>\s*$/i, '')
+    .replace(/(fill|stroke)\s*:\s*(?!none\b|transparent\b|url\()[^;"']+/gi, '$1:currentColor')
+    .replace(/\s(fill|stroke)=["'](?!none\b|transparent\b|url\()[^"']*["']/gi, ' $1="currentColor"')
+    .trim();
+  const embedded = { body, viewBox };
+  embeddedSvgCache.set(svg, embedded);
+  return embedded;
+};
 const shouldPlayPrimitiveAnimation = (
   primitive: ScadaShapePrimitive,
   device: Device | undefined,
@@ -227,6 +254,7 @@ export function ScadaView() {
   const [selectedPrimitiveId, setSelectedPrimitiveId] = useState('');
   const [selectedEndpointId, setSelectedEndpointId] = useState('');
   const [selectedIconPresetId, setSelectedIconPresetId] = useState(scadaIconPresets[0]?.id || '');
+  const [svgIconMarkupByUrl, setSvgIconMarkupByUrl] = useState<Record<string, string>>({});
   const [shapeEditorDragState, setShapeEditorDragState] = useState<ShapeEditorDragState | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const shapeEditorSvgRef = useRef<SVGSVGElement | null>(null);
@@ -239,6 +267,41 @@ export function ScadaView() {
       setEditMode(false);
     }
   }, [storeScene?.id, activeSiteId]);
+
+  useEffect(() => {
+    const urls = new Set<string>();
+    if (shapeManagerOpen) scadaIconPresets.forEach((preset) => urls.add(preset.url));
+    scadaShapePresets.forEach((preset) => preset.primitives.forEach((primitive) => {
+      if (primitive.type === 'svgIcon' && primitive.iconUrl && !primitive.iconSvg) urls.add(primitive.iconUrl);
+    }));
+    editingShape?.primitives.forEach((primitive) => {
+      if (primitive.type === 'svgIcon' && primitive.iconUrl && !primitive.iconSvg) urls.add(primitive.iconUrl);
+    });
+
+    const missingUrls = [...urls].filter((url) => !svgIconMarkupByUrl[url]);
+    if (!missingUrls.length) return;
+
+    let cancelled = false;
+    Promise.all(missingUrls.map(async (url) => {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) return [url, ''] as const;
+        return [url, await response.text()] as const;
+      } catch {
+        return [url, ''] as const;
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      setSvgIconMarkupByUrl((current) => ({
+        ...current,
+        ...Object.fromEntries(entries.filter(([, svg]) => svg)),
+      }));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shapeManagerOpen, scadaShapePresets, editingShape, svgIconMarkupByUrl]);
 
   const siteDevices = useMemo(
     () => devices.filter((device) => !activeSite || device.siteId === activeSite.id || device.tags?.includes(activeSite.id)),
@@ -489,6 +552,7 @@ export function ScadaView() {
     const primitive = {
       ...createPrimitive('svgIcon'),
       iconUrl: preset.url,
+      iconSvg: svgIconMarkupByUrl[preset.url],
       iconName: preset.name,
     };
     setEditingShape((current) => current ? { ...current, primitives: [...current.primitives, primitive] } : current);
@@ -533,6 +597,26 @@ export function ScadaView() {
       if (!current || current.primitives.length <= 1) return current;
       const nextPrimitives = current.primitives.filter((primitive) => primitive.id !== id);
       setSelectedPrimitiveId(nextPrimitives[0]?.id || '');
+      return { ...current, primitives: nextPrimitives };
+    });
+  };
+
+  const duplicateEditingPrimitive = (id: string) => {
+    setEditingShape((current) => {
+      if (!current) return current;
+      const index = current.primitives.findIndex((primitive) => primitive.id === id);
+      if (index < 0) return current;
+      const source = current.primitives[index];
+      const duplicate: ScadaShapePrimitive = {
+        ...JSON.parse(JSON.stringify(source)),
+        id: createPrimitiveId(),
+        x: clampPercent(Math.min(100 - (source.width ?? 24), source.x + 4)),
+        y: clampPercent(Math.min(100 - (source.height ?? 24), source.y + 4)),
+      };
+      const nextPrimitives = [...current.primitives];
+      nextPrimitives.splice(index + 1, 0, duplicate);
+      setSelectedPrimitiveId(duplicate.id);
+      setSelectedEndpointId('');
       return { ...current, primitives: nextPrimitives };
     });
   };
@@ -932,6 +1016,53 @@ export function ScadaView() {
     );
   };
 
+  const renderSvgIconPrimitive = (
+    primitive: ScadaShapePrimitive,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    paint: {
+      fill: string;
+      stroke: string;
+      strokeWidth?: number;
+      opacity?: number;
+      strokeDasharray?: string;
+    }
+  ) => {
+    const svg = primitive.iconSvg || svgIconMarkupByUrl[primitive.iconUrl || ''];
+    if (!svg) {
+      return (
+        <image
+          href={primitive.iconUrl || ''}
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+          opacity={paint.opacity}
+          preserveAspectRatio="xMidYMid meet"
+        />
+      );
+    }
+
+    const embedded = getEmbeddedSvg(svg);
+    if (!embedded?.body) return null;
+    const scaleX = width / embedded.viewBox.width;
+    const scaleY = height / embedded.viewBox.height;
+    const iconColor = paint.fill !== 'none' ? paint.fill : paint.stroke !== 'none' ? paint.stroke : '#94a3b8';
+    return (
+      <g
+        transform={`translate(${x} ${y}) scale(${scaleX} ${scaleY}) translate(${-embedded.viewBox.x} ${-embedded.viewBox.y})`}
+        fill={paint.fill === 'none' ? 'none' : 'currentColor'}
+        opacity={paint.opacity}
+        strokeWidth={paint.strokeWidth}
+        strokeDasharray={paint.strokeDasharray}
+        style={{ color: iconColor }}
+        dangerouslySetInnerHTML={{ __html: embedded.body }}
+      />
+    );
+  };
+
   const renderShapeFrame = (
     element: ScadaElement,
     style: typeof stateStyles.normal,
@@ -967,12 +1098,14 @@ export function ScadaView() {
         state: style.fill,
         panel: 'rgba(15,23,42,0.54)',
         accent: style.badge,
+        custom: primitive.fillColor || style.badge,
         none: 'none',
       };
       const strokeMap = {
         state: stroke,
         muted: 'rgba(148,163,184,0.38)',
         accent: style.badge,
+        custom: primitive.strokeColor || style.badge,
         none: 'none',
       };
       return {
@@ -1010,17 +1143,7 @@ export function ScadaView() {
               shouldPlayPrimitiveAnimation(primitive, device, state, element.metricKey, metricValue)
             );
             if (primitive.type === 'svgIcon') {
-              return wrapPrimitive(
-                <image
-                  href={primitive.iconUrl || ''}
-                  x={primitiveX}
-                  y={primitiveY}
-                  width={scaledWidth}
-                  height={scaledHeight}
-                  opacity={paint.opacity}
-                  preserveAspectRatio="xMidYMid meet"
-                />
-              );
+              return wrapPrimitive(renderSvgIconPrimitive(primitive, primitiveX, primitiveY, scaledWidth, scaledHeight, paint));
             }
             if (primitive.type === 'propeller') {
               return wrapPrimitive(
@@ -1323,8 +1446,8 @@ export function ScadaView() {
 
   const renderShapePreviewPrimitive = (primitive: ScadaShapePrimitive, selected = false) => {
     const paint = {
-      fill: primitive.fillMode === 'none' ? 'none' : primitive.fillMode === 'accent' ? '#f97316' : primitive.fillMode === 'state' ? 'rgba(16,185,129,0.35)' : 'rgba(15,23,42,0.72)',
-      stroke: primitive.strokeMode === 'none' ? 'none' : primitive.strokeMode === 'accent' ? '#f97316' : primitive.strokeMode === 'muted' ? 'rgba(148,163,184,0.5)' : '#10b981',
+      fill: primitive.fillMode === 'none' ? 'none' : primitive.fillMode === 'custom' ? primitive.fillColor || '#f97316' : primitive.fillMode === 'accent' ? '#f97316' : primitive.fillMode === 'state' ? 'rgba(16,185,129,0.35)' : 'rgba(15,23,42,0.72)',
+      stroke: primitive.strokeMode === 'none' ? 'none' : primitive.strokeMode === 'custom' ? primitive.strokeColor || '#f97316' : primitive.strokeMode === 'accent' ? '#f97316' : primitive.strokeMode === 'muted' ? 'rgba(148,163,184,0.5)' : '#10b981',
       strokeWidth: selected ? 3 : primitive.strokeWidth ?? 2,
       opacity: primitive.opacity ?? 1,
       strokeDasharray: primitive.dash || undefined,
@@ -1337,17 +1460,7 @@ export function ScadaView() {
     const scaleY = height / 100;
     const wrapPrimitive = (content: React.ReactNode) => renderPrimitiveMotion(primitive, content, (value = 0) => value, (value = 0) => value);
     if (primitive.type === 'svgIcon') {
-      return wrapPrimitive(
-        <image
-          href={primitive.iconUrl || ''}
-          x={primitive.x}
-          y={primitive.y}
-          width={width}
-          height={height}
-          opacity={paint.opacity}
-          preserveAspectRatio="xMidYMid meet"
-        />
-      );
+      return wrapPrimitive(renderSvgIconPrimitive(primitive, primitive.x, primitive.y, width, height, paint));
     }
     if (primitive.type === 'propeller') {
       return wrapPrimitive(
@@ -1471,7 +1584,7 @@ export function ScadaView() {
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
-        <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-white shadow-2xl dark:bg-[#1c2128]">
+        <div className="flex h-[calc(100vh-2rem)] max-h-[94vh] w-[calc(100vw-2rem)] max-w-none flex-col overflow-hidden rounded-lg border border-slate-700 bg-white shadow-2xl dark:bg-[#1c2128]">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
             <div>
               <h2 className="text-base font-semibold text-slate-900 dark:text-white">Custom SCADA Shape Presets</h2>
@@ -1480,7 +1593,7 @@ export function ScadaView() {
             <button type="button" onClick={() => { setShapeManagerOpen(false); setEditingShape(null); }} className="rounded px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Close</button>
           </div>
 
-          <div className="grid min-h-0 flex-1 grid-cols-[260px_1fr] overflow-hidden">
+          <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] overflow-hidden">
             <aside className="min-h-0 overflow-auto border-r border-slate-200 p-4 dark:border-slate-800">
               <button type="button" onClick={startNewShape} className="mb-3 inline-flex h-9 w-full items-center justify-center rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500">
                 New Custom Shape
@@ -1507,7 +1620,7 @@ export function ScadaView() {
 
             <section className="min-h-0 overflow-auto p-4">
               {editingShape ? (
-                <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
                   <div className="space-y-4">
                     <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
                       Shape Name
@@ -1602,6 +1715,7 @@ export function ScadaView() {
                                   <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'up')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Up</button>
                                   <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'down')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Down</button>
                                   <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'back')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Bottom</button>
+                                  <button type="button" onClick={() => duplicateEditingPrimitive(primitive.id)} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Dup</button>
                                   {editingShape.primitives.length > 1 && (
                                     <button type="button" onClick={() => removeEditingPrimitive(primitive.id)} className="rounded border border-red-200 px-2 py-1 text-[10px] font-semibold text-red-500 hover:bg-red-50 dark:border-red-500/30 dark:hover:bg-red-500/10">Delete</button>
                                   )}
@@ -1656,7 +1770,7 @@ export function ScadaView() {
                               value={scadaIconPresets.find((preset) => preset.url === selectedPrimitive.iconUrl)?.id || ''}
                               onChange={(event) => {
                                 const preset = scadaIconPresets.find((item) => item.id === event.target.value);
-                                if (preset) updateEditingPrimitive(selectedPrimitive.id, { iconUrl: preset.url, iconName: preset.name });
+                                if (preset) updateEditingPrimitive(selectedPrimitive.id, { iconUrl: preset.url, iconSvg: svgIconMarkupByUrl[preset.url], iconName: preset.name });
                               }}
                               className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                             >
@@ -1676,16 +1790,32 @@ export function ScadaView() {
                           <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
                             Fill
                             <select value={selectedPrimitive.fillMode || 'none'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { fillMode: event.target.value as ScadaShapePrimitive['fillMode'] })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                              {['state', 'panel', 'accent', 'none'].map((value) => <option key={value} value={value}>{value}</option>)}
+                              {['state', 'panel', 'accent', 'custom', 'none'].map((value) => <option key={value} value={value}>{value}</option>)}
                             </select>
                           </label>
                           <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
                             Stroke
                             <select value={selectedPrimitive.strokeMode || 'state'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { strokeMode: event.target.value as ScadaShapePrimitive['strokeMode'] })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                              {['state', 'muted', 'accent', 'none'].map((value) => <option key={value} value={value}>{value}</option>)}
+                              {['state', 'muted', 'accent', 'custom', 'none'].map((value) => <option key={value} value={value}>{value}</option>)}
                             </select>
                           </label>
                         </div>
+                        {(selectedPrimitive.fillMode === 'custom' || selectedPrimitive.strokeMode === 'custom') && (
+                          <div className="grid grid-cols-2 gap-2">
+                            {selectedPrimitive.fillMode === 'custom' && (
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                Fill Color
+                                <input type="color" value={selectedPrimitive.fillColor || '#f97316'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { fillColor: event.target.value })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-1 text-xs normal-case tracking-normal dark:border-slate-700 dark:bg-slate-900" />
+                              </label>
+                            )}
+                            {selectedPrimitive.strokeMode === 'custom' && (
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                Stroke Color
+                                <input type="color" value={selectedPrimitive.strokeColor || '#f97316'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { strokeColor: event.target.value })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-1 text-xs normal-case tracking-normal dark:border-slate-700 dark:bg-slate-900" />
+                              </label>
+                            )}
+                          </div>
+                        )}
                         <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
                           Dash
                           <input value={selectedPrimitive.dash || ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { dash: event.target.value })} placeholder="8 6" className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
