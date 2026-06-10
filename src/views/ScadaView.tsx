@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Cpu, Droplets, Gauge, Move, Network, Save, Trash2, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene, type ScadaShapePreset, type ScadaShapePrimitive, type ScadaShapePrimitiveType } from '../lib/store';
+import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene, type ScadaShapePreset, type ScadaShapePrimitive, type ScadaShapePrimitiveType, type ScadaShapeEndpoint } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
@@ -12,12 +12,13 @@ const CANVAS_HEIGHT = 620;
 const SNAP_DISTANCE = 28;
 const DETACH_DISTANCE = 52;
 
-type AnchorSide = 'left' | 'right';
+type AnchorSide = string;
 type LineEndpoint = 0 | 1;
 type ScadaEditablePart = 'label' | 'icon' | 'value' | 'meta';
 type ScadaAnchor = {
   elementId: string;
   side: AnchorSide;
+  label: string;
   x: number;
   y: number;
 };
@@ -28,7 +29,8 @@ type DragState =
   | { type: 'resize'; id: string; startX: number; startY: number; startWidth: number; startHeight: number };
 type ShapeEditorDragState =
   | { type: 'move'; id: string; dx: number; dy: number }
-  | { type: 'resize'; id: string; startX: number; startY: number; startWidth: number; startHeight: number };
+  | { type: 'resize'; id: string; startX: number; startY: number; startWidth: number; startHeight: number }
+  | { type: 'endpoint'; id: string; dx: number; dy: number };
 
 const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> = [
   { type: 'device', label: 'Device', icon: Cpu },
@@ -55,6 +57,7 @@ const shapePresets = [
 ];
 const createShapeId = () => `custom-shape-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 const createPrimitiveId = () => `primitive-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+const createEndpointId = () => `endpoint-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 const createPrimitive = (type: ScadaShapePrimitiveType): ScadaShapePrimitive => {
   const base = { id: createPrimitiveId(), type, x: 12, y: 12, strokeMode: 'state' as const, fillMode: 'panel' as const, strokeWidth: 2, opacity: 1 };
   if (type === 'ellipse') return { ...base, width: 42, height: 38, fillMode: 'state' };
@@ -162,15 +165,10 @@ const getElementSize = (element: ScadaElement) => ({
   width: element.width || 150,
   height: element.height || 76,
 });
-const getElementAnchors = (element: ScadaElement): ScadaAnchor[] => {
-  if (isLineElement(element) || element.type === 'label') return [];
-  const {width, height} = getElementSize(element);
-  const centerY = element.y + height / 2;
-  return [
-    { elementId: element.id, side: 'left', x: element.x, y: centerY },
-    { elementId: element.id, side: 'right', x: element.x + width, y: centerY },
-  ];
-};
+const defaultElementEndpoints: ScadaShapeEndpoint[] = [
+  { id: 'left', label: 'Left', x: 0, y: 50 },
+  { id: 'right', label: 'Right', x: 100, y: 50 },
+];
 const distanceBetween = (first: { x: number; y: number }, second: { x: number; y: number }) => Math.hypot(first.x - second.x, first.y - second.y);
 const clampPercent = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 
@@ -198,6 +196,7 @@ export function ScadaView() {
   const [shapeManagerOpen, setShapeManagerOpen] = useState(false);
   const [editingShape, setEditingShape] = useState<ScadaShapePreset | null>(null);
   const [selectedPrimitiveId, setSelectedPrimitiveId] = useState('');
+  const [selectedEndpointId, setSelectedEndpointId] = useState('');
   const [shapeEditorDragState, setShapeEditorDragState] = useState<ShapeEditorDragState | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const shapeEditorSvgRef = useRef<SVGSVGElement | null>(null);
@@ -217,7 +216,7 @@ export function ScadaView() {
   );
   const selectedElement = draft?.elements.find((element) => element.id === selectedElementId) || null;
   const customShapeById = useMemo(
-    () => Object.fromEntries(scadaShapePresets.map((preset) => [preset.id, preset])),
+    () => Object.fromEntries(scadaShapePresets.map((preset) => [preset.id, preset])) as Record<string, ScadaShapePreset>,
     [scadaShapePresets]
   );
   const selectableShapePresets = useMemo(
@@ -231,9 +230,24 @@ export function ScadaView() {
     const device = devices.find((item) => item.id === selectedElement?.deviceId);
     return Object.keys(device?.metrics || {}).sort();
   }, [devices, selectedElement?.deviceId]);
+  const getElementAnchors = (element: ScadaElement): ScadaAnchor[] => {
+    if (isLineElement(element) || element.type === 'label') return [];
+    const {width, height} = getElementSize(element);
+    const shapeId = getShapePreset(element);
+    const endpoints = customShapeById[shapeId]?.endpoints?.length
+      ? customShapeById[shapeId].endpoints || defaultElementEndpoints
+      : defaultElementEndpoints;
+    return endpoints.map((endpoint) => ({
+      elementId: element.id,
+      side: endpoint.id,
+      label: endpoint.label || endpoint.id,
+      x: element.x + (endpoint.x / 100) * width,
+      y: element.y + (endpoint.y / 100) * height,
+    }));
+  };
   const deviceAnchors = useMemo(
     () => draft.elements.flatMap((element) => getElementAnchors(element)),
-    [draft.elements]
+    [draft.elements, customShapeById]
   );
   const showDeviceAnchors = editMode && (
     selectedElement ? isLineElement(selectedElement) : dragState?.type === 'endpoint'
@@ -322,15 +336,22 @@ export function ScadaView() {
       id: createShapeId(),
       name: `Custom Shape ${scadaShapePresets.length + 1}`,
       primitives: [primitive],
+      endpoints: [
+        { id: 'left', label: 'Left', x: 0, y: 50 },
+        { id: 'right', label: 'Right', x: 100, y: 50 },
+      ],
       createdAt: new Date().toISOString(),
     });
     setSelectedPrimitiveId(primitive.id);
+    setSelectedEndpointId('');
   };
 
   const startEditShape = (preset: ScadaShapePreset) => {
     const copy = JSON.parse(JSON.stringify(preset)) as ScadaShapePreset;
+    if (!copy.endpoints?.length) copy.endpoints = [...defaultElementEndpoints];
     setEditingShape(copy);
     setSelectedPrimitiveId(copy.primitives[0]?.id || '');
+    setSelectedEndpointId('');
   };
 
   const updateEditingPrimitive = (id: string, patch: Partial<ScadaShapePrimitive>) => {
@@ -344,6 +365,7 @@ export function ScadaView() {
     event.stopPropagation();
     const point = toShapeEditorPoint(event.clientX, event.clientY);
     setSelectedPrimitiveId(primitive.id);
+    setSelectedEndpointId('');
     setShapeEditorDragState({ type: 'move', id: primitive.id, dx: point.x - primitive.x, dy: point.y - primitive.y });
   };
 
@@ -351,6 +373,7 @@ export function ScadaView() {
     event.stopPropagation();
     const point = toShapeEditorPoint(event.clientX, event.clientY);
     setSelectedPrimitiveId(primitive.id);
+    setSelectedEndpointId('');
     setShapeEditorDragState({
       type: 'resize',
       id: primitive.id,
@@ -361,10 +384,26 @@ export function ScadaView() {
     });
   };
 
+  const handleShapeEndpointPointerDown = (event: React.PointerEvent, endpoint: ScadaShapeEndpoint) => {
+    event.stopPropagation();
+    const point = toShapeEditorPoint(event.clientX, event.clientY);
+    setSelectedEndpointId(endpoint.id);
+    setSelectedPrimitiveId('');
+    setShapeEditorDragState({ type: 'endpoint', id: endpoint.id, dx: point.x - endpoint.x, dy: point.y - endpoint.y });
+  };
+
   const handleShapeEditorPointerMove = (event: React.PointerEvent) => {
     if (!shapeEditorDragState) return;
     const point = toShapeEditorPoint(event.clientX, event.clientY);
     const primitive = editingShape?.primitives.find((item) => item.id === shapeEditorDragState.id);
+    const endpoint = editingShape?.endpoints?.find((item) => item.id === shapeEditorDragState.id);
+    if (shapeEditorDragState.type === 'endpoint' && endpoint) {
+      updateEditingEndpoint(endpoint.id, {
+        x: clampPercent(point.x - shapeEditorDragState.dx),
+        y: clampPercent(point.y - shapeEditorDragState.dy),
+      });
+      return;
+    }
     if (!primitive) return;
 
     if (shapeEditorDragState.type === 'move') {
@@ -387,6 +426,35 @@ export function ScadaView() {
     const primitive = createPrimitive(type);
     setEditingShape((current) => current ? { ...current, primitives: [...current.primitives, primitive] } : current);
     setSelectedPrimitiveId(primitive.id);
+    setSelectedEndpointId('');
+  };
+
+  const updateEditingEndpoint = (id: string, patch: Partial<ScadaShapeEndpoint>) => {
+    setEditingShape((current) => current ? {
+      ...current,
+      endpoints: (current.endpoints || defaultElementEndpoints).map((endpoint) => endpoint.id === id ? { ...endpoint, ...patch } : endpoint),
+    } : current);
+  };
+
+  const addEditingEndpoint = () => {
+    const endpoint: ScadaShapeEndpoint = {
+      id: createEndpointId(),
+      label: `Endpoint ${(editingShape?.endpoints?.length || 0) + 1}`,
+      x: 50,
+      y: 50,
+    };
+    setEditingShape((current) => current ? { ...current, endpoints: [...(current.endpoints || defaultElementEndpoints), endpoint] } : current);
+    setSelectedEndpointId(endpoint.id);
+    setSelectedPrimitiveId('');
+  };
+
+  const removeEditingEndpoint = (id: string) => {
+    setEditingShape((current) => {
+      if (!current) return current;
+      const endpoints = (current.endpoints || defaultElementEndpoints).filter((endpoint) => endpoint.id !== id);
+      setSelectedEndpointId(endpoints[0]?.id || '');
+      return { ...current, endpoints };
+    });
   };
 
   const removeEditingPrimitive = (id: string) => {
@@ -404,6 +472,7 @@ export function ScadaView() {
       ...editingShape,
       name: editingShape.name.trim(),
       primitives: editingShape.primitives.length ? editingShape.primitives : [createPrimitive('rect')],
+      endpoints: editingShape.endpoints?.length ? editingShape.endpoints : [...defaultElementEndpoints],
     };
     if (scadaShapePresets.some((preset) => preset.id === savedShape.id)) {
       updateScadaShapePreset(savedShape.id, savedShape);
@@ -412,6 +481,7 @@ export function ScadaView() {
     }
     setEditingShape(null);
     setSelectedPrimitiveId('');
+    setSelectedEndpointId('');
   };
 
   const deleteShape = (preset: ScadaShapePreset) => {
@@ -420,6 +490,7 @@ export function ScadaView() {
     if (editingShape?.id === preset.id) {
       setEditingShape(null);
       setSelectedPrimitiveId('');
+      setSelectedEndpointId('');
     }
   };
 
@@ -1055,16 +1126,10 @@ export function ScadaView() {
       <g pointerEvents="none">
         {deviceAnchors.map((anchor) => (
           <g key={`${anchor.elementId}-${anchor.side}-anchor`}>
-            <line
-              x1={anchor.side === 'left' ? anchor.x - 18 : anchor.x + 18}
-              y1={anchor.y}
-              x2={anchor.x}
-              y2={anchor.y}
-              stroke="#93c5fd"
-              strokeWidth={2}
-              strokeDasharray="4 4"
-            />
+            <line x1={anchor.x - 10} y1={anchor.y} x2={anchor.x + 10} y2={anchor.y} stroke="#93c5fd" strokeWidth={2} strokeDasharray="4 4" />
+            <line x1={anchor.x} y1={anchor.y - 10} x2={anchor.x} y2={anchor.y + 10} stroke="#93c5fd" strokeWidth={2} strokeDasharray="4 4" />
             <circle cx={anchor.x} cy={anchor.y} r={7} fill="#020617" stroke="#93c5fd" strokeWidth={2} strokeDasharray="3 3" />
+            <text x={anchor.x + 9} y={anchor.y - 8} fill="#93c5fd" fontSize="10">{anchor.label}</text>
           </g>
         ))}
       </g>
@@ -1183,6 +1248,8 @@ export function ScadaView() {
   const renderShapeManager = () => {
     if (!shapeManagerOpen) return null;
     const selectedPrimitive = editingShape?.primitives.find((primitive) => primitive.id === selectedPrimitiveId) || null;
+    const shapeEndpoints = editingShape?.endpoints?.length ? editingShape.endpoints : defaultElementEndpoints;
+    const selectedEndpoint = shapeEndpoints.find((endpoint) => endpoint.id === selectedEndpointId) || null;
     const primitivePointsText = (selectedPrimitive?.points || []).map((point) => `${point.x},${point.y}`).join(' ');
 
     return (
@@ -1237,7 +1304,10 @@ export function ScadaView() {
                         onPointerMove={handleShapeEditorPointerMove}
                         onPointerUp={() => setShapeEditorDragState(null)}
                         onPointerLeave={() => setShapeEditorDragState(null)}
-                        onPointerDown={() => setSelectedPrimitiveId('')}
+                        onPointerDown={() => {
+                          setSelectedPrimitiveId('');
+                          setSelectedEndpointId('');
+                        }}
                       >
                         <rect x="0" y="0" width="100" height="100" fill="rgba(2,6,23,0.5)" />
                         {editingShape.primitives.map((primitive) => (
@@ -1248,6 +1318,13 @@ export function ScadaView() {
                           >
                             {renderShapePreviewPrimitive(primitive, primitive.id === selectedPrimitiveId)}
                             {primitive.id === selectedPrimitiveId && renderPrimitiveSelection(primitive)}
+                          </g>
+                        ))}
+                        {shapeEndpoints.map((endpoint) => (
+                          <g key={endpoint.id} onPointerDown={(event) => handleShapeEndpointPointerDown(event, endpoint)} className="cursor-move">
+                            <circle cx={endpoint.x} cy={endpoint.y} r={selectedEndpointId === endpoint.id ? 3.8 : 3} fill="#38bdf8" stroke="#020617" strokeWidth="1.2" />
+                            <text x={endpoint.x + 4} y={endpoint.y - 4} fill="#93c5fd" fontSize="5">{endpoint.label || endpoint.id}</text>
+                            {selectedEndpointId === endpoint.id && <circle cx={endpoint.x} cy={endpoint.y} r="6" fill="none" stroke="#fb923c" strokeDasharray="2 2" />}
                           </g>
                         ))}
                       </svg>
@@ -1311,6 +1388,48 @@ export function ScadaView() {
                     ) : (
                       <p className="mt-3 text-sm text-slate-500">Select or add a primitive to edit its geometry.</p>
                     )}
+                    <div className="mt-4 border-t border-slate-200 pt-3 dark:border-slate-800">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Connection Endpoints</h3>
+                        <button type="button" onClick={addEditingEndpoint} className="rounded border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Add</button>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Pipe and power line endpoints snap to these points when this shape is used.</p>
+                      <div className="mt-3 space-y-2">
+                        {shapeEndpoints.map((endpoint) => (
+                          <button
+                            key={endpoint.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedEndpointId(endpoint.id);
+                              setSelectedPrimitiveId('');
+                            }}
+                            className={cn('flex w-full items-center justify-between rounded border px-2 py-2 text-left text-xs', selectedEndpointId === endpoint.id ? 'border-orange-500 bg-orange-500/10 text-orange-500' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300')}
+                          >
+                            <span>{endpoint.label || endpoint.id}</span>
+                            <span className="font-mono">{Math.round(endpoint.x)}, {Math.round(endpoint.y)}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {selectedEndpoint && (
+                        <div className="mt-3 space-y-2 rounded border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+                          <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                            Label
+                            <input value={selectedEndpoint.label} onChange={(event) => updateEditingEndpoint(selectedEndpoint.id, { label: event.target.value })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                          </label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              X
+                              <input type="number" min={0} max={100} value={Math.round(selectedEndpoint.x)} onChange={(event) => updateEditingEndpoint(selectedEndpoint.id, { x: clampPercent(Number(event.target.value)) })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                            </label>
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Y
+                              <input type="number" min={0} max={100} value={Math.round(selectedEndpoint.y)} onChange={(event) => updateEditingEndpoint(selectedEndpoint.id, { y: clampPercent(Number(event.target.value)) })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                            </label>
+                          </div>
+                          <button type="button" onClick={() => removeEditingEndpoint(selectedEndpoint.id)} className="w-full rounded border border-red-200 px-2 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50 dark:border-red-500/30 dark:hover:bg-red-500/10">Remove Endpoint</button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ) : (

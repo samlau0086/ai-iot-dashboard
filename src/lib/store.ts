@@ -201,10 +201,18 @@ export interface ScadaShapePrimitive {
   dash?: string;
 }
 
+export interface ScadaShapeEndpoint {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+}
+
 export interface ScadaShapePreset {
   id: string;
   name: string;
   primitives: ScadaShapePrimitive[];
+  endpoints?: ScadaShapeEndpoint[];
   createdAt: string;
   updatedAt?: string;
 }
@@ -240,8 +248,8 @@ export interface ScadaElement {
   };
   points?: Array<{ x: number; y: number }>;
   connections?: {
-    start?: { elementId: string; anchor: 'left' | 'right' };
-    end?: { elementId: string; anchor: 'left' | 'right' };
+    start?: { elementId: string; anchor: string };
+    end?: { elementId: string; anchor: string };
   };
   deviceId?: string;
   metricKey?: string;
@@ -263,9 +271,15 @@ const createDefaultScadaShapePresets = (): ScadaShapePreset[] => [
     id: 'custom-panel-header',
     name: 'Header Panel',
     createdAt: new Date().toISOString(),
+    endpoints: [
+      { id: 'left', label: 'Left', x: 0, y: 50 },
+      { id: 'right', label: 'Right', x: 100, y: 50 },
+      { id: 'top', label: 'Top', x: 50, y: 0 },
+      { id: 'bottom', label: 'Bottom', x: 50, y: 100 },
+    ],
     primitives: [
       { id: 'header-frame', type: 'rect', x: 0, y: 0, width: 100, height: 100, rx: 8, fillMode: 'state', strokeMode: 'state', strokeWidth: 2 },
-      { id: 'header-line', type: 'line', x: 0, y: 28, width: 100, height: 28, fillMode: 'none', strokeMode: 'muted', strokeWidth: 1 },
+      { id: 'header-line', type: 'line', x: 0, y: 28, width: 100, height: 0, fillMode: 'none', strokeMode: 'muted', strokeWidth: 1 },
       { id: 'header-pill', type: 'rect', x: 8, y: 10, width: 18, height: 8, rx: 4, fillMode: 'accent', strokeMode: 'none', opacity: 0.75 },
     ],
   },
@@ -273,6 +287,11 @@ const createDefaultScadaShapePresets = (): ScadaShapePreset[] => [
     id: 'custom-control-node',
     name: 'Control Node',
     createdAt: new Date().toISOString(),
+    endpoints: [
+      { id: 'inlet', label: 'Inlet', x: 0, y: 50 },
+      { id: 'outlet', label: 'Outlet', x: 100, y: 50 },
+      { id: 'signal', label: 'Signal', x: 50, y: 0 },
+    ],
     primitives: [
       { id: 'node-body', type: 'polygon', x: 0, y: 0, points: [{ x: 8, y: 0 }, { x: 92, y: 0 }, { x: 100, y: 50 }, { x: 92, y: 100 }, { x: 8, y: 100 }, { x: 0, y: 50 }], fillMode: 'state', strokeMode: 'state', strokeWidth: 2 },
       { id: 'node-inner', type: 'rect', x: 10, y: 12, width: 80, height: 76, rx: 10, fillMode: 'panel', strokeMode: 'muted', strokeWidth: 1, opacity: 0.9 },
