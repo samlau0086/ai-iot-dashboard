@@ -24,6 +24,12 @@ type ScadaAnchor = {
   x: number;
   y: number;
 };
+type ScadaIconPresetOption = {
+  id: string;
+  name: string;
+  url?: string;
+  svg?: string;
+};
 type DragState =
   | { type: 'element'; id: string; dx: number; dy: number }
   | { type: 'endpoint'; id: string; endpoint: LineEndpoint; lockedAnchor?: ScadaAnchor | null }
@@ -255,7 +261,7 @@ export function ScadaView() {
   const [selectedPrimitiveId, setSelectedPrimitiveId] = useState('');
   const [selectedEndpointId, setSelectedEndpointId] = useState('');
   const [selectedIconPresetId, setSelectedIconPresetId] = useState(scadaIconPresets[0]?.id || '');
-  const [importedIconPresets, setImportedIconPresets] = useState<Array<{ id: string; name: string; url?: string; svg?: string }>>([]);
+  const [importedIconPresets, setImportedIconPresets] = useState<ScadaIconPresetOption[]>([]);
   const [svgIconMarkupByUrl, setSvgIconMarkupByUrl] = useState<Record<string, string>>({});
   const [canvasZoom, setCanvasZoom] = useState(0.75);
   const [shapeEditorDragState, setShapeEditorDragState] = useState<ShapeEditorDragState | null>(null);
@@ -306,8 +312,8 @@ export function ScadaView() {
     };
   }, [shapeManagerOpen, scadaShapePresets, editingShape, svgIconMarkupByUrl]);
 
-  const allScadaIconPresets = useMemo(
-    () => [...importedIconPresets, ...scadaIconPresets],
+  const allScadaIconPresets = useMemo<ScadaIconPresetOption[]>(
+    () => [...importedIconPresets, ...scadaIconPresets.map((preset) => ({ ...preset }))],
     [importedIconPresets]
   );
   const stepCanvasZoom = (direction: 1 | -1) => {
