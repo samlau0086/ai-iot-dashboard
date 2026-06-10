@@ -6,7 +6,7 @@ import {
   MessageCircle, Mail, Ticket, Power, Globe, FileText, BrainCircuit,
   Activity, Clock, Zap, PowerOff, ArrowDown, X, AlertTriangle, Settings,
   GitBranch, GitCommit, Settings2, Timer, ChevronDown, Radio, Wifi, Bell,
-  Code2, Shuffle, Ruler, Database, Repeat2, Ban, Braces, Route, KeyRound, ListTree, RefreshCw
+  Code2, Shuffle, Ruler, Database, Repeat2, Ban, Braces, Route, KeyRound, ListTree, RefreshCw, ChevronRight, Copy
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
@@ -39,6 +39,169 @@ type WorkflowRunLog = {
   startedAt: string;
   finishedAt: string;
 };
+
+const formatJsonValue = (value: unknown) => {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value ?? null, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const isJsonContainer = (value: unknown) => Boolean(value && typeof value === 'object');
+const isReferenceSafeKey = (key: string) => /^[A-Za-z0-9_$\u4e00-\u9fa5-]+$/.test(key);
+const buildReferencePath = (baseReference: '$.input' | '$.output', path: Array<string | number>) => {
+  if (path.some((segment) => typeof segment === 'string' && !isReferenceSafeKey(segment))) return '';
+  return path.length ? `${baseReference}.${path.join('.')}` : baseReference;
+};
+
+function JsonTreeNode({
+  label,
+  value,
+  path,
+  baseReference,
+  depth = 0,
+  onCopy,
+}: {
+  label: string;
+  value: unknown;
+  path: Array<string | number>;
+  baseReference: '$.input' | '$.output';
+  depth?: number;
+  onCopy: (reference: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(depth < 2);
+  const isContainer = isJsonContainer(value);
+  const reference = buildReferencePath(baseReference, path);
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [index, item] as const)
+    : isContainer
+      ? Object.entries(value as Record<string, unknown>)
+      : [];
+
+  const handleCopy = () => {
+    if (reference) onCopy(reference);
+  };
+
+  return (
+    <div>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={handleCopy}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handleCopy();
+          }
+        }}
+        className={cn(
+          "group flex min-w-0 items-start gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] leading-5 text-slate-200 hover:bg-slate-800/80",
+          reference ? "cursor-copy" : "cursor-default"
+        )}
+        style={{ paddingLeft: `${depth * 14 + 6}px` }}
+        title={reference || 'This key cannot be referenced with dot notation'}
+      >
+        {isContainer ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setExpanded((value) => !value);
+            }}
+            className="mt-0.5 rounded text-slate-400 hover:bg-slate-700 hover:text-slate-100"
+          >
+            {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          </button>
+        ) : (
+          <span className="w-3.5 shrink-0" />
+        )}
+        <span className="shrink-0 text-sky-300">{label}</span>
+        <span className="shrink-0 text-slate-500">:</span>
+        {isContainer ? (
+          <span className="truncate text-slate-400">{Array.isArray(value) ? `[${entries.length} items]` : `{${entries.length} keys}`}</span>
+        ) : (
+          <span className="break-all text-orange-200">{typeof value === 'string' ? value : String(value)}</span>
+        )}
+        {reference && <Copy className="ml-auto mt-1 hidden h-3 w-3 shrink-0 text-slate-500 group-hover:block" />}
+      </div>
+      {isContainer && expanded && (
+        <div>
+          {entries.length === 0 ? (
+            <div className="px-2 py-0.5 font-mono text-[11px] text-slate-500" style={{ paddingLeft: `${(depth + 1) * 14 + 6}px` }}>empty</div>
+          ) : entries.map(([key, item]) => (
+            <JsonTreeNode
+              key={`${path.join('.')}.${String(key)}`}
+              label={String(key)}
+              value={item}
+              path={[...path, key]}
+              baseReference={baseReference}
+              depth={depth + 1}
+              onCopy={onCopy}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JsonInspector({
+  value,
+  baseReference,
+  failed,
+}: {
+  value: unknown;
+  baseReference: '$.input' | '$.output';
+  failed?: boolean;
+}) {
+  const [view, setView] = useState<'tree' | 'text'>('tree');
+  const [copied, setCopied] = useState('');
+
+  const copyReference = async (reference: string) => {
+    try {
+      await navigator.clipboard.writeText(reference);
+      setCopied(reference);
+      window.setTimeout(() => setCopied(''), 1400);
+    } catch {
+      setCopied('Copy failed');
+      window.setTimeout(() => setCopied(''), 1400);
+    }
+  };
+
+  return (
+    <div className={cn("overflow-hidden rounded-md", failed ? "bg-red-950/80" : "bg-slate-950")}>
+      <div className="flex items-center justify-between border-b border-slate-800 px-2 py-1">
+        <div className="flex items-center gap-1">
+          {(['tree', 'text'] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setView(item)}
+              className={cn(
+                "rounded px-2 py-0.5 text-[11px] font-medium capitalize",
+                view === item
+                  ? "bg-slate-700 text-white"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+              )}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+        <span className="max-w-[190px] truncate text-[10px] text-emerald-300">{copied}</span>
+      </div>
+      {view === 'text' ? (
+        <pre className={cn("max-h-56 overflow-auto p-3 text-xs", failed ? "text-red-100" : "text-slate-200")}>{formatJsonValue(value)}</pre>
+      ) : (
+        <div className={cn("max-h-56 overflow-auto py-2", failed ? "text-red-100" : "text-slate-200")}>
+          <JsonTreeNode label={baseReference.replace('$.', '')} value={value} path={[]} baseReference={baseReference} onCopy={copyReference} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 const getActionIcon = (type: string) => {
   switch (type) {
@@ -1923,11 +2086,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                         </div>
                         <div>
                           <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Input</div>
-                          <pre className="max-h-56 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-200">{formatJson(selectedNodeLastLog.step.input)}</pre>
+                          <JsonInspector value={selectedNodeLastLog.step.input} baseReference="$.input" />
                         </div>
                         <div>
                           <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Output</div>
-                          <pre className={cn("max-h-56 overflow-auto rounded-md p-3 text-xs", selectedNodeLastLog.step.status === 'failed' ? "bg-red-950/80 text-red-100" : "bg-slate-950 text-slate-200")}>{formatJson(selectedNodeLastLog.step.output)}</pre>
+                          <JsonInspector value={selectedNodeLastLog.step.output} baseReference="$.output" failed={selectedNodeLastLog.step.status === 'failed'} />
                         </div>
                       </div>
                     )}
@@ -2062,11 +2225,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                             <div className="mt-3 grid gap-3 lg:grid-cols-2">
                               <div>
                                 <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Input</div>
-                                <pre className="max-h-48 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-200">{formatJson(step.input)}</pre>
+                                <JsonInspector value={step.input} baseReference="$.input" />
                               </div>
                               <div>
                                 <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">{step.status === 'failed' ? 'Error / Output' : 'Output'}</div>
-                                <pre className={cn("max-h-48 overflow-auto rounded-md p-3 text-xs", step.status === 'failed' ? "bg-red-950/80 text-red-100" : "bg-slate-950 text-slate-200")}>{formatJson(step.output)}</pre>
+                                <JsonInspector value={step.output} baseReference="$.output" failed={step.status === 'failed'} />
                               </div>
                             </div>
                           </div>
