@@ -33,10 +33,14 @@ const createDefaultNfcName = () => {
 
 const methodLabels: Record<AccessDefinition['method'], string> = {
   qr: 'QR Link',
+  nfc_basic: 'NFC URL',
   nfc: 'NFC · NTAG424 DNA URL Based',
   caller_id: 'Caller ID',
   sms: 'SMS',
 };
+
+const isNfcCredentialType = (type?: string) => type === 'nfc' || type === 'nfc_basic';
+const isNfcDnaCredentialType = (type?: string) => type === 'nfc';
 
 function InlineTags({
   value,
@@ -116,7 +120,7 @@ function NfcCredentialVisual({ compact = false }: { compact?: boolean }) {
         <KeyRound className="h-5 w-5 text-cyan-600 dark:text-cyan-300" />
       </div>
       <div className="mt-3 text-xs font-semibold uppercase tracking-wider">NFC URL</div>
-      <div className="mt-1 text-[11px] leading-4 text-cyan-700/80 dark:text-cyan-200/80">NTAG424 DNA</div>
+      <div className="mt-1 text-[11px] leading-4 text-cyan-700/80 dark:text-cyan-200/80">NFC Tag</div>
     </div>
   );
 }
@@ -170,7 +174,6 @@ export function AccessControl() {
   const [selectedAccessId, setSelectedAccessId] = useState(accesses[0]?.id || '');
   const [paramsDraft, setParamsDraft] = useState('{}');
   const [qrName, setQrName] = useState(createDefaultQrName());
-  const [credentialTagId, setCredentialTagId] = useState('');
   const [credentialGroups, setCredentialGroups] = useState<string[]>([]);
   const [validMode, setValidMode] = useState<'duration' | 'until'>('duration');
   const [periodValue, setPeriodValue] = useState(1);
@@ -196,7 +199,9 @@ export function AccessControl() {
   const [credentialValidMode, setCredentialValidMode] = useState<'duration' | 'until'>('duration');
 
   const selectedAccess = accesses.find((access) => access.id === selectedAccessId) || accesses[0];
-  const selectedCredentialType = selectedAccess?.method === 'nfc' ? 'nfc' : 'qr';
+  const isNfcMethod = selectedAccess?.method === 'nfc' || selectedAccess?.method === 'nfc_basic';
+  const isNfcDnaMethod = selectedAccess?.method === 'nfc';
+  const selectedCredentialType = isNfcMethod ? (selectedAccess?.method || 'nfc_basic') : 'qr';
   const selectedAccessGroups = selectedAccess?.credentialGroups || [];
   const credentials = useMemo(
     () => accessCredentials.filter((credential) => credential.accessId === selectedAccess?.id),
@@ -214,9 +219,8 @@ export function AccessControl() {
   useEffect(() => {
     if (selectedAccess) {
       setParamsDraft(JSON.stringify(selectedAccess.extraParams || {}, null, 2));
-      setQrName(selectedAccess.method === 'nfc' ? createDefaultNfcName() : createDefaultQrName());
+      setQrName((selectedAccess.method === 'nfc' || selectedAccess.method === 'nfc_basic') ? createDefaultNfcName() : createDefaultQrName());
       setCredentialGroups([]);
-      setCredentialTagId('');
     }
   }, [selectedAccess?.id, selectedAccess?.method]);
 
@@ -324,7 +328,7 @@ export function AccessControl() {
     const computedPeriodSeconds = validMode === 'until'
       ? Math.max(30, Math.round((new Date(validUntilInput).getTime() - Date.now()) / 1000))
       : Math.max(30, durationToSeconds(periodValue, periodUnit));
-    const computedRefreshSeconds = selectedCredentialType === 'nfc' ? 0 : refreshValue > 0 ? durationToSeconds(refreshValue, refreshUnit) : 0;
+    const computedRefreshSeconds = selectedCredentialType === 'nfc' || selectedCredentialType === 'nfc_basic' ? 0 : refreshValue > 0 ? durationToSeconds(refreshValue, refreshUnit) : 0;
     await fetch(`/api/accesses/${selectedAccess.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -336,7 +340,6 @@ export function AccessControl() {
       body: JSON.stringify({
         type: selectedCredentialType,
         name: qrName,
-        tagId: selectedCredentialType === 'nfc' ? credentialTagId : '',
         groups: credentialGroups,
         periodSeconds: computedPeriodSeconds,
         validUntil: validMode === 'until' ? new Date(validUntilInput).toISOString() : undefined,
@@ -353,11 +356,12 @@ export function AccessControl() {
     setAccessCredentials(payload.credentials || []);
     setLastLink(payload.link || '');
     setLastLatestQrLink(payload.latestQrLink || '');
-    setQrName(selectedCredentialType === 'nfc' ? createDefaultNfcName() : createDefaultQrName());
-    setCredentialTagId('');
+    setQrName(selectedCredentialType === 'nfc' || selectedCredentialType === 'nfc_basic' ? createDefaultNfcName() : createDefaultQrName());
     setCredentialGroups([]);
     setMessage(selectedCredentialType === 'nfc'
-      ? 'NFC tag URL generated. Write this URL to the NTAG424 DNA tag.'
+      ? 'NFC DNA URL generated. Write this URL to the NTAG424 DNA tag.'
+      : selectedCredentialType === 'nfc_basic'
+        ? 'NFC URL generated. Write this URL to the NFC tag.'
       : payload.latestQrLink ? 'QR link generated. Latest QR page is available for rotating displays.' : 'QR link generated.');
   };
 
@@ -402,7 +406,6 @@ export function AccessControl() {
     await updateCredential(credentialModal.credential.id, {
       name: credentialDraft.name,
       enabled: credentialDraft.enabled,
-      tagId: credentialDraft.tagId,
       groups: credentialDraft.groups,
       periodSeconds: nextPeriodSeconds,
       validUntil: credentialValidMode === 'until'
@@ -553,6 +556,7 @@ export function AccessControl() {
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     >
                       <option value="qr">QR Link</option>
+                      <option value="nfc_basic">NFC URL</option>
                       <option value="nfc">NFC · NTAG424 DNA URL Based</option>
                       <option value="caller_id">Caller ID</option>
                       <option value="sms">SMS</option>
@@ -583,7 +587,7 @@ export function AccessControl() {
               </div>
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
-                {selectedAccess.method === 'nfc' && (
+                {isNfcDnaMethod && (
                   <div>
                     <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">AES Key</label>
                     <input
@@ -655,7 +659,7 @@ export function AccessControl() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
                   <QrCode className="h-4 w-4 text-orange-500" />
-                  {selectedAccess.method === 'nfc' ? 'NFC Tag Credentials' : 'QR Code Credentials'}
+                  {isNfcMethod ? 'NFC Tag Credentials' : 'QR Code Credentials'}
                 </h2>
                 <button
                   type="button"
@@ -663,34 +667,22 @@ export function AccessControl() {
                   className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                 >
                   <RefreshCw className="h-4 w-4" />
-                  {selectedAccess.method === 'nfc' ? 'Generate NFC URL' : 'Generate QR Link'}
+                  {isNfcMethod ? 'Generate NFC URL' : 'Generate QR Link'}
                 </button>
               </div>
 
               <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <div>
-                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">{selectedAccess.method === 'nfc' ? 'NFC Tag Name' : 'QR Name'}</label>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">{isNfcMethod ? 'NFC Tag Name' : 'QR Name'}</label>
                   <input
                     value={qrName}
                     onChange={(event) => setQrName(event.target.value)}
-                    placeholder={selectedAccess.method === 'nfc' ? 'NFC-20260609-A1B' : 'QR-20260609-A1B'}
+                    placeholder={isNfcMethod ? 'NFC-20260609-A1B' : 'QR-20260609-A1B'}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                   />
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Internal display name for this credential.</p>
                 </div>
-                {selectedAccess.method === 'nfc' && (
-                  <div>
-                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tag UID</label>
-                    <input
-                      value={credentialTagId}
-                      onChange={(event) => setCredentialTagId(event.target.value)}
-                      placeholder="NTAG424 UID, for example 0491ABCD123456"
-                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 font-mono text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-                    />
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Required NFC tag UID. The tapped URL must send the same uid with an increasing ctr and valid cmac.</p>
-                  </div>
-                )}
-                <div className={selectedAccess.method === 'nfc' ? 'md:col-span-2' : ''}>
+                <div className={isNfcMethod ? 'md:col-span-3' : ''}>
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Credential Groups</label>
                   <div className="mt-1">
                     <InlineTags
@@ -701,6 +693,9 @@ export function AccessControl() {
                     />
                   </div>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Included in QR/NFC Access trigger output as credentialGroups.</p>
+                  {isNfcDnaMethod && (
+                    <p className="mt-1 text-xs text-cyan-600 dark:text-cyan-300">Tag UID is auto-bound from the first verified NFC tap.</p>
+                  )}
                 </div>
                 <div className="md:col-span-2">
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Validity</label>
@@ -741,7 +736,7 @@ export function AccessControl() {
                   </div>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Set how long this credential remains valid.</p>
                 </div>
-                {selectedAccess.method !== 'nfc' && (
+                {!isNfcMethod && (
                 <div>
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Refresh Interval</label>
                   <div className="mt-1 grid grid-cols-[1fr_8rem] gap-2">
@@ -774,7 +769,7 @@ export function AccessControl() {
                   />
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Maximum accepted visits during this credential period.</p>
                 </div>
-                {selectedAccess.method !== 'nfc' && (
+                {!isNfcMethod && (
                 <label className="flex min-h-[5.5rem] items-center justify-between gap-3 rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
                   <span>
                     <span className="block text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Invalidate QR After Scan</span>
@@ -793,7 +788,7 @@ export function AccessControl() {
               {lastLink && (
                 <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-3 dark:border-orange-500/30 dark:bg-orange-500/10">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
-                    {selectedAccess.method === 'nfc' ? (
+                    {isNfcMethod ? (
                       <NfcCredentialVisual compact />
                     ) : (
                       <img
@@ -803,7 +798,7 @@ export function AccessControl() {
                       />
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">{selectedAccess.method === 'nfc' ? 'NFC URL' : 'QR Access Link'}</p>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">{isNfcMethod ? 'NFC URL' : 'QR Access Link'}</p>
                       <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{lastLink}</p>
                       <button
                         type="button"
@@ -861,7 +856,7 @@ export function AccessControl() {
                             ))}
                           </div>
                           {credential.tagId && <div className="mt-1 font-mono text-[10px]">UID {credential.tagId}</div>}
-                          {credential.type === 'nfc' && (
+                          {isNfcDnaCredentialType(credential.type) && (
                             <div className="mt-1 text-[10px] text-slate-400">last ctr {credential.lastCounter ?? '-'}</div>
                           )}
                         </td>
@@ -1019,7 +1014,7 @@ export function AccessControl() {
               <div className="space-y-4 p-5">
                 {credentialLink ? (
                   <div className="flex flex-col gap-4 sm:flex-row">
-                    {credentialModal.credential.type === 'nfc' ? (
+                    {isNfcCredentialType(credentialModal.credential.type) ? (
                       <NfcCredentialVisual />
                     ) : (
                       <img
@@ -1029,7 +1024,7 @@ export function AccessControl() {
                       />
                     )}
                     <div className="min-w-0 flex-1">
-                      <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">{credentialModal.credential.type === 'nfc' ? 'NFC URL' : 'QR Link'}</label>
+                      <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">{isNfcCredentialType(credentialModal.credential.type) ? 'NFC URL' : 'QR Link'}</label>
                       <p className="mt-2 break-all rounded border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
                         {credentialLink}
                       </p>
@@ -1069,13 +1064,13 @@ export function AccessControl() {
                 )}
 
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {credentialModal.credential.type === 'nfc' && (
+                  {isNfcDnaCredentialType(credentialModal.credential.type) && (
                     <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
                       <span className="block text-xs text-slate-500">Tag UID</span>
                       <span className="font-mono text-xs font-semibold text-slate-900 dark:text-white">{credentialModal.credential.tagId || '-'}</span>
                     </div>
                   )}
-                  {credentialModal.credential.type === 'nfc' && (
+                  {isNfcDnaCredentialType(credentialModal.credential.type) && (
                     <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
                       <span className="block text-xs text-slate-500">Last Counter</span>
                       <span className="font-mono text-xs font-semibold text-slate-900 dark:text-white">{credentialModal.credential.lastCounter ?? '-'}</span>
@@ -1107,17 +1102,6 @@ export function AccessControl() {
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                   />
                 </div>
-                {credentialModal.credential.type === 'nfc' && (
-                  <div>
-                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tag UID</label>
-                    <input
-                      value={credentialDraft.tagId || ''}
-                      onChange={(event) => setCredentialDraft((current) => ({ ...current, tagId: event.target.value }))}
-                      placeholder="NTAG424 UID, for example 0491ABCD123456"
-                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 font-mono text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-                    />
-                  </div>
-                )}
                 <div>
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Credential Groups</label>
                   <div className="mt-1">
@@ -1128,6 +1112,9 @@ export function AccessControl() {
                       placeholder="Add group..."
                     />
                   </div>
+                  {isNfcDnaCredentialType(credentialModal.credential.type) && (
+                    <p className="mt-1 text-xs text-cyan-600 dark:text-cyan-300">UID is auto-bound by the first verified tap and is not edited manually.</p>
+                  )}
                 </div>
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="sm:col-span-3">
@@ -1174,7 +1161,7 @@ export function AccessControl() {
                       )}
                     </div>
                   </div>
-                  {credentialModal.credential.type !== 'nfc' && (
+                  {!isNfcCredentialType(credentialModal.credential.type) && (
                   <div>
                     <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Refresh Interval</label>
                     <div className="mt-1 grid grid-cols-[1fr_7.5rem] gap-2">
@@ -1211,7 +1198,7 @@ export function AccessControl() {
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
                   </div>
-                  {credentialModal.credential.type !== 'nfc' && (
+                  {!isNfcCredentialType(credentialModal.credential.type) && (
                   <label className="flex items-center justify-between gap-3 rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
                     <span>
                       <span className="block font-medium text-slate-700 dark:text-slate-300">Invalidate QR After Scan</span>

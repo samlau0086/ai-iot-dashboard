@@ -571,7 +571,7 @@ const publicAccessCredential = (credential) => ({
 const createAccessToken = () => crypto.randomBytes(32).toString('base64url');
 const normalizeAccessMethod = (value) => {
   const method = String(value || 'qr').trim().toLowerCase();
-  return ['qr', 'nfc', 'caller_id', 'sms'].includes(method) ? method : 'qr';
+  return ['qr', 'nfc_basic', 'nfc', 'caller_id', 'sms'].includes(method) ? method : 'qr';
 };
 const normalizeAccessGroups = (value) => {
   const source = Array.isArray(value) ? value : String(value || '').split(',');
@@ -655,6 +655,12 @@ const createLatestQrLink = (req, token) => {
 };
 
 const createNfcAccessLink = (req, token) => {
+  const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+  return `${proto}://${host}/nfc/${token}`;
+};
+
+const createNfcDnaAccessLink = (req, token) => {
   const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
   const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
   return `${proto}://${host}/nfc/${token}?uid=00000000000000&ctr=000000&cmac=0000000000000000`;
@@ -3058,7 +3064,7 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
       id: createId('access-cred'),
       accessId: access.id,
       type,
-      name: String(payload.name || (type === 'nfc' ? 'NFC Tag' : 'QR Code')).trim(),
+      name: String(payload.name || (type === 'nfc' || type === 'nfc_basic' ? 'NFC Tag' : 'QR Code')).trim(),
       tagId: String(payload.tagId || '').trim(),
       groups: normalizeAccessGroups(payload.groups),
       token,
@@ -3081,7 +3087,7 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
     res.status(201).json({
       credential: publicAccessCredential(credential),
       credentials: nextCredentials.map(publicAccessCredential),
-      link: type === 'nfc' ? createNfcAccessLink(req, token) : createAccessLink(req, token),
+      link: type === 'nfc' ? createNfcDnaAccessLink(req, token) : type === 'nfc_basic' ? createNfcAccessLink(req, token) : createAccessLink(req, token),
       latestQrLink: type === 'qr' && credential.latestToken ? createLatestQrLink(req, credential.latestToken) : null,
     });
   } catch (error) {
@@ -3162,7 +3168,9 @@ app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
     }
     res.status(200).json({
       link: rotated.credential.type === 'nfc'
-        ? createNfcAccessLink(req, rotated.credential.token)
+        ? createNfcDnaAccessLink(req, rotated.credential.token)
+        : rotated.credential.type === 'nfc_basic'
+          ? createNfcAccessLink(req, rotated.credential.token)
         : createAccessLink(req, rotated.credential.token),
       latestQrLink: rotated.credential.type === 'qr' && rotated.credential.latestToken ? createLatestQrLink(req, rotated.credential.latestToken) : null,
       credentials: nextCredentials.map(publicAccessCredential),
@@ -3963,7 +3971,7 @@ const handleNfcAccessRequest = async (req, res) => {
   try {
     const tokenHash = hashToken(req.params.token);
     const {accesses, accessCredentials} = await getAccessState();
-    const credential = accessCredentials.find((item) => item.tokenHash === tokenHash && item.type === 'nfc');
+    const credential = accessCredentials.find((item) => item.tokenHash === tokenHash && ['nfc', 'nfc_basic'].includes(item.type));
     const access = credential ? accesses.find((item) => item.id === credential.accessId) : null;
     const renderAccessPage = (statusCode, title, heading, message, detail = '') => {
       res.status(statusCode).send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0f1115;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}.card{max-width:420px;width:calc(100% - 32px);background:#1c2128;border:1px solid #273244;border-radius:12px;padding:24px;text-align:center}.ok{color:#34d399}.denied{color:#fb7185}.muted{color:#94a3b8;font-size:13px;line-height:1.5}.message{font-size:18px;line-height:1.5;white-space:pre-wrap}</style></head><body><main class="card"><h1 class="${statusCode < 400 ? 'ok' : 'denied'}">${escapeHtml(heading)}</h1><p class="message">${escapeHtml(message)}</p>${detail ? `<p class="muted">${escapeHtml(detail)}</p>` : ''}</main></body></html>`);
@@ -3978,9 +3986,11 @@ const handleNfcAccessRequest = async (req, res) => {
         reason,
         params: {
           ...(access?.extraParams || {}),
-          uid: credential?.tagId || providedUid,
-          counter: providedCounter,
-          cmac: providedCmac,
+          ...(credential?.type === 'nfc' ? {
+            uid: credential?.tagId || providedUid,
+            counter: providedCounter,
+            cmac: providedCmac,
+          } : {}),
           credentialGroups: normalizeAccessGroups(credential?.groups),
         },
         request: requestMeta,
@@ -4001,32 +4011,31 @@ const handleNfcAccessRequest = async (req, res) => {
       await reject(403, 'NFC tag is disabled.');
       return;
     }
-    if (!providedUid || providedCounter === null || !providedCmac) {
-      await reject(400, 'NFC uid, ctr, and cmac are required.');
-      return;
-    }
-    if (!credential.tagId) {
-      await reject(403, 'NFC credential UID is not configured.');
-      return;
-    }
-    if (normalizeHex(credential.tagId) !== providedUid) {
-      await reject(403, 'NFC UID does not match this credential.');
-      return;
-    }
-    const cmacResult = verifyNfcCmac({
-      aesKey: access.aesKey,
-      uid: providedUid,
-      counter: providedCounter,
-      cmac: providedCmac,
-    });
-    if (!cmacResult.ok) {
-      await reject(403, cmacResult.reason);
-      return;
-    }
-    const lastCounter = Number.isFinite(Number(credential.lastCounter)) ? Number(credential.lastCounter) : -1;
-    if (providedCounter <= lastCounter) {
-      await reject(409, `NFC counter replay detected. Last accepted counter is ${lastCounter}.`);
-      return;
+    if (credential.type === 'nfc') {
+      if (!providedUid || providedCounter === null || !providedCmac) {
+        await reject(400, 'NFC uid, ctr, and cmac are required.');
+        return;
+      }
+      const boundUid = normalizeHex(credential.tagId);
+      if (boundUid && boundUid !== providedUid) {
+        await reject(403, 'NFC UID does not match this credential.');
+        return;
+      }
+      const cmacResult = verifyNfcCmac({
+        aesKey: access.aesKey,
+        uid: providedUid,
+        counter: providedCounter,
+        cmac: providedCmac,
+      });
+      if (!cmacResult.ok) {
+        await reject(403, cmacResult.reason);
+        return;
+      }
+      const lastCounter = Number.isFinite(Number(credential.lastCounter)) ? Number(credential.lastCounter) : -1;
+      if (providedCounter <= lastCounter) {
+        await reject(409, `NFC counter replay detected. Last accepted counter is ${lastCounter}.`);
+        return;
+      }
     }
     if (credential.validFrom && now < new Date(credential.validFrom)) {
       await reject(403, 'NFC tag is not active yet.');
@@ -4045,18 +4054,21 @@ const handleNfcAccessRequest = async (req, res) => {
     const credentialGroups = normalizeAccessGroups(credential.groups);
     const eventParams = {
       ...(access.extraParams || {}),
-      uid: providedUid,
-      tagId: providedUid,
-      counter: providedCounter,
-      cmac: providedCmac,
+      ...(credential.type === 'nfc' ? {
+        uid: providedUid,
+        tagId: providedUid,
+        counter: providedCounter,
+        cmac: providedCmac,
+      } : {}),
       credentialGroups,
     };
     const nextCredentials = accessCredentials.map((item) => (
       item.id === credential.id
         ? {
             ...item,
+            tagId: credential.type === 'nfc' ? (item.tagId || providedUid) : item.tagId,
             usedCount: Number(item.usedCount || 0) + 1,
-            lastCounter: providedCounter,
+            lastCounter: credential.type === 'nfc' ? providedCounter : item.lastCounter,
             lastUsedAt: acceptedAt,
           }
         : item
@@ -4084,9 +4096,11 @@ const handleNfcAccessRequest = async (req, res) => {
       credentialId: credential.id,
       credentialName: credential.name,
       credentialGroups,
-      tagId: providedUid,
-      uid: providedUid,
-      counter: providedCounter,
+      ...(credential.type === 'nfc' ? {
+        tagId: providedUid,
+        uid: providedUid,
+        counter: providedCounter,
+      } : {}),
       params: eventParams,
       request: requestMeta,
       accessEvent,

@@ -1692,7 +1692,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
                       if (['access', 'nfc_access'].includes(node.config.type) && key === 'accessId') {
                         const accessOptions = node.config.type === 'nfc_access'
-                          ? accesses.filter((access) => access.method === 'nfc')
+                          ? accesses.filter((access) => access.method === 'nfc' || access.method === 'nfc_basic')
                           : accesses;
                         return (
                           <div key={key}>

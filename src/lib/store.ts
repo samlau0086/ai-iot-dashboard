@@ -70,7 +70,7 @@ export interface AccessDefinition {
   id: string;
   name: string;
   enabled: boolean;
-  method: 'qr' | 'nfc' | 'caller_id' | 'sms';
+  method: 'qr' | 'nfc_basic' | 'nfc' | 'caller_id' | 'sms';
   aesKey?: string;
   credentialGroups?: string[];
   grantedMessage?: string;
@@ -83,7 +83,7 @@ export interface AccessDefinition {
 export interface AccessCredential {
   id: string;
   accessId: string;
-  type: 'qr' | 'nfc' | 'caller_id' | 'sms';
+  type: 'qr' | 'nfc_basic' | 'nfc' | 'caller_id' | 'sms';
   name: string;
   enabled: boolean;
   tagId?: string;
