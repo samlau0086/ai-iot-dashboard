@@ -180,6 +180,10 @@ export interface ScadaElement {
   width?: number;
   height?: number;
   points?: Array<{ x: number; y: number }>;
+  connections?: {
+    start?: { elementId: string; anchor: 'left' | 'right' };
+    end?: { elementId: string; anchor: 'left' | 'right' };
+  };
   deviceId?: string;
   metricKey?: string;
   unit?: string;
@@ -315,8 +319,8 @@ const createDefaultScadaScene = (siteId = 'factory-a', siteName = 'Factory A'): 
     { id: 'scada-device-compressor', type: 'device', label: 'Air Compressor', x: 390, y: 150, width: 170, height: 96, deviceId: 'DEV-003', metricKey: 'pressure', unit: 'bar', warning: 7.5, critical: 8.5 },
     { id: 'scada-device-cold', type: 'device', label: 'Cold Storage', x: 700, y: 150, width: 160, height: 96, deviceId: 'DEV-004', metricKey: 'temperature', unit: 'deg C', warning: -12, critical: -8 },
     { id: 'scada-metric-energy', type: 'metric', label: 'Energy Today', x: 92, y: 300, width: 170, height: 70, deviceId: 'DEV-001', metricKey: 'energy', unit: 'kWh', warning: 650, critical: 900 },
-    { id: 'scada-pipe-air', type: 'pipe', label: 'Compressed Air', x: 0, y: 0, points: [{ x: 560, y: 198 }, { x: 710, y: 198 }], deviceId: 'DEV-003', metricKey: 'pressure', warning: 7.5, critical: 8.5 },
-    { id: 'scada-power-feed', type: 'power', label: 'Power Feed', x: 0, y: 0, points: [{ x: 240, y: 202 }, { x: 390, y: 198 }], deviceId: 'DEV-001', metricKey: 'power', warning: 3500, critical: 5000 },
+    { id: 'scada-pipe-air', type: 'pipe', label: 'Compressed Air', x: 0, y: 0, points: [{ x: 560, y: 198 }, { x: 700, y: 198 }], connections: { start: { elementId: 'scada-device-compressor', anchor: 'right' }, end: { elementId: 'scada-device-cold', anchor: 'left' } }, deviceId: 'DEV-003', metricKey: 'pressure', warning: 7.5, critical: 8.5 },
+    { id: 'scada-power-feed', type: 'power', label: 'Power Feed', x: 0, y: 0, points: [{ x: 240, y: 202 }, { x: 390, y: 198 }], connections: { start: { elementId: 'scada-device-meter', anchor: 'right' }, end: { elementId: 'scada-device-compressor', anchor: 'left' } }, deviceId: 'DEV-001', metricKey: 'power', warning: 3500, critical: 5000 },
   ],
 });
 

@@ -688,7 +688,7 @@ Dashboard 后端不直接作为 Modbus、CAN、LoRa 或蜂窝网络驱动运行�
 
 ## Access Control
 
-Access Control adds QR-link based workflow triggers for visitor, operator, gate, or temporary device-control scenarios.
+Access Control adds QR-link and NFC URL based workflow triggers for visitor, operator, gate, or temporary device-control scenarios.
 
 1. Open `/access-control`.
 2. Create an Access entry and set `Extra Parameters JSON`, for example:
@@ -701,14 +701,15 @@ Access Control adds QR-link based workflow triggers for visitor, operator, gate,
    }
    ```
 
-3. Generate one or more QR credentials for the Access entry. Each credential can define `name`, `periodSeconds`, `refreshIntervalSeconds`, and `maxUses`.
+3. Generate one or more QR or NFC credentials for the Access entry. Each credential can define `name`, `groups`, `periodSeconds`, `refreshIntervalSeconds` for QR, and `maxUses`.
 4. Copy the generated random link. The URL uses only a random token:
 
    ```text
-   https://your-domain.com/a/<random-token>
+   https://your-domain.com/qr/<random-token>
+   https://your-domain.com/nfc/<random-token>?e=00000000000000000000000000000000&c=0000000000000000
    ```
 
-   The link does not contain Access ID, device ID, device name, or other business identifiers.
+   The link does not contain Access ID, Credential ID, device ID, device name, or other business identifiers.
 
 5. In Workflow Automation, add an `Access Trigger` node and bind it to an Access entry, or leave it as `Any Access`.
 6. In a `Device Control` node, set `Device Source` to `From workflow expression` and use:
@@ -717,4 +718,4 @@ Access Control adds QR-link based workflow triggers for visitor, operator, gate,
    $.access_trigger.output.params.deviceId
    ```
 
-When the QR link is visited, the backend validates that the QR credential is enabled, within its valid period, still has remaining uses, and belongs to an enabled Access entry. If accepted, it dispatches an Access workflow event containing the Access extra parameters.
+When the QR or NFC link is visited, the backend validates that the credential is enabled, within its valid period, still has remaining uses, and belongs to an enabled Access entry. If accepted, it dispatches an Access workflow event containing the Access extra parameters and credential groups.

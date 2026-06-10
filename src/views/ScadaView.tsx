@@ -7,6 +7,20 @@ import type { Device } from '../types';
 
 const CANVAS_WIDTH = 1100;
 const CANVAS_HEIGHT = 620;
+const SNAP_DISTANCE = 28;
+const DETACH_DISTANCE = 52;
+
+type AnchorSide = 'left' | 'right';
+type LineEndpoint = 0 | 1;
+type ScadaAnchor = {
+  elementId: string;
+  side: AnchorSide;
+  x: number;
+  y: number;
+};
+type DragState =
+  | { type: 'element'; id: string; dx: number; dy: number }
+  | { type: 'endpoint'; id: string; endpoint: LineEndpoint; lockedAnchor?: ScadaAnchor | null };
 
 const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> = [
   { type: 'device', label: 'Device', icon: Cpu },
@@ -58,6 +72,22 @@ const formatMetricValue = (value: number, unit?: string) => {
   return unit ? `${formatted} ${unit}` : formatted;
 };
 
+const isLineElement = (element: ScadaElement) => element.type === 'pipe' || element.type === 'power';
+const getElementSize = (element: ScadaElement) => ({
+  width: element.width || 150,
+  height: element.height || 76,
+});
+const getElementAnchors = (element: ScadaElement): ScadaAnchor[] => {
+  if (isLineElement(element) || element.type === 'label') return [];
+  const {width, height} = getElementSize(element);
+  const centerY = element.y + height / 2;
+  return [
+    { elementId: element.id, side: 'left', x: element.x, y: centerY },
+    { elementId: element.id, side: 'right', x: element.x + width, y: centerY },
+  ];
+};
+const distanceBetween = (first: { x: number; y: number }, second: { x: number; y: number }) => Math.hypot(first.x - second.x, first.y - second.y);
+
 export function ScadaView() {
   const navigate = useNavigate();
   const { activeSiteId, sites, devices, scadaScenesBySite, updateScadaScene } = useAppStore();
@@ -67,7 +97,7 @@ export function ScadaView() {
   const [draft, setDraft] = useState<ScadaScene>(storeScene);
   const [selectedElementId, setSelectedElementId] = useState('');
   const [editMode, setEditMode] = useState(false);
-  const [dragState, setDragState] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const [dragState, setDragState] = useState<DragState | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   useEffect(() => {
@@ -87,6 +117,38 @@ export function ScadaView() {
     const device = devices.find((item) => item.id === selectedElement?.deviceId);
     return Object.keys(device?.metrics || {}).sort();
   }, [devices, selectedElement?.deviceId]);
+  const deviceAnchors = useMemo(
+    () => draft.elements.flatMap((element) => getElementAnchors(element)),
+    [draft.elements]
+  );
+  const showDeviceAnchors = editMode && (
+    selectedElement ? isLineElement(selectedElement) : dragState?.type === 'endpoint'
+  );
+
+  const findAnchor = (connection?: { elementId: string; anchor: AnchorSide }) => {
+    if (!connection) return null;
+    return deviceAnchors.find((anchor) => anchor.elementId === connection.elementId && anchor.side === connection.anchor) || null;
+  };
+
+  const nearestAnchor = (point: { x: number; y: number }) => {
+    let nearest: { anchor: ScadaAnchor; distance: number } | null = null;
+    deviceAnchors.forEach((anchor) => {
+      const distance = distanceBetween(point, anchor);
+      if (!nearest || distance < nearest.distance) nearest = { anchor, distance };
+    });
+    return nearest;
+  };
+
+  const resolveLinePoints = (element: ScadaElement) => {
+    const points = element.points || [];
+    if (points.length < 2) return points;
+    const startAnchor = findAnchor(element.connections?.start);
+    const endAnchor = findAnchor(element.connections?.end);
+    return [
+      startAnchor ? { x: startAnchor.x, y: startAnchor.y } : points[0],
+      endAnchor ? { x: endAnchor.x, y: endAnchor.y } : points[1],
+    ];
+  };
 
   const toSvgPoint = (clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -127,41 +189,128 @@ export function ScadaView() {
   };
 
   const handlePointerDown = (event: React.PointerEvent, element: ScadaElement) => {
-    if (!editMode || element.type === 'pipe' || element.type === 'power') return;
+    if (!editMode || isLineElement(element)) return;
     event.stopPropagation();
     const point = toSvgPoint(event.clientX, event.clientY);
     setSelectedElementId(element.id);
-    setDragState({ id: element.id, dx: point.x - element.x, dy: point.y - element.y });
+    setDragState({ type: 'element', id: element.id, dx: point.x - element.x, dy: point.y - element.y });
+  };
+
+  const handleEndpointPointerDown = (event: React.PointerEvent, element: ScadaElement, endpoint: LineEndpoint) => {
+    if (!editMode) return;
+    event.stopPropagation();
+    setSelectedElementId(element.id);
+    const lockedAnchor = endpoint === 0
+      ? findAnchor(element.connections?.start)
+      : findAnchor(element.connections?.end);
+    setDragState({ type: 'endpoint', id: element.id, endpoint, lockedAnchor });
   };
 
   const handlePointerMove = (event: React.PointerEvent) => {
     if (!dragState) return;
     const point = toSvgPoint(event.clientX, event.clientY);
-    updateElement(dragState.id, {
-      x: Math.max(8, Math.min(CANVAS_WIDTH - 80, point.x - dragState.dx)),
-      y: Math.max(8, Math.min(CANVAS_HEIGHT - 50, point.y - dragState.dy)),
-    });
+    if (dragState.type === 'element') {
+      updateElement(dragState.id, {
+        x: Math.max(8, Math.min(CANVAS_WIDTH - 80, point.x - dragState.dx)),
+        y: Math.max(8, Math.min(CANVAS_HEIGHT - 50, point.y - dragState.dy)),
+      });
+      return;
+    }
+
+    const connectionKey = dragState.endpoint === 0 ? 'start' : 'end';
+    let targetPoint = {
+      x: Math.max(8, Math.min(CANVAS_WIDTH - 8, point.x)),
+      y: Math.max(8, Math.min(CANVAS_HEIGHT - 8, point.y)),
+    };
+    let targetConnection: { elementId: string; anchor: AnchorSide } | null = null;
+    let nextLockedAnchor: ScadaAnchor | null = null;
+
+    if (dragState.lockedAnchor && distanceBetween(point, dragState.lockedAnchor) <= DETACH_DISTANCE) {
+      targetPoint = { x: dragState.lockedAnchor.x, y: dragState.lockedAnchor.y };
+      targetConnection = { elementId: dragState.lockedAnchor.elementId, anchor: dragState.lockedAnchor.side };
+      nextLockedAnchor = dragState.lockedAnchor;
+    } else {
+      const snapped = nearestAnchor(point);
+      if (snapped && snapped.distance <= SNAP_DISTANCE) {
+        targetPoint = { x: snapped.anchor.x, y: snapped.anchor.y };
+        targetConnection = { elementId: snapped.anchor.elementId, anchor: snapped.anchor.side };
+        nextLockedAnchor = snapped.anchor;
+      }
+    }
+
+    setDragState((current) => current && current.type === 'endpoint' && current.id === dragState.id && current.endpoint === dragState.endpoint
+      ? { ...current, lockedAnchor: nextLockedAnchor }
+      : current
+    );
+
+    setDraft((current) => ({
+      ...current,
+      elements: current.elements.map((element) => {
+        if (element.id !== dragState.id || !isLineElement(element)) return element;
+        const points = resolveLinePoints(element);
+        if (points.length < 2) return element;
+        const nextPoints = [...points];
+        let nextConnections = { ...(element.connections || {}) };
+
+        nextPoints[dragState.endpoint] = targetPoint;
+        if (targetConnection) {
+          nextConnections[connectionKey] = targetConnection;
+        } else {
+          delete nextConnections[connectionKey];
+        }
+
+        return {
+          ...element,
+          points: nextPoints,
+          connections: Object.keys(nextConnections).length ? nextConnections : undefined,
+        };
+      }),
+    }));
   };
 
   const renderLine = (element: ScadaElement) => {
-    const points = element.points || [];
+    const points = resolveLinePoints(element);
     if (points.length < 2) return null;
     const state = getElementState(element, devices);
     const style = stateStyles[state];
     const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
     const active = state === 'normal' || state === 'warning';
+    const isSelected = selectedElementId === element.id;
+    const startConnected = Boolean(element.connections?.start);
+    const endConnected = Boolean(element.connections?.end);
 
     return (
       <g key={element.id} onClick={(event) => { event.stopPropagation(); setSelectedElementId(element.id); }} className={cn(editMode && 'cursor-pointer')}>
         <path d={path} fill="none" stroke="rgba(15,23,42,0.75)" strokeWidth={18} strokeLinecap="round" />
-        <path d={path} fill="none" stroke={style.stroke} strokeWidth={8} strokeLinecap="round" strokeDasharray={element.type === 'power' ? '12 10' : '18 12'} className={active ? 'scada-flow-line' : ''} />
+        <path d={path} fill="none" stroke={style.stroke} strokeWidth={8} strokeLinecap="round" strokeDasharray={element.type === 'power' ? '12 10' : '18 12'} markerEnd={element.type === 'power' ? 'url(#scada-arrow-power)' : 'url(#scada-arrow-pipe)'} className={active ? 'scada-flow-line' : ''} />
         <text x={(points[0].x + points[points.length - 1].x) / 2} y={(points[0].y + points[points.length - 1].y) / 2 - 14} fill="#94a3b8" fontSize="12" textAnchor="middle">{element.label}</text>
+        {editMode && isSelected && (
+          <>
+            {[0, 1].map((endpoint) => {
+              const point = points[endpoint];
+              const connected = endpoint === 0 ? startConnected : endConnected;
+              return (
+                <g key={`${element.id}-endpoint-${endpoint}`}>
+                  <circle cx={point.x} cy={point.y} r={14} fill="rgba(15,23,42,0.78)" stroke={connected ? '#22c55e' : '#fb923c'} strokeWidth={2} strokeDasharray={connected ? '4 3' : undefined} />
+                  <circle
+                    cx={point.x}
+                    cy={point.y}
+                    r={7}
+                    fill={connected ? '#22c55e' : '#fb923c'}
+                    className="cursor-crosshair"
+                    onPointerDown={(event) => handleEndpointPointerDown(event, element, endpoint as LineEndpoint)}
+                  />
+                </g>
+              );
+            })}
+          </>
+        )}
       </g>
     );
   };
 
   const renderElement = (element: ScadaElement) => {
-    if (element.type === 'pipe' || element.type === 'power') return renderLine(element);
+    if (isLineElement(element)) return renderLine(element);
 
     const {device, value} = getDeviceValue(element, devices);
     const state = getElementState(element, devices);
@@ -197,6 +346,28 @@ export function ScadaView() {
           {formatMetricValue(value, element.unit)}
         </text>
         <text x={element.x + 16} y={element.y + height - 12} fill="#94a3b8" fontSize="10">{device ? `${device.name} / ${element.metricKey || '-'}` : 'Unbound'}</text>
+      </g>
+    );
+  };
+
+  const renderDeviceAnchors = () => {
+    if (!showDeviceAnchors) return null;
+    return (
+      <g pointerEvents="none">
+        {deviceAnchors.map((anchor) => (
+          <g key={`${anchor.elementId}-${anchor.side}-anchor`}>
+            <line
+              x1={anchor.side === 'left' ? anchor.x - 18 : anchor.x + 18}
+              y1={anchor.y}
+              x2={anchor.x}
+              y2={anchor.y}
+              stroke="#93c5fd"
+              strokeWidth={2}
+              strokeDasharray="4 4"
+            />
+            <circle cx={anchor.x} cy={anchor.y} r={7} fill="#020617" stroke="#93c5fd" strokeWidth={2} strokeDasharray="3 3" />
+          </g>
+        ))}
       </g>
     );
   };
@@ -254,11 +425,18 @@ export function ScadaView() {
                   <stop offset="0%" stopColor="#0f172a" />
                   <stop offset="100%" stopColor="#020617" />
                 </linearGradient>
+                <marker id="scada-arrow-power" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#f97316" />
+                </marker>
+                <marker id="scada-arrow-pipe" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
+                </marker>
               </defs>
               <rect x="0" y="0" width={CANVAS_WIDTH} height={CANVAS_HEIGHT} fill="url(#scada-bg)" opacity="0.72" />
               <rect x="36" y="110" width="1028" height="420" rx="18" fill="rgba(15,23,42,0.46)" stroke="#1e293b" strokeWidth="2" />
               <text x="54" y="558" fill="#64748b" fontSize="12">Click devices to open details. Enable Edit Mode to move and bind elements.</text>
               {draft.elements.map(renderElement)}
+              {renderDeviceAnchors()}
             </svg>
           </div>
         </section>

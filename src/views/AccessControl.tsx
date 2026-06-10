@@ -103,6 +103,24 @@ function InlineTags({
   );
 }
 
+function NfcCredentialVisual({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={cn(
+      'flex shrink-0 flex-col items-center justify-center rounded-xl border border-cyan-200 bg-cyan-50 text-center text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-300',
+      compact ? 'h-36 w-36 p-3' : 'h-44 w-44 p-4'
+    )}>
+      <div className="relative flex h-16 w-16 items-center justify-center">
+        <span className="absolute h-16 w-16 rounded-full border border-cyan-300/70" />
+        <span className="absolute h-11 w-11 rounded-full border border-cyan-400/80" />
+        <span className="absolute h-6 w-6 rounded-full border border-cyan-500" />
+        <KeyRound className="h-5 w-5 text-cyan-600 dark:text-cyan-300" />
+      </div>
+      <div className="mt-3 text-xs font-semibold uppercase tracking-wider">NFC URL</div>
+      <div className="mt-1 text-[11px] leading-4 text-cyan-700/80 dark:text-cyan-200/80">NTAG424 DNA</div>
+    </div>
+  );
+}
+
 type DurationUnit = 'seconds' | 'minutes' | 'hours' | 'days' | 'months';
 
 type AccessEvent = {
@@ -329,7 +347,7 @@ export function AccessControl() {
     });
     const payload = await response.json();
     if (!response.ok) {
-      setMessage(payload.error || 'Failed to generate QR link.');
+      setMessage(payload.error || 'Failed to generate credential link.');
       return;
     }
     setAccessCredentials(payload.credentials || []);
@@ -373,7 +391,7 @@ export function AccessControl() {
         setCredentialLatestQrLink(payload.latestQrLink || '');
         if (payload.credentials) setAccessCredentials(payload.credentials);
       } else {
-        setMessage(payload.error || 'QR link is not available.');
+        setMessage(payload.error || 'Credential link is not available.');
       }
     }
   };
@@ -721,7 +739,7 @@ export function AccessControl() {
                       />
                     )}
                   </div>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Set how long this QR credential remains valid.</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Set how long this credential remains valid.</p>
                 </div>
                 {selectedAccess.method !== 'nfc' && (
                 <div>
@@ -754,7 +772,7 @@ export function AccessControl() {
                     onChange={(event) => setMaxUses(Number(event.target.value))}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                   />
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Maximum accepted scans during this QR period.</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Maximum accepted visits during this credential period.</p>
                 </div>
                 {selectedAccess.method !== 'nfc' && (
                 <label className="flex min-h-[5.5rem] items-center justify-between gap-3 rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
@@ -775,11 +793,15 @@ export function AccessControl() {
               {lastLink && (
                 <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-3 dark:border-orange-500/30 dark:bg-orange-500/10">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
-                    <img
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(lastLink)}`}
-                      alt="Generated QR code"
-                      className="h-40 w-40 rounded bg-white p-2"
-                    />
+                    {selectedAccess.method === 'nfc' ? (
+                      <NfcCredentialVisual compact />
+                    ) : (
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(lastLink)}`}
+                        alt="Generated QR code"
+                        className="h-40 w-40 rounded bg-white p-2"
+                      />
+                    )}
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">{selectedAccess.method === 'nfc' ? 'NFC URL' : 'QR Access Link'}</p>
                       <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{lastLink}</p>
@@ -995,9 +1017,7 @@ export function AccessControl() {
                 {credentialLink ? (
                   <div className="flex flex-col gap-4 sm:flex-row">
                     {credentialModal.credential.type === 'nfc' ? (
-                      <div className="flex h-44 w-44 shrink-0 items-center justify-center rounded border border-cyan-200 bg-cyan-50 p-3 text-center text-sm font-semibold text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-300">
-                        Write this URL to the NTAG424 DNA tag.
-                      </div>
+                      <NfcCredentialVisual />
                     ) : (
                       <img
                         src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(credentialLink)}`}
@@ -1041,7 +1061,7 @@ export function AccessControl() {
                   </div>
                 ) : (
                   <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
-                    {message || 'QR link is not available for this credential.'}
+                    {message || 'Credential link is not available for this credential.'}
                   </div>
                 )}
 

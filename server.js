@@ -539,7 +539,7 @@ const canUseLatestQrLink = (credential) => (
 const createAccessLink = (req, token) => {
   const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
   const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
-  return `${proto}://${host}/a/${token}`;
+  return `${proto}://${host}/qr/${token}`;
 };
 
 const createLatestQrLink = (req, token) => {
@@ -548,11 +548,10 @@ const createLatestQrLink = (req, token) => {
   return `${proto}://${host}/q/${token}`;
 };
 
-const createNfcAccessLink = (req, token, tagId = '') => {
+const createNfcAccessLink = (req, token) => {
   const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
   const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
-  const query = tagId ? `?tag_id=${encodeURIComponent(tagId)}` : '';
-  return `${proto}://${host}/n/${token}${query}`;
+  return `${proto}://${host}/nfc/${token}?e=00000000000000000000000000000000&c=0000000000000000`;
 };
 
 const rotateCredentialIfNeeded = (credential, now = new Date()) => {
@@ -2976,7 +2975,7 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
     res.status(201).json({
       credential: publicAccessCredential(credential),
       credentials: nextCredentials.map(publicAccessCredential),
-      link: type === 'nfc' ? createNfcAccessLink(req, token, credential.tagId) : createAccessLink(req, token),
+      link: type === 'nfc' ? createNfcAccessLink(req, token) : createAccessLink(req, token),
       latestQrLink: type === 'qr' && credential.latestToken ? createLatestQrLink(req, credential.latestToken) : null,
     });
   } catch (error) {
@@ -3057,7 +3056,7 @@ app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
     }
     res.status(200).json({
       link: rotated.credential.type === 'nfc'
-        ? createNfcAccessLink(req, rotated.credential.token, rotated.credential.tagId)
+        ? createNfcAccessLink(req, rotated.credential.token)
         : createAccessLink(req, rotated.credential.token),
       latestQrLink: rotated.credential.type === 'qr' && rotated.credential.latestToken ? createLatestQrLink(req, rotated.credential.latestToken) : null,
       credentials: nextCredentials.map(publicAccessCredential),
@@ -3724,7 +3723,7 @@ app.get('/q/:token', async (req, res) => {
   }
 });
 
-app.get('/a/:token', async (req, res) => {
+const handleQrAccessRequest = async (req, res) => {
   const now = new Date();
   const requestMeta = {
     ip: req.ip,
@@ -3837,9 +3836,12 @@ app.get('/a/:token', async (req, res) => {
   } catch (error) {
     res.status(500).send(`<!doctype html><html><head><title>Access error</title></head><body><h1>Access error</h1><p>${escapeHtml(error.message)}</p></body></html>`);
   }
-});
+};
 
-app.get('/n/:token', async (req, res) => {
+app.get('/qr/:token', handleQrAccessRequest);
+app.get('/a/:token', handleQrAccessRequest);
+
+const handleNfcAccessRequest = async (req, res) => {
   const now = new Date();
   const providedTagId = String(req.query.tag_id || req.query.tagId || req.query.uid || '').trim();
   const requestMeta = {
@@ -3956,7 +3958,10 @@ app.get('/n/:token', async (req, res) => {
   } catch (error) {
     res.status(500).send(`<!doctype html><html><head><title>NFC access error</title></head><body><h1>NFC access error</h1><p>${escapeHtml(error.message)}</p></body></html>`);
   }
-});
+};
+
+app.get('/nfc/:token', handleNfcAccessRequest);
+app.get('/n/:token', handleNfcAccessRequest);
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(distDir, 'index.html'));
