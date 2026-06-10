@@ -32,8 +32,13 @@ export function Header() {
     })),
   ].sort((first, second) => new Date(second.timestamp).getTime() - new Date(first.timestamp).getTime()), [alerts, systemNotifications]);
   const notificationStorageKey = `ai-iot-dashboard-read-notifications:${currentUser?.id || 'guest'}`;
-  const notificationKey = (notification: typeof notifications[number]) => `${notification.source}:${notification.id}:${notification.timestamp}`;
-  const unreadAlerts = notifications.filter((notification) => !readNotificationKeys.includes(notificationKey(notification)));
+  const notificationKey = (notification: typeof notifications[number]) => `${notification.source}:${notification.id}`;
+  const legacyNotificationKey = (notification: typeof notifications[number]) => `${notification.source}:${notification.id}:${notification.timestamp}`;
+  const isNotificationRead = (notification: typeof notifications[number]) => (
+    readNotificationKeys.includes(notificationKey(notification))
+    || readNotificationKeys.includes(legacyNotificationKey(notification))
+  );
+  const unreadAlerts = notifications.filter((notification) => !isNotificationRead(notification));
   const hasUnreadNotifications = unreadAlerts.length > 0;
   const persistReadNotificationKeys = (keys: string[]) => {
     try {
@@ -89,7 +94,10 @@ export function Header() {
     try {
       const stored = window.localStorage.getItem(notificationStorageKey);
       const parsed = stored ? JSON.parse(stored) : [];
-      setReadNotificationKeys(Array.isArray(parsed) ? parsed : []);
+      const migrated = Array.isArray(parsed)
+        ? parsed.map((key) => String(key).split(':').slice(0, 2).join(':')).filter(Boolean)
+        : [];
+      setReadNotificationKeys(Array.from(new Set(migrated)));
     } catch {
       setReadNotificationKeys([]);
     } finally {
@@ -220,7 +228,7 @@ export function Header() {
                         key={notificationKey(notification)}
                         className="flex gap-3 border-b border-slate-50 px-4 py-3 transition-colors last:border-0 hover:bg-slate-50 dark:border-slate-800/30 dark:hover:bg-slate-800/50"
                       >
-                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${readNotificationKeys.includes(notificationKey(notification)) ? 'bg-slate-300 dark:bg-slate-700' : 'bg-red-500'}`} />
+                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${isNotificationRead(notification) ? 'bg-slate-300 dark:bg-slate-700' : 'bg-red-500'}`} />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
@@ -233,8 +241,8 @@ export function Header() {
                                 event.stopPropagation();
                                 markNotificationRead(notification);
                               }}
-                              disabled={readNotificationKeys.includes(notificationKey(notification))}
-                              title={readNotificationKeys.includes(notificationKey(notification)) ? 'Read' : 'Mark read'}
+                              disabled={isNotificationRead(notification)}
+                              title={isNotificationRead(notification) ? 'Read' : 'Mark read'}
                               className="rounded-md p-1 text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-slate-400 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-300"
                             >
                               <CheckCircle2 className="h-4 w-4" />

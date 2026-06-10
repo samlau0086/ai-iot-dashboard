@@ -522,11 +522,23 @@ export function ScadaView() {
     });
   };
 
-  const siteDevices = useMemo(
-    () => devices.filter((device) => !activeSite || device.siteId === activeSite.id || device.tags?.includes(activeSite.id)),
-    [activeSite, devices]
-  );
   const selectedElement = draft?.elements.find((element) => element.id === selectedElementId) || null;
+  const siteDevices = useMemo(
+    () => devices.filter((device) => {
+      if (!activeSite) return true;
+      if (device.id === selectedElement?.deviceId || device.config?.externalDeviceId === selectedElement?.deviceId) return true;
+      const tags = device.tags || [];
+      const siteTags = activeSite.tags || [];
+      return (
+        device.siteId === activeSite.id
+        || device.tenantId === activeSite.tenantId
+        || tags.includes(activeSite.id)
+        || tags.includes(activeSite.name)
+        || siteTags.some((tag) => tags.includes(tag))
+      );
+    }),
+    [activeSite, devices, selectedElement?.deviceId]
+  );
   const customShapeById = useMemo(
     () => Object.fromEntries(scadaShapePresets.map((preset) => [preset.id, preset])) as Record<string, ScadaShapePreset>,
     [scadaShapePresets]
@@ -1174,6 +1186,20 @@ export function ScadaView() {
     const startConnected = Boolean(element.connections?.start);
     const endConnected = Boolean(element.connections?.end);
     const lineWidth = Math.max(2, element.lineWidth || 8);
+    const endPoint = points[points.length - 1];
+    const beforeEndPoint = points[points.length - 2] || points[0];
+    const angle = Math.atan2(endPoint.y - beforeEndPoint.y, endPoint.x - beforeEndPoint.x);
+    const arrowLength = Math.max(8, lineWidth * 1.8);
+    const arrowHalfWidth = Math.max(4, lineWidth * 0.85);
+    const arrowBase = {
+      x: endPoint.x - Math.cos(angle) * arrowLength,
+      y: endPoint.y - Math.sin(angle) * arrowLength,
+    };
+    const arrowPoints = [
+      `${endPoint.x},${endPoint.y}`,
+      `${arrowBase.x + Math.cos(angle + Math.PI / 2) * arrowHalfWidth},${arrowBase.y + Math.sin(angle + Math.PI / 2) * arrowHalfWidth}`,
+      `${arrowBase.x + Math.cos(angle - Math.PI / 2) * arrowHalfWidth},${arrowBase.y + Math.sin(angle - Math.PI / 2) * arrowHalfWidth}`,
+    ].join(' ');
     const lineAnimation = element.lineAnimation || (element.type === 'wireless' ? 'glow' : 'flow');
     const animationActive = active && lineAnimation !== 'none';
     const lineClassName = cn(
@@ -1192,10 +1218,12 @@ export function ScadaView() {
           strokeWidth={lineWidth}
           strokeLinecap="round"
           strokeDasharray={element.type === 'power' ? '12 10' : element.type === 'wireless' ? '3 14' : element.type === 'signal' ? '10 7' : '18 12'}
-          markerEnd={element.type === 'power' ? 'url(#scada-arrow-power)' : element.type === 'pipe' ? 'url(#scada-arrow-pipe)' : undefined}
           className={lineClassName}
           style={{ animationDuration: `${Math.max(0.2, element.lineAnimationSpeed || 1.4)}s` }}
         />
+        {(element.type === 'power' || element.type === 'pipe') && (
+          <polygon points={arrowPoints} fill={style.stroke} />
+        )}
         <text x={(points[0].x + points[points.length - 1].x) / 2} y={(points[0].y + points[points.length - 1].y) / 2 - 14} fill="#94a3b8" fontSize="12" textAnchor="middle">{element.label}{element.lineProtocol ? ` / ${element.lineProtocol}` : ''}</text>
         {editMode && isSelected && (
           <>
@@ -2580,12 +2608,6 @@ export function ScadaView() {
                   <stop offset="0%" stopColor="#0f172a" />
                   <stop offset="100%" stopColor="#020617" />
                 </linearGradient>
-                <marker id="scada-arrow-power" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#f97316" />
-                </marker>
-                <marker id="scada-arrow-pipe" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
-                </marker>
               </defs>
               <rect x="0" y="0" width={CANVAS_WIDTH} height={CANVAS_HEIGHT} fill="url(#scada-bg)" opacity="0.72" />
               <rect x="36" y="110" width={CANVAS_WIDTH - 72} height={CANVAS_HEIGHT - 190} rx="18" fill="rgba(15,23,42,0.46)" stroke="#1e293b" strokeWidth="2" />
