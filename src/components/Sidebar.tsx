@@ -12,6 +12,7 @@ import {
   GitMerge,
   KeyRound,
   SlidersHorizontal,
+  Network,
   LogOut
 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -23,6 +24,7 @@ const menuItems: { key: keyof typeof translations.en.nav; to: string; icon: any 
   { key: 'devices', to: '/devices', icon: Server },
   { key: 'workflows', to: '/workflows', icon: GitMerge },
   { key: 'control', to: '/control', icon: SlidersHorizontal },
+  { key: 'scada', to: '/scada', icon: Network },
   { key: 'accessControl', to: '/access-control', icon: KeyRound },
   { key: 'analytics', to: '/analytics', icon: Activity },
   { key: 'rawData', to: '/raw-data', icon: Database },

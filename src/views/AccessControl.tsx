@@ -8,6 +8,8 @@ const createAccessDraft = (): AccessDefinition => ({
   name: 'New Access',
   enabled: true,
   method: 'qr',
+  aesKey: '',
+  credentialGroups: ['operators', 'maintenance'],
   grantedMessage: 'Access granted.',
   deniedMessage: 'Access denied.',
   extraParams: { deviceId: 'DEV-001' },
@@ -21,6 +23,85 @@ const createDefaultQrName = () => {
   const randomPart = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(2, 5).toUpperCase().padEnd(3, '0');
   return `QR-${datePart}-${randomPart}`;
 };
+
+const createDefaultNfcName = () => {
+  const now = new Date();
+  const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  const randomPart = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(2, 5).toUpperCase().padEnd(3, '0');
+  return `NFC-${datePart}-${randomPart}`;
+};
+
+const methodLabels: Record<AccessDefinition['method'], string> = {
+  qr: 'QR Link',
+  nfc: 'NFC · NTAG424 DNA URL Based',
+  caller_id: 'Caller ID',
+  sms: 'SMS',
+};
+
+function InlineTags({
+  value,
+  onChange,
+  suggestions = [],
+  placeholder = 'Add tag...',
+}: {
+  value: string[];
+  onChange: (tags: string[]) => void;
+  suggestions?: string[];
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState('');
+  const normalized = value || [];
+  const addTag = (tag: string) => {
+    const nextTag = tag.trim();
+    if (!nextTag || normalized.includes(nextTag)) return;
+    onChange([...normalized, nextTag]);
+    setDraft('');
+  };
+  const removeTag = (tag: string) => onChange(normalized.filter((item) => item !== tag));
+  const unusedSuggestions = suggestions.filter((item) => item && !normalized.includes(item));
+
+  return (
+    <div className="rounded border border-slate-300 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex flex-wrap gap-2">
+        {normalized.map((tag) => (
+          <span key={tag} className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2 py-1 text-xs font-semibold text-orange-700 dark:bg-orange-500/10 dark:text-orange-300">
+            {tag}
+            <button type="button" onClick={() => removeTag(tag)} className="text-orange-500 hover:text-orange-700">
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ',') {
+              event.preventDefault();
+              addTag(draft);
+            }
+          }}
+          onBlur={() => addTag(draft)}
+          placeholder={placeholder}
+          className="min-w-[8rem] flex-1 bg-transparent text-sm outline-none dark:text-white"
+        />
+      </div>
+      {unusedSuggestions.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {unusedSuggestions.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => addTag(tag)}
+              className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:border-orange-300 hover:text-orange-600 dark:border-slate-700 dark:text-slate-300"
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 type DurationUnit = 'seconds' | 'minutes' | 'hours' | 'days' | 'months';
 
@@ -71,6 +152,8 @@ export function AccessControl() {
   const [selectedAccessId, setSelectedAccessId] = useState(accesses[0]?.id || '');
   const [paramsDraft, setParamsDraft] = useState('{}');
   const [qrName, setQrName] = useState(createDefaultQrName());
+  const [credentialTagId, setCredentialTagId] = useState('');
+  const [credentialGroups, setCredentialGroups] = useState<string[]>([]);
   const [validMode, setValidMode] = useState<'duration' | 'until'>('duration');
   const [periodValue, setPeriodValue] = useState(1);
   const [periodUnit, setPeriodUnit] = useState<DurationUnit>('hours');
@@ -95,6 +178,8 @@ export function AccessControl() {
   const [credentialValidMode, setCredentialValidMode] = useState<'duration' | 'until'>('duration');
 
   const selectedAccess = accesses.find((access) => access.id === selectedAccessId) || accesses[0];
+  const selectedCredentialType = selectedAccess?.method === 'nfc' ? 'nfc' : 'qr';
+  const selectedAccessGroups = selectedAccess?.credentialGroups || [];
   const credentials = useMemo(
     () => accessCredentials.filter((credential) => credential.accessId === selectedAccess?.id),
     [accessCredentials, selectedAccess?.id]
@@ -111,8 +196,11 @@ export function AccessControl() {
   useEffect(() => {
     if (selectedAccess) {
       setParamsDraft(JSON.stringify(selectedAccess.extraParams || {}, null, 2));
+      setQrName(selectedAccess.method === 'nfc' ? createDefaultNfcName() : createDefaultQrName());
+      setCredentialGroups([]);
+      setCredentialTagId('');
     }
-  }, [selectedAccess?.id]);
+  }, [selectedAccess?.id, selectedAccess?.method]);
 
   const syncAccesses = async () => {
     const response = await fetch('/api/accesses');
@@ -218,7 +306,7 @@ export function AccessControl() {
     const computedPeriodSeconds = validMode === 'until'
       ? Math.max(30, Math.round((new Date(validUntilInput).getTime() - Date.now()) / 1000))
       : Math.max(30, durationToSeconds(periodValue, periodUnit));
-    const computedRefreshSeconds = refreshValue > 0 ? durationToSeconds(refreshValue, refreshUnit) : 0;
+    const computedRefreshSeconds = selectedCredentialType === 'nfc' ? 0 : refreshValue > 0 ? durationToSeconds(refreshValue, refreshUnit) : 0;
     await fetch(`/api/accesses/${selectedAccess.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -228,8 +316,10 @@ export function AccessControl() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        type: 'qr',
+        type: selectedCredentialType,
         name: qrName,
+        tagId: selectedCredentialType === 'nfc' ? credentialTagId : '',
+        groups: credentialGroups,
         periodSeconds: computedPeriodSeconds,
         validUntil: validMode === 'until' ? new Date(validUntilInput).toISOString() : undefined,
         refreshIntervalSeconds: computedRefreshSeconds,
@@ -245,8 +335,12 @@ export function AccessControl() {
     setAccessCredentials(payload.credentials || []);
     setLastLink(payload.link || '');
     setLastLatestQrLink(payload.latestQrLink || '');
-    setQrName(createDefaultQrName());
-    setMessage(payload.latestQrLink ? 'QR link generated. Latest QR page is available for rotating displays.' : 'QR link generated.');
+    setQrName(selectedCredentialType === 'nfc' ? createDefaultNfcName() : createDefaultQrName());
+    setCredentialTagId('');
+    setCredentialGroups([]);
+    setMessage(selectedCredentialType === 'nfc'
+      ? 'NFC tag URL generated. Write this URL to the NTAG424 DNA tag.'
+      : payload.latestQrLink ? 'QR link generated. Latest QR page is available for rotating displays.' : 'QR link generated.');
   };
 
   const updateCredential = async (credentialId: string, patch: Partial<AccessCredential>) => {
@@ -290,6 +384,8 @@ export function AccessControl() {
     await updateCredential(credentialModal.credential.id, {
       name: credentialDraft.name,
       enabled: credentialDraft.enabled,
+      tagId: credentialDraft.tagId,
+      groups: credentialDraft.groups,
       periodSeconds: nextPeriodSeconds,
       validUntil: credentialValidMode === 'until'
         ? credentialDraft.validUntil
@@ -300,7 +396,7 @@ export function AccessControl() {
     });
     setCredentialModal(null);
     setCredentialDraft({});
-    setMessage('QR credential updated.');
+    setMessage('Credential updated.');
   };
 
   const deleteCredential = async (credentialId: string) => {
@@ -320,7 +416,7 @@ export function AccessControl() {
     const response = await fetch(`/api/access-events?${params.toString()}`, { method: 'DELETE' });
     if (response.ok) {
       setAccessEvents([]);
-      setMessage(eventCredentialFilter ? 'QR access records cleared.' : 'Access records cleared.');
+      setMessage(eventCredentialFilter ? 'Credential access records cleared.' : 'Access records cleared.');
     } else {
       setEventsError('Failed to clear access records.');
     }
@@ -384,7 +480,7 @@ export function AccessControl() {
               >
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold text-slate-900 dark:text-white">{access.name}</span>
-                  <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">{access.method.toUpperCase()}</span>
+                  <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">{methodLabels[access.method] || access.method.toUpperCase()}</span>
                 </span>
                 <span className={cn('h-2.5 w-2.5 rounded-full', access.enabled ? 'bg-emerald-500' : 'bg-slate-400')} />
               </button>
@@ -400,8 +496,8 @@ export function AccessControl() {
             <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-[#1c2128]">
               {[
                 { id: 'config', label: 'Access Config' },
-                { id: 'qr', label: 'QR Codes' },
-                { id: 'records', label: 'QR Access Records' },
+                { id: 'qr', label: 'Credentials' },
+                { id: 'records', label: 'Access Records' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -439,6 +535,7 @@ export function AccessControl() {
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     >
                       <option value="qr">QR Link</option>
+                      <option value="nfc">NFC · NTAG424 DNA URL Based</option>
                       <option value="caller_id">Caller ID</option>
                       <option value="sms">SMS</option>
                     </select>
@@ -468,6 +565,29 @@ export function AccessControl() {
               </div>
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {selectedAccess.method === 'nfc' && (
+                  <div>
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">AES Key</label>
+                    <input
+                      value={selectedAccess.aesKey || ''}
+                      onChange={(event) => patchAccess(selectedAccess.id, { aesKey: event.target.value })}
+                      placeholder="32 hex chars for AES-128, reserved for NTAG424 SDM validation"
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored on this Access for NTAG424 DNA URL Based validation. Current URL access validates token, Tag ID, validity, and usage.</p>
+                  </div>
+                )}
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Available Credential Groups</label>
+                  <div className="mt-1">
+                    <InlineTags
+                      value={selectedAccess.credentialGroups || []}
+                      onChange={(credentialGroups) => patchAccess(selectedAccess.id, { credentialGroups })}
+                      placeholder="operators, maintenance..."
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Credentials under this Access can be assigned to these groups. Workflows can read them from trigger output.</p>
+                </div>
                 <div>
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Access Granted Message</label>
                   <input
@@ -517,7 +637,7 @@ export function AccessControl() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
                   <QrCode className="h-4 w-4 text-orange-500" />
-                  QR Code Credentials
+                  {selectedAccess.method === 'nfc' ? 'NFC Tag Credentials' : 'QR Code Credentials'}
                 </h2>
                 <button
                   type="button"
@@ -525,20 +645,44 @@ export function AccessControl() {
                   className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                 >
                   <RefreshCw className="h-4 w-4" />
-                  Generate QR Link
+                  {selectedAccess.method === 'nfc' ? 'Generate NFC URL' : 'Generate QR Link'}
                 </button>
               </div>
 
               <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <div>
-                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">QR Name</label>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">{selectedAccess.method === 'nfc' ? 'NFC Tag Name' : 'QR Name'}</label>
                   <input
                     value={qrName}
                     onChange={(event) => setQrName(event.target.value)}
-                    placeholder="QR-20260609-A1B"
+                    placeholder={selectedAccess.method === 'nfc' ? 'NFC-20260609-A1B' : 'QR-20260609-A1B'}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                   />
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Internal display name for this QR credential.</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Internal display name for this credential.</p>
+                </div>
+                {selectedAccess.method === 'nfc' && (
+                  <div>
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tag ID</label>
+                    <input
+                      value={credentialTagId}
+                      onChange={(event) => setCredentialTagId(event.target.value)}
+                      placeholder="NTAG424 UID / Tag ID"
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 font-mono text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional hardware tag identifier. If the NFC URL sends tag_id, it must match this value.</p>
+                  </div>
+                )}
+                <div className={selectedAccess.method === 'nfc' ? 'md:col-span-2' : ''}>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Credential Groups</label>
+                  <div className="mt-1">
+                    <InlineTags
+                      value={credentialGroups}
+                      onChange={setCredentialGroups}
+                      suggestions={selectedAccessGroups}
+                      placeholder="Add group..."
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Included in QR/NFC Access trigger output as credentialGroups.</p>
                 </div>
                 <div className="md:col-span-2">
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Validity</label>
@@ -579,6 +723,7 @@ export function AccessControl() {
                   </div>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Set how long this QR credential remains valid.</p>
                 </div>
+                {selectedAccess.method !== 'nfc' && (
                 <div>
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Refresh Interval</label>
                   <div className="mt-1 grid grid-cols-[1fr_8rem] gap-2">
@@ -599,6 +744,7 @@ export function AccessControl() {
                   </div>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Use 0 for no refresh. Rotating QR pages require Allowed Visits greater than 1.</p>
                 </div>
+                )}
                 <div>
                   <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Allowed Visits</label>
                   <input
@@ -610,6 +756,7 @@ export function AccessControl() {
                   />
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Maximum accepted scans during this QR period.</p>
                 </div>
+                {selectedAccess.method !== 'nfc' && (
                 <label className="flex min-h-[5.5rem] items-center justify-between gap-3 rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
                   <span>
                     <span className="block text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Invalidate QR After Scan</span>
@@ -622,6 +769,7 @@ export function AccessControl() {
                     className="h-4 w-4 shrink-0 rounded border-slate-300 text-orange-600 focus:ring-orange-600"
                   />
                 </label>
+                )}
               </div>
 
               {lastLink && (
@@ -633,7 +781,7 @@ export function AccessControl() {
                       className="h-40 w-40 rounded bg-white p-2"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">QR Access Link</p>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">{selectedAccess.method === 'nfc' ? 'NFC URL' : 'QR Access Link'}</p>
                       <p className="mt-2 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{lastLink}</p>
                       <button
                         type="button"
@@ -672,6 +820,8 @@ export function AccessControl() {
                   <thead className="bg-slate-50 dark:bg-slate-900/60">
                     <tr>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Name</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">Type</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">Groups / Tag</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Usage</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Valid Until</th>
                       <th className="px-3 py-2 text-right font-medium text-slate-500">Actions</th>
@@ -681,6 +831,15 @@ export function AccessControl() {
                     {credentials.map((credential) => (
                       <tr key={credential.id}>
                         <td className="px-3 py-2 text-slate-900 dark:text-white">{credential.name}</td>
+                        <td className="px-3 py-2 text-slate-500 uppercase">{credential.type}</td>
+                        <td className="px-3 py-2 text-slate-500">
+                          <div className="flex flex-wrap gap-1">
+                            {(credential.groups || []).map((group) => (
+                              <span key={group} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] dark:bg-slate-800">{group}</span>
+                            ))}
+                          </div>
+                          {credential.tagId && <div className="mt-1 font-mono text-[10px]">{credential.tagId}</div>}
+                        </td>
                         <td className="px-3 py-2 text-slate-500">{credential.usedCount}/{credential.maxUses}</td>
                         <td className="px-3 py-2 text-slate-500">{new Date(credential.validUntil).toLocaleString()}</td>
                         <td className="px-3 py-2 text-right">
@@ -700,7 +859,7 @@ export function AccessControl() {
                     ))}
                     {credentials.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-3 py-6 text-center text-slate-500">No QR credentials generated.</td>
+                        <td colSpan={6} className="px-3 py-6 text-center text-slate-500">No credentials generated.</td>
                       </tr>
                     )}
                   </tbody>
@@ -714,7 +873,7 @@ export function AccessControl() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
                   <Eye className="h-4 w-4 text-orange-500" />
-                  QR Access Records
+                  Access Records
                 </h2>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <select
@@ -722,7 +881,7 @@ export function AccessControl() {
                     onChange={(event) => setEventCredentialFilter(event.target.value)}
                     className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                   >
-                    <option value="">All QR Codes</option>
+                    <option value="">All Credentials</option>
                     {credentials.map((credential) => (
                       <option key={credential.id} value={credential.id}>{credential.name}</option>
                     ))}
@@ -758,7 +917,7 @@ export function AccessControl() {
                 <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
                   <thead className="bg-slate-50 dark:bg-slate-900/60">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">QR</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">Credential</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Access Time</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Status</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Reason</th>
@@ -769,7 +928,7 @@ export function AccessControl() {
                       <tr key={event.id}>
                         <td className="px-3 py-2">
                           <div className="font-medium text-slate-900 dark:text-white">
-                            {event.credentialName || (event.credentialId ? accessCredentialNames.get(event.credentialId) : '') || 'Unknown QR'}
+                            {event.credentialName || (event.credentialId ? accessCredentialNames.get(event.credentialId) : '') || 'Unknown Credential'}
                           </div>
                           {event.credentialId && (
                             <div className="mt-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">{event.credentialId}</div>
@@ -814,7 +973,7 @@ export function AccessControl() {
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
               <div>
                 <h3 className="text-base font-semibold text-slate-900 dark:text-white">
-                  {credentialModal.mode === 'view' ? 'View QR Credential' : 'Edit QR Credential'}
+                  {credentialModal.mode === 'view' ? 'View Credential' : 'Edit Credential'}
                 </h3>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{credentialModal.credential.name}</p>
               </div>
@@ -835,13 +994,19 @@ export function AccessControl() {
               <div className="space-y-4 p-5">
                 {credentialLink ? (
                   <div className="flex flex-col gap-4 sm:flex-row">
-                    <img
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(credentialLink)}`}
-                      alt="QR credential"
-                      className="h-44 w-44 rounded bg-white p-2"
-                    />
+                    {credentialModal.credential.type === 'nfc' ? (
+                      <div className="flex h-44 w-44 shrink-0 items-center justify-center rounded border border-cyan-200 bg-cyan-50 p-3 text-center text-sm font-semibold text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-300">
+                        Write this URL to the NTAG424 DNA tag.
+                      </div>
+                    ) : (
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(credentialLink)}`}
+                        alt="QR credential"
+                        className="h-44 w-44 rounded bg-white p-2"
+                      />
+                    )}
                     <div className="min-w-0 flex-1">
-                      <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">QR Link</label>
+                      <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">{credentialModal.credential.type === 'nfc' ? 'NFC URL' : 'QR Link'}</label>
                       <p className="mt-2 break-all rounded border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
                         {credentialLink}
                       </p>
@@ -881,6 +1046,18 @@ export function AccessControl() {
                 )}
 
                 <div className="grid gap-3 sm:grid-cols-2">
+                  {credentialModal.credential.type === 'nfc' && (
+                    <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
+                      <span className="block text-xs text-slate-500">Tag ID</span>
+                      <span className="font-mono text-xs font-semibold text-slate-900 dark:text-white">{credentialModal.credential.tagId || '-'}</span>
+                    </div>
+                  )}
+                  {(credentialModal.credential.groups || []).length > 0 && (
+                    <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
+                      <span className="block text-xs text-slate-500">Groups</span>
+                      <span className="font-semibold text-slate-900 dark:text-white">{(credentialModal.credential.groups || []).join(', ')}</span>
+                    </div>
+                  )}
                   <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
                     <span className="block text-xs text-slate-500">Usage</span>
                     <span className="font-semibold text-slate-900 dark:text-white">{credentialModal.credential.usedCount}/{credentialModal.credential.maxUses}</span>
@@ -894,12 +1071,34 @@ export function AccessControl() {
             ) : (
               <div className="space-y-4 p-5">
                 <div>
-                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">QR Name</label>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Credential Name</label>
                   <input
                     value={credentialDraft.name || ''}
                     onChange={(event) => setCredentialDraft((current) => ({ ...current, name: event.target.value }))}
                     className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                   />
+                </div>
+                {credentialModal.credential.type === 'nfc' && (
+                  <div>
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tag ID</label>
+                    <input
+                      value={credentialDraft.tagId || ''}
+                      onChange={(event) => setCredentialDraft((current) => ({ ...current, tagId: event.target.value }))}
+                      placeholder="NTAG424 UID / Tag ID"
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 font-mono text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Credential Groups</label>
+                  <div className="mt-1">
+                    <InlineTags
+                      value={credentialDraft.groups || []}
+                      onChange={(groups) => setCredentialDraft((current) => ({ ...current, groups }))}
+                      suggestions={selectedAccessGroups}
+                      placeholder="Add group..."
+                    />
+                  </div>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="sm:col-span-3">
@@ -946,6 +1145,7 @@ export function AccessControl() {
                       )}
                     </div>
                   </div>
+                  {credentialModal.credential.type !== 'nfc' && (
                   <div>
                     <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Refresh Interval</label>
                     <div className="mt-1 grid grid-cols-[1fr_7.5rem] gap-2">
@@ -971,6 +1171,7 @@ export function AccessControl() {
                       </select>
                     </div>
                   </div>
+                  )}
                   <div>
                     <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Allowed Visits</label>
                     <input
@@ -981,6 +1182,7 @@ export function AccessControl() {
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
                   </div>
+                  {credentialModal.credential.type !== 'nfc' && (
                   <label className="flex items-center justify-between gap-3 rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
                     <span>
                       <span className="block font-medium text-slate-700 dark:text-slate-300">Invalidate QR After Scan</span>
@@ -993,6 +1195,7 @@ export function AccessControl() {
                       className="h-4 w-4 shrink-0 rounded border-slate-300 text-orange-600 focus:ring-orange-600"
                     />
                   </label>
+                  )}
                 </div>
                 <label className="flex items-center justify-between rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-800">
                   <span className="font-medium text-slate-700 dark:text-slate-300">Enabled</span>
@@ -1016,7 +1219,7 @@ export function AccessControl() {
                     onClick={saveCredentialDraft}
                     className="rounded bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500"
                   >
-                    Save QR
+                    Save Credential
                   </button>
                 </div>
               </div>

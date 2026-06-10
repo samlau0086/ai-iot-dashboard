@@ -50,6 +50,7 @@ const getActionIcon = (type: string) => {
     case 'device_control': return <Settings2 className="h-5 w-5 text-orange-500" />;
     case 'webhook': return <Globe className="h-5 w-5 text-indigo-500" />;
     case 'access': return <KeyRound className="h-5 w-5 text-orange-500" />;
+    case 'nfc_access': return <KeyRound className="h-5 w-5 text-cyan-500" />;
     case 'report': return <FileText className="h-5 w-5 text-slate-500" />;
     case 'ai_analyze': return <BrainCircuit className="h-5 w-5 text-orange-600" />;
     case 'threshold': return <Activity className="h-5 w-5 text-cyan-500" />;
@@ -91,6 +92,7 @@ const defaultConfigs: Record<string, any> = {
   ai: { device: '', anomalyType: 'all' },
   webhook: { device: '', endpoint: '/api/v1/webhook/' },
   access: { accessId: '' },
+  nfc_access: { accessId: '' },
   mqtt_message: { device: '', topic: 'sensors/+/data', payload_match: '{"status":"alert"}' },
   whatsapp: { target: '+1234567890', message: 'Alert triggered!' },
   email: { to: 'admin@factory.com', subject: 'Alert Notification' },
@@ -367,7 +369,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const terminalBranchTypes = new Set(['else', 'default']);
   const getBranchFamily = (type: string) => (['switch', 'case', 'default'].includes(type) ? 'switch' : 'if');
   const conditionTypesForSelector = showSelector.allowedConditionTypes || availableConditionTypes.filter((type) => !['elif', 'else', 'case', 'default'].includes(type));
-  const triggerTypesForSelector = Array.from(new Set([...Object.keys(t.workflows.triggerTypes), 'access']));
+  const triggerTypesForSelector = Array.from(new Set([...Object.keys(t.workflows.triggerTypes), 'access', 'nfc_access']));
 
   type BranchGroup = { condition: WorkflowNode; index: number; nodes: Array<{ node: WorkflowNode; index: number }>; endIndex: number };
   type FlowItem = { type: 'branch_group'; branches: BranchGroup[]; startIndex: number; endIndex: number } | { type: 'nodes'; groups: any[] };
@@ -724,6 +726,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
   const getActionLabel = (type: string) => {
     if (type === 'access') return 'Access Trigger';
+    if (type === 'nfc_access') return 'NFC Trigger';
     return (t.workflows.actionTypes as any)[type] || (t.workflows.conditionTypes as any)[type] || (t.workflows.triggerTypes as any)[type] || type;
   };
 
@@ -812,9 +815,9 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
     const newNode: WorkflowNode = {
       id: `n-${Date.now()}`,
-      name: type === 'access' && !draft.nodes.some((node) => node.name === 'access_trigger')
-        ? 'access_trigger'
-        : getNodeDefaultName(type === 'access' ? 'access_trigger' : type, draft.nodes),
+      name: ['access', 'nfc_access'].includes(type) && !draft.nodes.some((node) => node.name === (type === 'nfc_access' ? 'nfc_trigger' : 'access_trigger'))
+        ? (type === 'nfc_access' ? 'nfc_trigger' : 'access_trigger')
+        : getNodeDefaultName(type === 'access' ? 'access_trigger' : type === 'nfc_access' ? 'nfc_trigger' : type, draft.nodes),
       type: isTrigger ? 'trigger' : isCondition ? 'condition' : 'action',
       config: { type, ...nodeConfig }
     };
@@ -1687,7 +1690,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       if (key === 'type') return null;
                       if (key === 'executionPolicy') return null;
 
-                      if (node.config.type === 'access' && key === 'accessId') {
+                      if (['access', 'nfc_access'].includes(node.config.type) && key === 'accessId') {
+                        const accessOptions = node.config.type === 'nfc_access'
+                          ? accesses.filter((access) => access.method === 'nfc')
+                          : accesses;
                         return (
                           <div key={key}>
                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
@@ -1696,10 +1702,12 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                             <AccessSelect
                               value={value as string}
                               onChange={(accessId) => updateNodeConfig(node.id, { accessId })}
-                              accesses={accesses}
+                              accesses={accessOptions}
                             />
                             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              Access extra parameters are available from this trigger output, for example $.access_trigger.output.deviceId or $.access_trigger.output.params.deviceId.
+                              {node.config.type === 'nfc_access'
+                                ? 'NFC trigger output includes Access extra parameters, tagId, and credentialGroups. Example: $.nfc_trigger.output.tagId or $.nfc_trigger.output.params.deviceId.'
+                                : 'Access extra parameters are available from this trigger output, for example $.access_trigger.output.deviceId or $.access_trigger.output.params.deviceId.'}
                             </p>
                           </div>
                         );

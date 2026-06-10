@@ -497,6 +497,8 @@ const publicAccessCredential = (credential) => ({
   type: credential.type || 'qr',
   name: credential.name,
   enabled: credential.enabled !== false,
+  tagId: credential.tagId || '',
+  groups: Array.isArray(credential.groups) ? credential.groups : [],
   hasLink: Boolean(credential.token),
   hasLatestQrLink: Boolean(credential.latestToken),
   rotateOnUse: Boolean(credential.rotateOnUse),
@@ -511,6 +513,24 @@ const publicAccessCredential = (credential) => ({
 });
 
 const createAccessToken = () => crypto.randomBytes(32).toString('base64url');
+const normalizeAccessMethod = (value) => {
+  const method = String(value || 'qr').trim().toLowerCase();
+  return ['qr', 'nfc', 'caller_id', 'sms'].includes(method) ? method : 'qr';
+};
+const normalizeAccessGroups = (value) => {
+  const source = Array.isArray(value) ? value : String(value || '').split(',');
+  return Array.from(new Set(source.map((item) => String(item).trim()).filter(Boolean)));
+};
+const sanitizeAccessDefinition = (payload = {}, existing = {}) => ({
+  ...existing,
+  ...payload,
+  method: normalizeAccessMethod(payload.method ?? existing.method),
+  aesKey: String(payload.aesKey ?? existing.aesKey ?? '').trim(),
+  credentialGroups: normalizeAccessGroups(payload.credentialGroups ?? existing.credentialGroups),
+  extraParams: payload.extraParams && typeof payload.extraParams === 'object'
+    ? payload.extraParams
+    : existing.extraParams || {},
+});
 const canUseLatestQrLink = (credential) => (
   (Number(credential?.refreshIntervalSeconds || 0) > 0 || Boolean(credential?.rotateOnUse))
   && Number(credential?.maxUses || 1) > 1
@@ -526,6 +546,13 @@ const createLatestQrLink = (req, token) => {
   const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
   const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
   return `${proto}://${host}/q/${token}`;
+};
+
+const createNfcAccessLink = (req, token, tagId = '') => {
+  const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+  const query = tagId ? `?tag_id=${encodeURIComponent(tagId)}` : '';
+  return `${proto}://${host}/n/${token}${query}`;
 };
 
 const rotateCredentialIfNeeded = (credential, now = new Date()) => {
@@ -765,6 +792,12 @@ const triggerMatchesEvent = (trigger, event) => {
 
   if (config.type === 'access') {
     if (event.type !== 'access') return false;
+    if (config.method && config.method !== event.source) return false;
+    return !config.accessId || config.accessId === event.accessId;
+  }
+
+  if (config.type === 'nfc_access') {
+    if (event.type !== 'access' || event.source !== 'nfc') return false;
     return !config.accessId || config.accessId === event.accessId;
   }
 
@@ -1460,7 +1493,7 @@ const createWorkflowNodeInput = (node, event, context, currentNodeName = normali
 });
 
 const createWorkflowTriggerOutput = (trigger, event) => {
-  if (trigger?.config?.type === 'access') {
+  if (trigger?.config?.type === 'access' || trigger?.config?.type === 'nfc_access') {
     const params = event?.params && typeof event.params === 'object' && !Array.isArray(event.params)
       ? event.params
       : {};
@@ -2841,15 +2874,17 @@ app.post('/api/accesses', async (req, res) => {
     const {accesses, accessCredentials} = await getAccessState();
     const now = new Date().toISOString();
     const payload = req.body || {};
-    const access = {
+    const access = sanitizeAccessDefinition({
       id: payload.id || createId('access'),
       name: String(payload.name || 'New Access').trim(),
       enabled: payload.enabled !== false,
       method: payload.method || 'qr',
+      aesKey: payload.aesKey || '',
+      credentialGroups: payload.credentialGroups || [],
       extraParams: payload.extraParams && typeof payload.extraParams === 'object' ? payload.extraParams : {},
       createdAt: now,
       updatedAt: now,
-    };
+    });
     const nextAccesses = [access, ...accesses.filter((item) => item.id !== access.id)];
     await patchAccessState({accesses: nextAccesses, accessCredentials});
     res.status(201).json({access, accesses: nextAccesses});
@@ -2866,12 +2901,10 @@ app.put('/api/accesses/:accessId', async (req, res) => {
     const nextAccesses = accesses.map((access) => {
       if (access.id !== req.params.accessId) return access;
       found = true;
-      return {
-        ...access,
+      return sanitizeAccessDefinition({
         ...patch,
-        extraParams: patch.extraParams && typeof patch.extraParams === 'object' ? patch.extraParams : access.extraParams,
         updatedAt: new Date().toISOString(),
-      };
+      }, access);
     });
     if (!found) {
       res.status(404).json({error: 'access not found'});
@@ -2907,6 +2940,7 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
 
     const payload = req.body || {};
     const token = createAccessToken();
+    const type = normalizeAccessMethod(payload.type || access.method || 'qr');
     const refreshIntervalSeconds = Math.max(0, Number(payload.refreshIntervalSeconds || 0) || 0);
     const maxUses = Math.max(1, Math.min(Number(payload.maxUses || 1) || 1, 100000));
     const now = new Date();
@@ -2918,8 +2952,10 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
     const credential = {
       id: createId('access-cred'),
       accessId: access.id,
-      type: payload.type || 'qr',
-      name: String(payload.name || 'QR Code').trim(),
+      type,
+      name: String(payload.name || (type === 'nfc' ? 'NFC Tag' : 'QR Code')).trim(),
+      tagId: String(payload.tagId || '').trim(),
+      groups: normalizeAccessGroups(payload.groups),
       token,
       tokenHash: hashToken(token),
       latestToken: (refreshIntervalSeconds > 0 || Boolean(payload.rotateOnUse)) && maxUses > 1 ? createAccessToken() : null,
@@ -2940,8 +2976,8 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
     res.status(201).json({
       credential: publicAccessCredential(credential),
       credentials: nextCredentials.map(publicAccessCredential),
-      link: createAccessLink(req, token),
-      latestQrLink: credential.latestToken ? createLatestQrLink(req, credential.latestToken) : null,
+      link: type === 'nfc' ? createNfcAccessLink(req, token, credential.tagId) : createAccessLink(req, token),
+      latestQrLink: type === 'qr' && credential.latestToken ? createLatestQrLink(req, credential.latestToken) : null,
     });
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -2973,6 +3009,8 @@ app.put('/api/access-credentials/:credentialId', async (req, res) => {
       return {
         ...credential,
         ...patch,
+        tagId: patch.tagId !== undefined ? String(patch.tagId || '').trim() : credential.tagId,
+        groups: patch.groups !== undefined ? normalizeAccessGroups(patch.groups) : normalizeAccessGroups(credential.groups),
         periodSeconds: nextPeriodSeconds,
         maxUses: nextMaxUses,
         refreshIntervalSeconds: nextRefreshIntervalSeconds,
@@ -3008,7 +3046,7 @@ app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
       return;
     }
     if (!credential.token) {
-      res.status(409).json({error: 'this credential was created before QR link viewing was supported; generate a new QR credential'});
+      res.status(409).json({error: 'this credential was created before link viewing was supported; generate a new credential'});
       return;
     }
     const rotated = rotateCredentialIfNeeded(credential, new Date());
@@ -3018,8 +3056,10 @@ app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
       await patchAccessState({accesses, accessCredentials: nextCredentials});
     }
     res.status(200).json({
-      link: createAccessLink(req, rotated.credential.token),
-      latestQrLink: rotated.credential.latestToken ? createLatestQrLink(req, rotated.credential.latestToken) : null,
+      link: rotated.credential.type === 'nfc'
+        ? createNfcAccessLink(req, rotated.credential.token, rotated.credential.tagId)
+        : createAccessLink(req, rotated.credential.token),
+      latestQrLink: rotated.credential.type === 'qr' && rotated.credential.latestToken ? createLatestQrLink(req, rotated.credential.latestToken) : null,
       credentials: nextCredentials.map(publicAccessCredential),
     });
   } catch (error) {
@@ -3709,7 +3749,10 @@ app.get('/a/:token', async (req, res) => {
         credentialType: credential?.type || 'qr',
         status: 'rejected',
         reason,
-        params: access?.extraParams || {},
+        params: {
+          ...(access?.extraParams || {}),
+          credentialGroups: normalizeAccessGroups(credential?.groups),
+        },
         request: requestMeta,
         createdAt: now.toISOString(),
       });
@@ -3743,6 +3786,11 @@ app.get('/a/:token', async (req, res) => {
     }
 
     const acceptedAt = now.toISOString();
+    const credentialGroups = normalizeAccessGroups(credential.groups);
+    const eventParams = {
+      ...(access.extraParams || {}),
+      credentialGroups,
+    };
     const rotatedToken = credential.rotateOnUse ? createAccessToken() : null;
     const nextCredentials = accessCredentials.map((item) => (
       item.id === credential.id
@@ -3765,7 +3813,7 @@ app.get('/a/:token', async (req, res) => {
       credentialType: credential.type || 'qr',
       status: 'accepted',
       reason: 'Access accepted',
-      params: access.extraParams || {},
+      params: eventParams,
       request: requestMeta,
       createdAt: acceptedAt,
     };
@@ -3778,7 +3826,8 @@ app.get('/a/:token', async (req, res) => {
       accessName: access.name,
       credentialId: credential.id,
       credentialName: credential.name,
-      params: access.extraParams || {},
+      credentialGroups,
+      params: eventParams,
       request: requestMeta,
       accessEvent,
       receivedAt: acceptedAt,
@@ -3787,6 +3836,125 @@ app.get('/a/:token', async (req, res) => {
     renderAccessPage(202, 'Access accepted', 'Access accepted', access.grantedMessage || 'Access granted.', access.name);
   } catch (error) {
     res.status(500).send(`<!doctype html><html><head><title>Access error</title></head><body><h1>Access error</h1><p>${escapeHtml(error.message)}</p></body></html>`);
+  }
+});
+
+app.get('/n/:token', async (req, res) => {
+  const now = new Date();
+  const providedTagId = String(req.query.tag_id || req.query.tagId || req.query.uid || '').trim();
+  const requestMeta = {
+    ip: req.ip,
+    userAgent: req.get('user-agent') || '',
+    method: 'GET',
+    path: req.path,
+    query: req.query || {},
+  };
+
+  try {
+    const tokenHash = hashToken(req.params.token);
+    const {accesses, accessCredentials} = await getAccessState();
+    const credential = accessCredentials.find((item) => item.tokenHash === tokenHash && item.type === 'nfc');
+    const access = credential ? accesses.find((item) => item.id === credential.accessId) : null;
+    const renderAccessPage = (statusCode, title, heading, message, detail = '') => {
+      res.status(statusCode).send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0f1115;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}.card{max-width:420px;width:calc(100% - 32px);background:#1c2128;border:1px solid #273244;border-radius:12px;padding:24px;text-align:center}.ok{color:#34d399}.denied{color:#fb7185}.muted{color:#94a3b8;font-size:13px;line-height:1.5}.message{font-size:18px;line-height:1.5;white-space:pre-wrap}</style></head><body><main class="card"><h1 class="${statusCode < 400 ? 'ok' : 'denied'}">${escapeHtml(heading)}</h1><p class="message">${escapeHtml(message)}</p>${detail ? `<p class="muted">${escapeHtml(detail)}</p>` : ''}</main></body></html>`);
+    };
+    const reject = async (statusCode, reason) => {
+      await persistAccessEvent({
+        id: createId('access-event'),
+        accessId: access?.id || credential?.accessId || null,
+        credentialId: credential?.id || null,
+        credentialType: credential?.type || 'nfc',
+        status: 'rejected',
+        reason,
+        params: {
+          ...(access?.extraParams || {}),
+          tagId: credential?.tagId || providedTagId,
+          credentialGroups: normalizeAccessGroups(credential?.groups),
+        },
+        request: requestMeta,
+        createdAt: now.toISOString(),
+      });
+      renderAccessPage(statusCode, 'Access denied', 'Access denied', access?.deniedMessage || 'Access denied.', reason);
+    };
+
+    if (!credential) {
+      await reject(404, 'NFC tag was not found.');
+      return;
+    }
+    if (!access || access.enabled === false) {
+      await reject(403, 'Access is disabled.');
+      return;
+    }
+    if (credential.enabled === false) {
+      await reject(403, 'NFC tag is disabled.');
+      return;
+    }
+    if (credential.tagId && providedTagId && credential.tagId !== providedTagId) {
+      await reject(403, 'NFC tag ID does not match this credential.');
+      return;
+    }
+    if (credential.validFrom && now < new Date(credential.validFrom)) {
+      await reject(403, 'NFC tag is not active yet.');
+      return;
+    }
+    if (credential.validUntil && now > new Date(credential.validUntil)) {
+      await reject(410, 'NFC tag has expired.');
+      return;
+    }
+    if (Number(credential.usedCount || 0) >= Number(credential.maxUses || 1)) {
+      await reject(429, 'NFC tag usage limit has been reached.');
+      return;
+    }
+
+    const acceptedAt = now.toISOString();
+    const credentialGroups = normalizeAccessGroups(credential.groups);
+    const eventParams = {
+      ...(access.extraParams || {}),
+      tagId: credential.tagId || providedTagId,
+      credentialGroups,
+    };
+    const nextCredentials = accessCredentials.map((item) => (
+      item.id === credential.id
+        ? {
+            ...item,
+            usedCount: Number(item.usedCount || 0) + 1,
+            lastUsedAt: acceptedAt,
+          }
+        : item
+    ));
+    await patchAccessState({accesses, accessCredentials: nextCredentials});
+
+    const accessEvent = {
+      id: createId('access-event'),
+      accessId: access.id,
+      credentialId: credential.id,
+      credentialType: credential.type || 'nfc',
+      status: 'accepted',
+      reason: 'Access accepted',
+      params: eventParams,
+      request: requestMeta,
+      createdAt: acceptedAt,
+    };
+    await persistAccessEvent(accessEvent);
+
+    await dispatchWorkflowEvent({
+      type: 'access',
+      source: 'nfc',
+      accessId: access.id,
+      accessName: access.name,
+      credentialId: credential.id,
+      credentialName: credential.name,
+      credentialGroups,
+      tagId: credential.tagId || providedTagId,
+      params: eventParams,
+      request: requestMeta,
+      accessEvent,
+      receivedAt: acceptedAt,
+    });
+
+    renderAccessPage(202, 'Access accepted', 'Access accepted', access.grantedMessage || 'Access granted.', access.name);
+  } catch (error) {
+    res.status(500).send(`<!doctype html><html><head><title>NFC access error</title></head><body><h1>NFC access error</h1><p>${escapeHtml(error.message)}</p></body></html>`);
   }
 });
 

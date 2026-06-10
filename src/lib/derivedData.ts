@@ -43,7 +43,7 @@ export const deriveAlertsFromDevices = (devices: Device[]): Alert[] => {
     const runningHours = numberMetric(device, 'running_hours') || numberMetric(device, 'runtime_hours');
     const doorOpenEvents = numberMetric(device, 'door_open_events') || numberMetric(device, 'door_open_count');
 
-    if (device.status === 'offline') {
+    if (device.status === 'offline' && device.lastSeen) {
       pushAlert(alerts, device, 'Critical', 'active', 'Device is offline and has stopped reporting telemetry.', 'offline');
     }
 

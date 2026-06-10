@@ -6,6 +6,7 @@ export const translations = {
       devices: 'Devices',
       workflows: 'Workflows',
       control: 'Control',
+      scada: 'SCADA',
       accessControl: 'Access Control',
       analytics: 'Analytics',
       rawData: 'Raw Data',
@@ -123,6 +124,7 @@ export const translations = {
         ai: 'AI Anomaly Detected',
         webhook: 'Webhook Event',
         access: 'Access Trigger',
+        nfc_access: 'NFC Trigger',
         mqtt_message: 'MQTT Message',
       },
       conditionTypes: {
@@ -192,6 +194,7 @@ export const translations = {
       devices: '设备管理',
       workflows: '工作流自动化',
       control: '控制中心',
+      scada: 'SCADA 运维',
       accessControl: 'Access Control',
       analytics: '数据分析',
       rawData: '原始数据',

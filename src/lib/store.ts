@@ -70,7 +70,9 @@ export interface AccessDefinition {
   id: string;
   name: string;
   enabled: boolean;
-  method: 'qr' | 'caller_id' | 'sms';
+  method: 'qr' | 'nfc' | 'caller_id' | 'sms';
+  aesKey?: string;
+  credentialGroups?: string[];
   grantedMessage?: string;
   deniedMessage?: string;
   extraParams: Record<string, any>;
@@ -81,9 +83,11 @@ export interface AccessDefinition {
 export interface AccessCredential {
   id: string;
   accessId: string;
-  type: 'qr' | 'caller_id' | 'sms';
+  type: 'qr' | 'nfc' | 'caller_id' | 'sms';
   name: string;
   enabled: boolean;
+  tagId?: string;
+  groups?: string[];
   hasLink?: boolean;
   hasLatestQrLink?: boolean;
   rotateOnUse?: boolean;
@@ -162,6 +166,32 @@ export interface OverviewDashboardState {
   widgets: OverviewWidget[];
   widgetLibrary: OverviewWidget[];
   templateId?: string;
+  updatedAt?: string;
+}
+
+export type ScadaElementType = 'device' | 'metric' | 'pipe' | 'power' | 'label';
+
+export interface ScadaElement {
+  id: string;
+  type: ScadaElementType;
+  label: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  points?: Array<{ x: number; y: number }>;
+  deviceId?: string;
+  metricKey?: string;
+  unit?: string;
+  warning?: number;
+  critical?: number;
+}
+
+export interface ScadaScene {
+  id: string;
+  siteId: string;
+  name: string;
+  elements: ScadaElement[];
   updatedAt?: string;
 }
 
@@ -253,15 +283,49 @@ const mergeDefaultCharts = (charts: ChartConfig[] = []) => {
 };
 
 const mergeDefaultDevices = (devices: Device[] = []) => {
+  const mockIds = new Set(mockDevices.map((device) => device.id));
   const existingIds = new Set(devices.map((device) => device.id));
   return [
     ...devices.map((device) => ({
       ...device,
       siteId: device.siteId || device.tags?.[0] || 'factory-a',
       tenantId: device.tenantId || 'default-tenant',
+      metrics: mockIds.has(device.id) ? {} : device.metrics,
+      status: mockIds.has(device.id) ? 'offline' as const : device.status,
+      lastSeen: mockIds.has(device.id) ? '' : device.lastSeen,
     })),
-    ...mockDevices.filter((device) => !existingIds.has(device.id)),
+    ...mockDevices
+      .filter((device) => !existingIds.has(device.id))
+      .map((device) => ({
+        ...device,
+        metrics: {},
+        status: 'offline' as const,
+        lastSeen: '',
+      })),
   ];
+};
+
+const createDefaultScadaScene = (siteId = 'factory-a', siteName = 'Factory A'): ScadaScene => ({
+  id: `scada-${siteId}`,
+  siteId,
+  name: `${siteName} Operations View`,
+  elements: [
+    { id: 'scada-label-main', type: 'label', label: siteName, x: 60, y: 44, width: 220, height: 40 },
+    { id: 'scada-device-meter', type: 'device', label: 'Main Meter', x: 90, y: 160, width: 150, height: 86, deviceId: 'DEV-001', metricKey: 'power', unit: 'W', warning: 3500, critical: 5000 },
+    { id: 'scada-device-compressor', type: 'device', label: 'Air Compressor', x: 390, y: 150, width: 170, height: 96, deviceId: 'DEV-003', metricKey: 'pressure', unit: 'bar', warning: 7.5, critical: 8.5 },
+    { id: 'scada-device-cold', type: 'device', label: 'Cold Storage', x: 700, y: 150, width: 160, height: 96, deviceId: 'DEV-004', metricKey: 'temperature', unit: 'deg C', warning: -12, critical: -8 },
+    { id: 'scada-metric-energy', type: 'metric', label: 'Energy Today', x: 92, y: 300, width: 170, height: 70, deviceId: 'DEV-001', metricKey: 'energy', unit: 'kWh', warning: 650, critical: 900 },
+    { id: 'scada-pipe-air', type: 'pipe', label: 'Compressed Air', x: 0, y: 0, points: [{ x: 560, y: 198 }, { x: 710, y: 198 }], deviceId: 'DEV-003', metricKey: 'pressure', warning: 7.5, critical: 8.5 },
+    { id: 'scada-power-feed', type: 'power', label: 'Power Feed', x: 0, y: 0, points: [{ x: 240, y: 202 }, { x: 390, y: 198 }], deviceId: 'DEV-001', metricKey: 'power', warning: 3500, critical: 5000 },
+  ],
+});
+
+const mergeDefaultScadaScenes = (scenesBySite: Record<string, ScadaScene> = {}, sites: SiteTenant[] = DEFAULT_SITES) => {
+  const nextScenes = { ...scenesBySite };
+  sites.forEach((site) => {
+    if (!nextScenes[site.id]) nextScenes[site.id] = createDefaultScadaScene(site.id, site.name);
+  });
+  return nextScenes;
 };
 
 const mergeDefaultSites = (sites: SiteTenant[] = []) => {
@@ -618,6 +682,9 @@ interface AppState {
   addOverviewWidget: (widget: OverviewWidget, layoutItem: any, siteId?: string) => void;
   updateOverviewWidget: (id: string, widget: Partial<OverviewWidget>, siteId?: string) => void;
   removeOverviewWidget: (id: string, siteId?: string) => void;
+  // SCADA Operations View
+  scadaScenesBySite: Record<string, ScadaScene>;
+  updateScadaScene: (siteId: string, scene: ScadaScene) => void;
   // Workflows
   workflows: Workflow[];
   addWorkflow: (workflow: Workflow) => void;
@@ -647,6 +714,7 @@ type BackendState = Partial<Pick<AppState,
   | 'dashboardTemplates'
   | 'activeDashboardTemplateId'
   | 'tagDashboardTemplateMap'
+  | 'scadaScenesBySite'
   | 'workflows'
 >>;
 
@@ -709,6 +777,7 @@ const pickBackendState = (state: AppState): BackendState => ({
   dashboardTemplates: state.dashboardTemplates,
   activeDashboardTemplateId: state.activeDashboardTemplateId,
   tagDashboardTemplateMap: state.tagDashboardTemplateMap,
+  scadaScenesBySite: state.scadaScenesBySite,
   workflows: state.workflows,
 });
 
@@ -754,6 +823,7 @@ export const useAppStore = create<AppState>()(
             state?.tagDashboardTemplateMap || DEFAULT_TAG_TEMPLATE_MAP,
           );
           const activeDashboard = overviewDashboardsBySite[activeSiteId] || createDefaultOverviewDashboard(activeSiteId, sites, state?.tagDashboardTemplateMap || DEFAULT_TAG_TEMPLATE_MAP);
+          const scadaScenesBySite = mergeDefaultScadaScenes(state?.scadaScenesBySite, sites);
           const sessionUserId = getStoredSessionUserId();
           const sessionUser = sessionUserId
             ? users.find((user) => user.id === sessionUserId && user.status === 'approved') || null
@@ -772,6 +842,7 @@ export const useAppStore = create<AppState>()(
             accesses: Array.isArray(state?.accesses) ? state.accesses : [],
             accessCredentials: Array.isArray(state?.accessCredentials) ? state.accessCredentials : [],
             overviewDashboardsBySite,
+            scadaScenesBySite,
             overviewLayout: cloneLayout(activeDashboard.layout),
             overviewWidgets: cloneWidgets(activeDashboard.widgets),
             overviewWidgetLibrary: cloneWidgets(activeDashboard.widgetLibrary),
@@ -869,8 +940,8 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      devices: mockDevices,
-      deviceDataSourceStatus: 'mock',
+      devices: mergeDefaultDevices([]),
+      deviceDataSourceStatus: 'api',
       addDevice: (device) => set((state) => ({ devices: [...state.devices, {
         ...device,
         siteId: device.siteId || state.activeSiteId || 'factory-a',
@@ -910,6 +981,10 @@ export const useAppStore = create<AppState>()(
           ...state.overviewDashboardsBySite,
           [site.id]: createDefaultOverviewDashboard(site.id, [...state.sites, site], state.tagDashboardTemplateMap),
         },
+        scadaScenesBySite: {
+          ...state.scadaScenesBySite,
+          [site.id]: createDefaultScadaScene(site.id, site.name),
+        },
         tagDashboardTemplateMap: {
           ...state.tagDashboardTemplateMap,
           ...site.tags.reduce<Record<string, string>>((acc, tag) => {
@@ -922,10 +997,17 @@ export const useAppStore = create<AppState>()(
         const nextSiteId = site.id || id;
         const renamedDashboard = nextSiteId !== id ? state.overviewDashboardsBySite[id] : undefined;
         const overviewDashboardsBySite = { ...state.overviewDashboardsBySite };
+        const scadaScenesBySite = { ...state.scadaScenesBySite };
 
         if (renamedDashboard) {
           delete overviewDashboardsBySite[id];
           overviewDashboardsBySite[nextSiteId] = renamedDashboard;
+        }
+        if (site.id && site.id !== id && scadaScenesBySite[id]) {
+          scadaScenesBySite[site.id] = { ...scadaScenesBySite[id], siteId: site.id, name: site.name || scadaScenesBySite[id].name };
+          delete scadaScenesBySite[id];
+        } else if (scadaScenesBySite[id] && site.name) {
+          scadaScenesBySite[id] = { ...scadaScenesBySite[id], name: `${site.name} Operations View` };
         }
 
         return {
@@ -933,6 +1015,7 @@ export const useAppStore = create<AppState>()(
             item.id === id ? { ...item, ...site, updatedAt: new Date().toISOString() } : item
           )),
           overviewDashboardsBySite,
+          scadaScenesBySite,
           users: site.id && site.id !== id
             ? state.users.map((user) => user.siteId === id ? { ...user, siteId: site.id as string } : user)
             : state.users,
@@ -946,13 +1029,16 @@ export const useAppStore = create<AppState>()(
         const remainingSites = state.sites.filter((site) => site.id !== id);
         const fallbackSiteId = remainingSites[0]?.id || 'factory-a';
         const overviewDashboardsBySite = { ...state.overviewDashboardsBySite };
+        const scadaScenesBySite = { ...state.scadaScenesBySite };
         delete overviewDashboardsBySite[id];
+        delete scadaScenesBySite[id];
         const fallbackDashboard = overviewDashboardsBySite[fallbackSiteId] || createDefaultOverviewDashboard(fallbackSiteId, remainingSites.length ? remainingSites : DEFAULT_SITES, state.tagDashboardTemplateMap);
         overviewDashboardsBySite[fallbackSiteId] = fallbackDashboard;
         return {
           sites: remainingSites.length ? remainingSites : DEFAULT_SITES,
           activeSiteId: state.activeSiteId === id ? fallbackSiteId : state.activeSiteId,
           overviewDashboardsBySite,
+          scadaScenesBySite,
           ...(state.activeSiteId === id ? {
             overviewLayout: cloneLayout(fallbackDashboard.layout),
             overviewWidgets: cloneWidgets(fallbackDashboard.widgets),
@@ -1054,6 +1140,7 @@ export const useAppStore = create<AppState>()(
       overviewWidgets: cloneWidgets(DEFAULT_OVERVIEW_WIDGETS),
       overviewWidgetLibrary: [],
       overviewDashboardsBySite: mergeDefaultOverviewDashboards({}, DEFAULT_SITES),
+      scadaScenesBySite: mergeDefaultScadaScenes({}, DEFAULT_SITES),
       dashboardTemplates: DASHBOARD_TEMPLATES.map((template) => ({
         ...template,
         layout: cloneLayout(template.layout),
@@ -1165,6 +1252,16 @@ export const useAppStore = create<AppState>()(
           layout: dashboard.layout.filter(l => l.i !== id),
         });
       }),
+      updateScadaScene: (siteId, scene) => set((state) => ({
+        scadaScenesBySite: {
+          ...state.scadaScenesBySite,
+          [siteId]: {
+            ...scene,
+            siteId,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      })),
       
       workflows: [
         {

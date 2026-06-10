@@ -1126,10 +1126,9 @@ export function Overview() {
     const displayValue = displayMode === 'number' || displayMode === 'bar' || displayMode === 'donut' ? value : averageValue;
     const ruleState = getWidgetRuleState(displayValue, widget);
     const ruleColor = getWidgetRuleColor(widget, ruleState);
-    const baseline = (Number.isFinite(averageValue) && averageValue) || (Number.isFinite(value) && value) || 1;
-    const trendData = deriveEnergyTrendData(targetDevices, metricKey).map((point, index) => ({
+    const trendData = deriveEnergyTrendData(targetDevices, metricKey).map((point) => ({
       time: point.time,
-      value: point.value || Number((baseline * (0.72 + index * 0.09)).toFixed(1)),
+      value: point.value,
     }));
     const deviceMetricData = targetDevices
       .map((device) => ({

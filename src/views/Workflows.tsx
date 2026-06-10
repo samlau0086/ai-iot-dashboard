@@ -126,6 +126,7 @@ export function Workflows() {
       case 'stop_device': return <PowerOff className="h-4 w-4 text-red-500" />;
       case 'webhook': return <Globe className="h-4 w-4 text-indigo-500" />;
       case 'access': return <KeyRound className="h-4 w-4 text-orange-500" />;
+      case 'nfc_access': return <KeyRound className="h-4 w-4 text-cyan-500" />;
       case 'report': return <FileText className="h-4 w-4 text-slate-500" />;
       case 'ai_analyze': return <BrainCircuit className="h-4 w-4 text-orange-600" />;
       // triggers
@@ -151,6 +152,7 @@ export function Workflows() {
   };
 
   const getActionLabel = (type: string) => {
+    if (type === 'nfc_access') return 'NFC Trigger';
     // @ts-ignore
     return t.workflows.actionTypes[type] || t.workflows.conditionTypes[type] || t.workflows.triggerTypes[type] || type;
   };
