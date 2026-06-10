@@ -217,6 +217,7 @@ export interface ScadaShapePrimitive {
     type?: 'none' | 'rotate' | 'scale' | 'translate' | 'visibility' | 'pulse' | 'strokeFlow';
     trigger?: 'always' | 'deviceOnline' | 'metricNonZero' | 'metricGreaterThan' | 'metricEquals' | 'deviceStatus' | 'workflowTruthy' | 'workflowEquals';
     metricKey?: string;
+    workflowId?: string;
     workflowPath?: string;
     operatorValue?: string | number;
     deviceStatus?: 'online' | 'offline' | 'warning' | 'normal' | 'critical';

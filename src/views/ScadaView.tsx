@@ -276,16 +276,16 @@ const shouldPlayPrimitiveAnimation = (
   elementState: string | undefined,
   fallbackMetricKey: string | undefined,
   fallbackMetricValue: number | undefined,
-  resolveRuntimePath?: (path: string) => unknown,
+  resolveRuntimePath?: (path: string, workflowId?: string) => unknown,
 ) => {
   const animation = primitive.animation;
   const trigger = animation?.trigger || 'always';
   if (!animation || animation.type === 'none' || trigger === 'always') return true;
   if (trigger === 'deviceOnline') return Boolean(isDeviceReadingFresh(device) && device?.status !== 'offline');
   if (trigger === 'deviceStatus') return Boolean(animation.deviceStatus && (device?.status === animation.deviceStatus || elementState === animation.deviceStatus));
-  if (trigger === 'workflowTruthy') return Boolean(animation.workflowPath && resolveRuntimePath?.(animation.workflowPath));
+  if (trigger === 'workflowTruthy') return Boolean(animation.workflowPath && resolveRuntimePath?.(animation.workflowPath, animation.workflowId));
   if (trigger === 'workflowEquals') {
-    const runtimeValue = animation.workflowPath ? resolveRuntimePath?.(animation.workflowPath) : undefined;
+    const runtimeValue = animation.workflowPath ? resolveRuntimePath?.(animation.workflowPath, animation.workflowId) : undefined;
     return String(runtimeValue ?? '') === String(animation.operatorValue ?? '');
   }
 
@@ -305,6 +305,7 @@ export function ScadaView() {
     activeSiteId,
     sites,
     devices,
+    workflows,
     scadaScenesBySite,
     scadaShapePresets,
     updateScadaScene,
@@ -411,11 +412,13 @@ export function ScadaView() {
   const workflowRuntimeContext = useMemo(() => {
     const runtime: Record<string, unknown> = {
       workflow: {},
+      workflowById: {},
       trigger: {},
       node: {},
       latest: null,
     };
     const workflows = runtime.workflow as Record<string, unknown>;
+    const workflowsById = runtime.workflowById as Record<string, Record<string, unknown>>;
     const triggers = runtime.trigger as Record<string, unknown>;
     const nodes = runtime.node as Record<string, unknown>;
     const sortedRuns = [...workflowRunsForScada].sort((first, second) => (
@@ -446,14 +449,24 @@ export function ScadaView() {
         finishedAt: run.finishedAt,
         active: Number.isFinite(runTime) && scadaNow - runTime <= WORKFLOW_TRIGGER_ACTIVE_MS,
       };
+      const workflowScoped = run.workflowId ? (workflowsById[run.workflowId] ||= {
+        workflow: {},
+        trigger: {},
+        node: {},
+        latest: null,
+      }) : null;
 
       if (index === 0) runtime.latest = runSummary;
+      if (workflowScoped && workflowScoped.latest === null) workflowScoped.latest = runSummary;
       workflowKeys.forEach((key) => {
         if (key && workflows[key] === undefined) workflows[key] = runSummary;
+        if (workflowScoped && key && (workflowScoped.workflow as Record<string, unknown>)[key] === undefined) {
+          (workflowScoped.workflow as Record<string, unknown>)[key] = runSummary;
+        }
       });
       triggerAliases.forEach((triggerKey) => {
-        if (!triggerKey || triggers[triggerKey] !== undefined) return;
-        triggers[triggerKey] = {
+        if (!triggerKey) return;
+        const triggerSummary = {
           active: runSummary.active,
           status: run.status,
           source: run.eventSource,
@@ -464,6 +477,10 @@ export function ScadaView() {
           startedAt: run.startedAt,
           finishedAt: run.finishedAt,
         };
+        if (triggers[triggerKey] === undefined) triggers[triggerKey] = triggerSummary;
+        if (workflowScoped && (workflowScoped.trigger as Record<string, unknown>)[triggerKey] === undefined) {
+          (workflowScoped.trigger as Record<string, unknown>)[triggerKey] = triggerSummary;
+        }
       });
       (run.steps || []).forEach((step) => {
         const nodeKeys = [step.nodeName, step.nodeId].filter(Boolean).map((value) => normalizeRuntimeKey(String(value)));
@@ -482,13 +499,20 @@ export function ScadaView() {
         };
         nodeKeys.forEach((key) => {
           if (key && nodes[key] === undefined) nodes[key] = nodeSummary;
+          if (workflowScoped && key && (workflowScoped.node as Record<string, unknown>)[key] === undefined) {
+            (workflowScoped.node as Record<string, unknown>)[key] = nodeSummary;
+          }
         });
       });
     });
 
     return runtime;
   }, [scadaNow, workflowRunsForScada]);
-  const resolveScadaRuntimePath = (path: string) => getObjectPathValue(workflowRuntimeContext, path);
+  const resolveScadaRuntimePath = (path: string, workflowId?: string) => {
+    const workflowScope = workflowId ? getObjectPathValue(workflowRuntimeContext, `$.workflowById.${workflowId}`) : undefined;
+    const scopedValue = workflowScope ? getObjectPathValue(workflowScope, path) : undefined;
+    return scopedValue === undefined ? getObjectPathValue(workflowRuntimeContext, path) : scopedValue;
+  };
   const stepCanvasZoom = (direction: 1 | -1) => {
     setCanvasZoom((current) => {
       const currentIndex = CANVAS_ZOOM_OPTIONS.findIndex((value) => value >= current);
@@ -2265,6 +2289,19 @@ export function ScadaView() {
                           </div>
                           {(selectedPrimitive.animation?.trigger === 'workflowTruthy' || selectedPrimitive.animation?.trigger === 'workflowEquals') && (
                             <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="col-span-2 text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                Workflow
+                                <select
+                                  value={selectedPrimitive.animation?.workflowId || ''}
+                                  onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), workflowId: event.target.value } })}
+                                  className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                                >
+                                  <option value="">Any workflow</option>
+                                  {workflows.map((workflow) => (
+                                    <option key={workflow.id} value={workflow.id}>{workflow.name}</option>
+                                  ))}
+                                </select>
+                              </label>
                               <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
                                 Workflow Path
                                 <input value={selectedPrimitive.animation?.workflowPath || ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), workflowPath: event.target.value } })} placeholder="$.trigger.access.active" className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
@@ -2276,7 +2313,7 @@ export function ScadaView() {
                                 </label>
                               )}
                               <p className="col-span-2 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
-                                Examples: $.trigger.access.active, $.trigger.nfc.active, $.node.notification_2.output, $.workflow.New_Workflow.status.
+                                Select a workflow to scope matching. Examples: $.trigger.access.active, $.trigger.nfc.active, $.node.notification_2.output, $.workflow.New_Workflow.status.
                               </p>
                             </div>
                           )}
