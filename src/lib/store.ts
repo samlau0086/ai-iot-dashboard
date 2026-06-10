@@ -199,6 +199,25 @@ export interface ScadaShapePrimitive {
   strokeWidth?: number;
   opacity?: number;
   dash?: string;
+  rotation?: {
+    angle?: number;
+    centerX?: number;
+    centerY?: number;
+  };
+  animation?: {
+    type?: 'none' | 'rotate' | 'scale' | 'translate';
+    durationSeconds?: number;
+    centerX?: number;
+    centerY?: number;
+    rotateFrom?: number;
+    rotateTo?: number;
+    scaleFrom?: number;
+    scaleTo?: number;
+    fromX?: number;
+    fromY?: number;
+    toX?: number;
+    toY?: number;
+  };
 }
 
 export interface ScadaShapeEndpoint {

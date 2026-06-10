@@ -171,6 +171,10 @@ const defaultElementEndpoints: ScadaShapeEndpoint[] = [
 ];
 const distanceBetween = (first: { x: number; y: number }, second: { x: number; y: number }) => Math.hypot(first.x - second.x, first.y - second.y);
 const clampPercent = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
+const getPrimitiveCenter = (primitive: ScadaShapePrimitive) => ({
+  x: primitive.x + (primitive.width ?? 32) / 2,
+  y: primitive.y + (primitive.height ?? 32) / 2,
+});
 
 export function ScadaView() {
   const navigate = useNavigate();
@@ -451,6 +455,8 @@ export function ScadaView() {
   };
 
   const removeEditingEndpoint = (id: string) => {
+    const endpoint = (editingShape?.endpoints || defaultElementEndpoints).find((item) => item.id === id);
+    if (!confirmDelete({ title: 'Delete connection endpoint', itemName: endpoint?.label || 'this endpoint', description: 'Lines will no longer snap to this custom endpoint.' })) return;
     setEditingShape((current) => {
       if (!current) return current;
       const endpoints = (current.endpoints || defaultElementEndpoints).filter((endpoint) => endpoint.id !== id);
@@ -460,10 +466,27 @@ export function ScadaView() {
   };
 
   const removeEditingPrimitive = (id: string) => {
+    const primitive = editingShape?.primitives.find((item) => item.id === id);
+    if (!confirmDelete({ title: 'Delete shape layer', itemName: primitive?.type || 'this layer', description: 'This primitive will be removed from the custom shape.' })) return;
     setEditingShape((current) => {
       if (!current || current.primitives.length <= 1) return current;
       const nextPrimitives = current.primitives.filter((primitive) => primitive.id !== id);
       setSelectedPrimitiveId(nextPrimitives[0]?.id || '');
+      return { ...current, primitives: nextPrimitives };
+    });
+  };
+
+  const moveEditingPrimitive = (id: string, direction: 'front' | 'back' | 'up' | 'down') => {
+    setEditingShape((current) => {
+      if (!current) return current;
+      const index = current.primitives.findIndex((primitive) => primitive.id === id);
+      if (index < 0) return current;
+      const nextPrimitives = [...current.primitives];
+      const [primitive] = nextPrimitives.splice(index, 1);
+      if (direction === 'front') nextPrimitives.push(primitive);
+      if (direction === 'back') nextPrimitives.unshift(primitive);
+      if (direction === 'up') nextPrimitives.splice(Math.min(nextPrimitives.length, index + 1), 0, primitive);
+      if (direction === 'down') nextPrimitives.splice(Math.max(0, index - 1), 0, primitive);
       return { ...current, primitives: nextPrimitives };
     });
   };
@@ -771,6 +794,63 @@ export function ScadaView() {
     );
   };
 
+  const renderPrimitiveMotion = (
+    primitive: ScadaShapePrimitive,
+    content: React.ReactNode,
+    mapX: (value?: number) => number,
+    mapY: (value?: number) => number
+  ) => {
+    const primitiveCenter = getPrimitiveCenter(primitive);
+    const rotationCenterX = mapX(primitive.rotation?.centerX ?? primitiveCenter.x);
+    const rotationCenterY = mapY(primitive.rotation?.centerY ?? primitiveCenter.y);
+    const animation = primitive.animation;
+    const duration = Math.max(0.2, animation?.durationSeconds || 2);
+    const staticRotation = primitive.rotation?.angle
+      ? `rotate(${primitive.rotation.angle} ${rotationCenterX} ${rotationCenterY})`
+      : undefined;
+
+    if (animation?.type === 'scale') {
+      const centerX = mapX(animation.centerX ?? primitive.rotation?.centerX ?? primitiveCenter.x);
+      const centerY = mapY(animation.centerY ?? primitive.rotation?.centerY ?? primitiveCenter.y);
+      const from = animation.scaleFrom ?? 1;
+      const to = animation.scaleTo ?? 1.12;
+      return (
+        <g key={primitive.id} transform={`translate(${centerX} ${centerY})`}>
+          <animateTransform attributeName="transform" type="scale" values={`${from};${to};${from}`} dur={`${duration}s`} repeatCount="indefinite" additive="sum" />
+          <g transform={`translate(${-centerX} ${-centerY})`}>
+            <g transform={staticRotation}>{content}</g>
+          </g>
+        </g>
+      );
+    }
+
+    return (
+      <g key={primitive.id} transform={staticRotation}>
+        {animation?.type === 'rotate' && (
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            values={`${animation.rotateFrom ?? 0} ${rotationCenterX} ${rotationCenterY};${animation.rotateTo ?? 360} ${rotationCenterX} ${rotationCenterY}`}
+            dur={`${duration}s`}
+            repeatCount="indefinite"
+            additive="sum"
+          />
+        )}
+        {animation?.type === 'translate' && (
+          <animateTransform
+            attributeName="transform"
+            type="translate"
+            values={`${mapX(animation.fromX ?? primitive.x) - mapX(primitive.x)} ${mapY(animation.fromY ?? primitive.y) - mapY(primitive.y)};${mapX(animation.toX ?? primitive.x) - mapX(primitive.x)} ${mapY(animation.toY ?? primitive.y) - mapY(primitive.y)};${mapX(animation.fromX ?? primitive.x) - mapX(primitive.x)} ${mapY(animation.fromY ?? primitive.y) - mapY(primitive.y)}`}
+            dur={`${duration}s`}
+            repeatCount="indefinite"
+            additive="sum"
+          />
+        )}
+        {content}
+      </g>
+    );
+  };
+
   const renderShapeFrame = (
     element: ScadaElement,
     style: typeof stateStyles.normal,
@@ -839,9 +919,10 @@ export function ScadaView() {
             const centerY = primitiveY + scaledHeight / 2;
             const scaleX = scaledWidth / 100;
             const scaleY = scaledHeight / 100;
+            const wrapPrimitive = (content: React.ReactNode) => renderPrimitiveMotion(primitive, content, toX, toY);
             if (primitive.type === 'propeller') {
-              return (
-                <g key={primitive.id} transform={`translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY})`} {...paint}>
+              return wrapPrimitive(
+                <g transform={`translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY})`} {...paint}>
                   <path d="M 0 -8 C 18 -38 38 -42 46 -28 C 32 -18 18 -12 4 -2 Z" />
                   <path d="M 7 5 C 38 14 48 32 38 46 C 22 40 12 28 2 8 Z" />
                   <path d="M -8 5 C -34 28 -54 28 -60 12 C -45 4 -26 -2 -4 -4 Z" />
@@ -850,8 +931,8 @@ export function ScadaView() {
               );
             }
             if (primitive.type === 'valve') {
-              return (
-                <g key={primitive.id} {...paint}>
+              return wrapPrimitive(
+                <g {...paint}>
                   <polygon points={`${primitiveX},${centerY} ${centerX},${primitiveY} ${centerX},${primitiveY + scaledHeight} ${primitiveX},${centerY}`} />
                   <polygon points={`${primitiveX + scaledWidth},${centerY} ${centerX},${primitiveY} ${centerX},${primitiveY + scaledHeight} ${primitiveX + scaledWidth},${centerY}`} />
                   <line x1={centerX} y1={primitiveY - scaledHeight * 0.28} x2={centerX} y2={primitiveY} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
@@ -860,11 +941,11 @@ export function ScadaView() {
               );
             }
             if (primitive.type === 'arrow') {
-              return <polygon key={primitive.id} points={`${primitiveX},${centerY - scaledHeight * 0.22} ${primitiveX + scaledWidth * 0.66},${centerY - scaledHeight * 0.22} ${primitiveX + scaledWidth * 0.66},${primitiveY} ${primitiveX + scaledWidth},${centerY} ${primitiveX + scaledWidth * 0.66},${primitiveY + scaledHeight} ${primitiveX + scaledWidth * 0.66},${centerY + scaledHeight * 0.22} ${primitiveX},${centerY + scaledHeight * 0.22}`} {...paint} />;
+              return wrapPrimitive(<polygon points={`${primitiveX},${centerY - scaledHeight * 0.22} ${primitiveX + scaledWidth * 0.66},${centerY - scaledHeight * 0.22} ${primitiveX + scaledWidth * 0.66},${primitiveY} ${primitiveX + scaledWidth},${centerY} ${primitiveX + scaledWidth * 0.66},${primitiveY + scaledHeight} ${primitiveX + scaledWidth * 0.66},${centerY + scaledHeight * 0.22} ${primitiveX},${centerY + scaledHeight * 0.22}`} {...paint} />);
             }
             if (primitive.type === 'busbar') {
-              return (
-                <g key={primitive.id} {...paint}>
+              return wrapPrimitive(
+                <g {...paint}>
                   {[0.18, 0.5, 0.82].map((ratio) => <line key={ratio} x1={primitiveX} y1={primitiveY + scaledHeight * ratio} x2={primitiveX + scaledWidth} y2={primitiveY + scaledHeight * ratio} strokeLinecap="round" />)}
                   <line x1={primitiveX + scaledWidth * 0.16} y1={primitiveY} x2={primitiveX + scaledWidth * 0.16} y2={primitiveY + scaledHeight} strokeLinecap="round" />
                   <line x1={primitiveX + scaledWidth * 0.84} y1={primitiveY} x2={primitiveX + scaledWidth * 0.84} y2={primitiveY + scaledHeight} strokeLinecap="round" />
@@ -872,24 +953,24 @@ export function ScadaView() {
               );
             }
             if (primitive.type === 'terminal') {
-              return (
-                <g key={primitive.id} {...paint}>
+              return wrapPrimitive(
+                <g {...paint}>
                   <rect x={primitiveX} y={primitiveY} width={scaledWidth} height={scaledHeight} rx={Math.min(scaledWidth, scaledHeight) * 0.12} />
                   {[0.25, 0.5, 0.75].map((ratio) => <circle key={ratio} cx={primitiveX + scaledWidth * ratio} cy={centerY} r={Math.min(scaledWidth, scaledHeight) * 0.08} fill="#020617" stroke={paint.stroke} strokeWidth={paint.strokeWidth} />)}
                 </g>
               );
             }
             if (primitive.type === 'bracket') {
-              return (
-                <g key={primitive.id} fill="none" stroke={paint.stroke} strokeWidth={paint.strokeWidth} opacity={paint.opacity}>
+              return wrapPrimitive(
+                <g fill="none" stroke={paint.stroke} strokeWidth={paint.strokeWidth} opacity={paint.opacity}>
                   <path d={`M ${primitiveX + scaledWidth * 0.24} ${primitiveY} L ${primitiveX} ${primitiveY} L ${primitiveX} ${primitiveY + scaledHeight} L ${primitiveX + scaledWidth * 0.24} ${primitiveY + scaledHeight}`} strokeLinecap="round" strokeLinejoin="round" />
                   <path d={`M ${primitiveX + scaledWidth * 0.76} ${primitiveY} L ${primitiveX + scaledWidth} ${primitiveY} L ${primitiveX + scaledWidth} ${primitiveY + scaledHeight} L ${primitiveX + scaledWidth * 0.76} ${primitiveY + scaledHeight}`} strokeLinecap="round" strokeLinejoin="round" />
                 </g>
               );
             }
             if (primitive.type === 'tank') {
-              return (
-                <g key={primitive.id} {...paint}>
+              return wrapPrimitive(
+                <g {...paint}>
                   <ellipse cx={centerX} cy={primitiveY + scaledHeight * 0.12} rx={scaledWidth / 2} ry={scaledHeight * 0.12} />
                   <rect x={primitiveX} y={primitiveY + scaledHeight * 0.12} width={scaledWidth} height={scaledHeight * 0.76} />
                   <ellipse cx={centerX} cy={primitiveY + scaledHeight * 0.88} rx={scaledWidth / 2} ry={scaledHeight * 0.12} />
@@ -897,18 +978,18 @@ export function ScadaView() {
               );
             }
             if (primitive.type === 'ellipse') {
-              return <ellipse key={primitive.id} cx={toX(primitive.x + primitiveWidth / 2)} cy={toY(primitive.y + primitiveHeight / 2)} rx={(primitiveWidth / 100) * width / 2} ry={(primitiveHeight / 100) * height / 2} {...paint} />;
+              return wrapPrimitive(<ellipse cx={toX(primitive.x + primitiveWidth / 2)} cy={toY(primitive.y + primitiveHeight / 2)} rx={(primitiveWidth / 100) * width / 2} ry={(primitiveHeight / 100) * height / 2} {...paint} />);
             }
             if (primitive.type === 'line') {
-              return <line key={primitive.id} x1={toX(primitive.x)} y1={toY(primitive.y)} x2={toX(primitive.x + (primitive.width ?? 0))} y2={toY(primitive.y + (primitive.height ?? 0))} strokeLinecap="round" {...paint} />;
+              return wrapPrimitive(<line x1={toX(primitive.x)} y1={toY(primitive.y)} x2={toX(primitive.x + (primitive.width ?? 0))} y2={toY(primitive.y + (primitive.height ?? 0))} strokeLinecap="round" {...paint} />);
             }
             if (primitive.type === 'polygon') {
               const primitivePoints = primitive.width && primitive.height
                 ? (primitive.points || []).map((point) => `${toX(primitive.x + point.x * primitiveWidth / 100)},${toY(primitive.y + point.y * primitiveHeight / 100)}`).join(' ')
                 : (primitive.points || []).map((point) => `${toX(point.x)},${toY(point.y)}`).join(' ');
-              return <polygon key={primitive.id} points={primitivePoints} {...paint} />;
+              return wrapPrimitive(<polygon points={primitivePoints} {...paint} />);
             }
-            return <rect key={primitive.id} x={toX(primitive.x)} y={toY(primitive.y)} width={((primitive.width ?? 40) / 100) * width} height={((primitive.height ?? 40) / 100) * height} rx={primitive.rx ?? 0} {...paint} />;
+            return wrapPrimitive(<rect x={toX(primitive.x)} y={toY(primitive.y)} width={((primitive.width ?? 40) / 100) * width} height={((primitive.height ?? 40) / 100) * height} rx={primitive.rx ?? 0} {...paint} />);
           })}
           {isSelected && <rect x={x} y={y} width={width} height={height} rx={8} fill="none" stroke="#fb923c" strokeWidth={2} strokeDasharray="5 5" />}
         </g>
@@ -1152,9 +1233,10 @@ export function ScadaView() {
     const centerY = primitive.y + height / 2;
     const scaleX = width / 100;
     const scaleY = height / 100;
+    const wrapPrimitive = (content: React.ReactNode) => renderPrimitiveMotion(primitive, content, (value = 0) => value, (value = 0) => value);
     if (primitive.type === 'propeller') {
-      return (
-        <g key={primitive.id} transform={`translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY})`} {...paint}>
+      return wrapPrimitive(
+        <g transform={`translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY})`} {...paint}>
           <path d="M 0 -8 C 18 -38 38 -42 46 -28 C 32 -18 18 -12 4 -2 Z" />
           <path d="M 7 5 C 38 14 48 32 38 46 C 22 40 12 28 2 8 Z" />
           <path d="M -8 5 C -34 28 -54 28 -60 12 C -45 4 -26 -2 -4 -4 Z" />
@@ -1163,8 +1245,8 @@ export function ScadaView() {
       );
     }
     if (primitive.type === 'valve') {
-      return (
-        <g key={primitive.id} {...paint}>
+      return wrapPrimitive(
+        <g {...paint}>
           <polygon points={`${primitive.x},${centerY} ${centerX},${primitive.y} ${centerX},${primitive.y + height} ${primitive.x},${centerY}`} />
           <polygon points={`${primitive.x + width},${centerY} ${centerX},${primitive.y} ${centerX},${primitive.y + height} ${primitive.x + width},${centerY}`} />
           <line x1={centerX} y1={primitive.y - height * 0.28} x2={centerX} y2={primitive.y} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
@@ -1173,11 +1255,11 @@ export function ScadaView() {
       );
     }
     if (primitive.type === 'arrow') {
-      return <polygon key={primitive.id} points={`${primitive.x},${centerY - height * 0.22} ${primitive.x + width * 0.66},${centerY - height * 0.22} ${primitive.x + width * 0.66},${primitive.y} ${primitive.x + width},${centerY} ${primitive.x + width * 0.66},${primitive.y + height} ${primitive.x + width * 0.66},${centerY + height * 0.22} ${primitive.x},${centerY + height * 0.22}`} {...paint} />;
+      return wrapPrimitive(<polygon points={`${primitive.x},${centerY - height * 0.22} ${primitive.x + width * 0.66},${centerY - height * 0.22} ${primitive.x + width * 0.66},${primitive.y} ${primitive.x + width},${centerY} ${primitive.x + width * 0.66},${primitive.y + height} ${primitive.x + width * 0.66},${centerY + height * 0.22} ${primitive.x},${centerY + height * 0.22}`} {...paint} />);
     }
     if (primitive.type === 'busbar') {
-      return (
-        <g key={primitive.id} {...paint}>
+      return wrapPrimitive(
+        <g {...paint}>
           {[0.18, 0.5, 0.82].map((ratio) => <line key={ratio} x1={primitive.x} y1={primitive.y + height * ratio} x2={primitive.x + width} y2={primitive.y + height * ratio} strokeLinecap="round" />)}
           <line x1={primitive.x + width * 0.16} y1={primitive.y} x2={primitive.x + width * 0.16} y2={primitive.y + height} strokeLinecap="round" />
           <line x1={primitive.x + width * 0.84} y1={primitive.y} x2={primitive.x + width * 0.84} y2={primitive.y + height} strokeLinecap="round" />
@@ -1185,24 +1267,24 @@ export function ScadaView() {
       );
     }
     if (primitive.type === 'terminal') {
-      return (
-        <g key={primitive.id} {...paint}>
+      return wrapPrimitive(
+        <g {...paint}>
           <rect x={primitive.x} y={primitive.y} width={width} height={height} rx={Math.min(width, height) * 0.12} />
           {[0.25, 0.5, 0.75].map((ratio) => <circle key={ratio} cx={primitive.x + width * ratio} cy={centerY} r={Math.min(width, height) * 0.08} fill="#020617" stroke={paint.stroke} strokeWidth={paint.strokeWidth} />)}
         </g>
       );
     }
     if (primitive.type === 'bracket') {
-      return (
-        <g key={primitive.id} fill="none" stroke={paint.stroke} strokeWidth={paint.strokeWidth} opacity={paint.opacity}>
+      return wrapPrimitive(
+        <g fill="none" stroke={paint.stroke} strokeWidth={paint.strokeWidth} opacity={paint.opacity}>
           <path d={`M ${primitive.x + width * 0.24} ${primitive.y} L ${primitive.x} ${primitive.y} L ${primitive.x} ${primitive.y + height} L ${primitive.x + width * 0.24} ${primitive.y + height}`} strokeLinecap="round" strokeLinejoin="round" />
           <path d={`M ${primitive.x + width * 0.76} ${primitive.y} L ${primitive.x + width} ${primitive.y} L ${primitive.x + width} ${primitive.y + height} L ${primitive.x + width * 0.76} ${primitive.y + height}`} strokeLinecap="round" strokeLinejoin="round" />
         </g>
       );
     }
     if (primitive.type === 'tank') {
-      return (
-        <g key={primitive.id} {...paint}>
+      return wrapPrimitive(
+        <g {...paint}>
           <ellipse cx={centerX} cy={primitive.y + height * 0.12} rx={width / 2} ry={height * 0.12} />
           <rect x={primitive.x} y={primitive.y + height * 0.12} width={width} height={height * 0.76} />
           <ellipse cx={centerX} cy={primitive.y + height * 0.88} rx={width / 2} ry={height * 0.12} />
@@ -1210,18 +1292,18 @@ export function ScadaView() {
       );
     }
     if (primitive.type === 'ellipse') {
-      return <ellipse key={primitive.id} cx={primitive.x + width / 2} cy={primitive.y + height / 2} rx={width / 2} ry={height / 2} {...paint} />;
+      return wrapPrimitive(<ellipse cx={primitive.x + width / 2} cy={primitive.y + height / 2} rx={width / 2} ry={height / 2} {...paint} />);
     }
     if (primitive.type === 'line') {
-      return <line key={primitive.id} x1={primitive.x} y1={primitive.y} x2={primitive.x + (primitive.width ?? 0)} y2={primitive.y + (primitive.height ?? 0)} strokeLinecap="round" {...paint} />;
+      return wrapPrimitive(<line x1={primitive.x} y1={primitive.y} x2={primitive.x + (primitive.width ?? 0)} y2={primitive.y + (primitive.height ?? 0)} strokeLinecap="round" {...paint} />);
     }
     if (primitive.type === 'polygon') {
       const points = primitive.width && primitive.height
         ? (primitive.points || []).map((point) => `${primitive.x + point.x * width / 100},${primitive.y + point.y * height / 100}`).join(' ')
         : (primitive.points || []).map((point) => `${point.x},${point.y}`).join(' ');
-      return <polygon key={primitive.id} points={points} {...paint} />;
+      return wrapPrimitive(<polygon points={points} {...paint} />);
     }
-    return <rect key={primitive.id} x={primitive.x} y={primitive.y} width={primitive.width ?? 40} height={primitive.height ?? 40} rx={primitive.rx ?? 0} {...paint} />;
+    return wrapPrimitive(<rect x={primitive.x} y={primitive.y} width={primitive.width ?? 40} height={primitive.height ?? 40} rx={primitive.rx ?? 0} {...paint} />);
   };
 
   const renderPrimitiveSelection = (primitive: ScadaShapePrimitive) => {
@@ -1253,6 +1335,10 @@ export function ScadaView() {
     const shapeEndpoints = editingShape?.endpoints?.length ? editingShape.endpoints : defaultElementEndpoints;
     const selectedEndpoint = shapeEndpoints.find((endpoint) => endpoint.id === selectedEndpointId) || null;
     const primitivePointsText = (selectedPrimitive?.points || []).map((point) => `${point.x},${point.y}`).join(' ');
+    const primitiveLayers = editingShape ? [...editingShape.primitives].map((primitive, index) => ({
+      primitive,
+      index,
+    })).reverse() : [];
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
@@ -1338,6 +1424,65 @@ export function ScadaView() {
                         </button>
                       ))}
                     </div>
+                    <div className="rounded border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Layers</h3>
+                        <span className="text-xs text-slate-500">Top layer first</span>
+                      </div>
+                      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                        <div className="space-y-2">
+                          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Primitives</div>
+                          {primitiveLayers.map(({ primitive, index }) => {
+                            const selected = selectedPrimitiveId === primitive.id;
+                            return (
+                              <div key={primitive.id} className={cn('rounded border p-2', selected ? 'border-orange-500 bg-orange-500/10' : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950')}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPrimitiveId(primitive.id);
+                                    setSelectedEndpointId('');
+                                  }}
+                                  className="flex w-full items-center justify-between text-left"
+                                >
+                                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{primitive.type}</span>
+                                  <span className="font-mono text-[10px] text-slate-500">#{index + 1}</span>
+                                </button>
+                                <div className="mt-2 flex flex-wrap gap-1">
+                                  <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'front')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Top</button>
+                                  <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'up')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Up</button>
+                                  <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'down')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Down</button>
+                                  <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'back')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Bottom</button>
+                                  {editingShape.primitives.length > 1 && (
+                                    <button type="button" onClick={() => removeEditingPrimitive(primitive.id)} className="rounded border border-red-200 px-2 py-1 text-[10px] font-semibold text-red-500 hover:bg-red-50 dark:border-red-500/30 dark:hover:bg-red-500/10">Delete</button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Endpoints</div>
+                            <button type="button" onClick={addEditingEndpoint} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Add</button>
+                          </div>
+                          {shapeEndpoints.map((endpoint) => (
+                            <div key={endpoint.id} className={cn('rounded border p-2', selectedEndpointId === endpoint.id ? 'border-sky-400 bg-sky-500/10' : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950')}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedEndpointId(endpoint.id);
+                                  setSelectedPrimitiveId('');
+                                }}
+                                className="flex w-full items-center justify-between text-left"
+                              >
+                                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{endpoint.label || endpoint.id}</span>
+                                <span className="font-mono text-[10px] text-slate-500">{Math.round(endpoint.x)}, {Math.round(endpoint.y)}</span>
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
                     <div className="flex justify-end gap-2">
                       <button type="button" onClick={() => setEditingShape(null)} className="rounded border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</button>
                       <button type="button" onClick={saveEditingShape} className="rounded bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500">Save Shape</button>
@@ -1380,6 +1525,70 @@ export function ScadaView() {
                           Dash
                           <input value={selectedPrimitive.dash || ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { dash: event.target.value })} placeholder="8 6" className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
                         </label>
+                        <div className="rounded border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+                          <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">Rotation</div>
+                          <div className="mt-2 grid grid-cols-3 gap-2">
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Angle
+                              <input type="number" value={selectedPrimitive.rotation?.angle ?? 0} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { rotation: { ...(selectedPrimitive.rotation || {}), angle: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                            </label>
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Center X
+                              <input type="number" min={0} max={100} value={selectedPrimitive.rotation?.centerX ?? Math.round(getPrimitiveCenter(selectedPrimitive).x)} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { rotation: { ...(selectedPrimitive.rotation || {}), centerX: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                            </label>
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Center Y
+                              <input type="number" min={0} max={100} value={selectedPrimitive.rotation?.centerY ?? Math.round(getPrimitiveCenter(selectedPrimitive).y)} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { rotation: { ...(selectedPrimitive.rotation || {}), centerY: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                            </label>
+                          </div>
+                        </div>
+                        <div className="rounded border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+                          <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">Animation</div>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Type
+                              <select value={selectedPrimitive.animation?.type || 'none'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), type: event.target.value as NonNullable<ScadaShapePrimitive['animation']>['type'] } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+                                {['none', 'rotate', 'scale', 'translate'].map((value) => <option key={value} value={value}>{value}</option>)}
+                              </select>
+                            </label>
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Duration
+                              <input type="number" min={0.2} step={0.1} value={selectedPrimitive.animation?.durationSeconds ?? 2} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), durationSeconds: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                            </label>
+                          </div>
+                          {(selectedPrimitive.animation?.type === 'rotate' || selectedPrimitive.animation?.type === 'scale') && (
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                Center X
+                                <input type="number" min={0} max={100} value={selectedPrimitive.animation?.centerX ?? Math.round(getPrimitiveCenter(selectedPrimitive).x)} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), centerX: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                              </label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                Center Y
+                                <input type="number" min={0} max={100} value={selectedPrimitive.animation?.centerY ?? Math.round(getPrimitiveCenter(selectedPrimitive).y)} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), centerY: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                              </label>
+                            </div>
+                          )}
+                          {selectedPrimitive.animation?.type === 'rotate' && (
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">From<input type="number" value={selectedPrimitive.animation?.rotateFrom ?? 0} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), rotateFrom: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">To<input type="number" value={selectedPrimitive.animation?.rotateTo ?? 360} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), rotateTo: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                            </div>
+                          )}
+                          {selectedPrimitive.animation?.type === 'scale' && (
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">From<input type="number" step={0.1} value={selectedPrimitive.animation?.scaleFrom ?? 1} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), scaleFrom: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">To<input type="number" step={0.1} value={selectedPrimitive.animation?.scaleTo ?? 1.12} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), scaleTo: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                            </div>
+                          )}
+                          {selectedPrimitive.animation?.type === 'translate' && (
+                            <div className="mt-2 grid grid-cols-4 gap-2">
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">From X<input type="number" min={0} max={100} value={selectedPrimitive.animation?.fromX ?? selectedPrimitive.x} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), fromX: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">From Y<input type="number" min={0} max={100} value={selectedPrimitive.animation?.fromY ?? selectedPrimitive.y} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), fromY: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">To X<input type="number" min={0} max={100} value={selectedPrimitive.animation?.toX ?? selectedPrimitive.x} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), toX: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">To Y<input type="number" min={0} max={100} value={selectedPrimitive.animation?.toY ?? selectedPrimitive.y} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), toY: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                            </div>
+                          )}
+                        </div>
                         {selectedPrimitive.type === 'polygon' && (
                           <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
                             Polygon Points
