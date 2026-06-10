@@ -180,6 +180,16 @@ export interface ScadaElement {
   y: number;
   width?: number;
   height?: number;
+  labelStyle?: {
+    x?: number;
+    y?: number;
+    fontSize?: number;
+  };
+  iconStyle?: {
+    x?: number;
+    y?: number;
+    size?: number;
+  };
   points?: Array<{ x: number; y: number }>;
   connections?: {
     start?: { elementId: string; anchor: 'left' | 'right' };

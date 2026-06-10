@@ -13,6 +13,7 @@ const DETACH_DISTANCE = 52;
 
 type AnchorSide = 'left' | 'right';
 type LineEndpoint = 0 | 1;
+type DeviceEditablePart = 'label' | 'icon';
 type ScadaAnchor = {
   elementId: string;
   side: AnchorSide;
@@ -21,7 +22,8 @@ type ScadaAnchor = {
 };
 type DragState =
   | { type: 'element'; id: string; dx: number; dy: number }
-  | { type: 'endpoint'; id: string; endpoint: LineEndpoint; lockedAnchor?: ScadaAnchor | null };
+  | { type: 'endpoint'; id: string; endpoint: LineEndpoint; lockedAnchor?: ScadaAnchor | null }
+  | { type: 'devicePart'; id: string; part: DeviceEditablePart; dx: number; dy: number };
 
 const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> = [
   { type: 'device', label: 'Device', icon: Cpu },
@@ -98,6 +100,21 @@ const getScadaSvgHref = (device?: Device) => (
     : ''
 );
 
+const getDefaultLabelLayout = () => ({ x: 32, y: 24, fontSize: 13 });
+const getDefaultIconLayout = (element: ScadaElement, device?: Device) => {
+  const width = element.width || 150;
+  const height = element.height || 76;
+  const size = Math.max(24, Math.min(42, Math.min(width, height) * 0.34));
+  const baseX = width / 2 - size / 2;
+  const baseY = Math.max(16, height * 0.34 - size / 2);
+
+  if (device?.type === 'pump_controller') return { x: width - size - 22, y: baseY, size };
+  if (device?.type === 'temperature_sensor' || device?.type === 'sensor') return { x: baseX, y: 18, size };
+  if (device?.type === 'gateway' || device?.type === 'dtu' || device?.type === 'rtu' || device?.type === 'lora_gateway' || device?.type === 'plc') return { x: baseX, y: baseY + 2, size };
+  if (device?.type === 'energy_meter' || device?.type === 'solar_inverter') return { x: baseX, y: baseY + 4, size };
+  return { x: baseX, y: baseY, size };
+};
+
 const isLineElement = (element: ScadaElement) => element.type === 'pipe' || element.type === 'power';
 const getElementSize = (element: ScadaElement) => ({
   width: element.width || 150,
@@ -124,12 +141,14 @@ export function ScadaView() {
   const [selectedElementId, setSelectedElementId] = useState('');
   const [editMode, setEditMode] = useState(false);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const [activeDevicePart, setActiveDevicePart] = useState<{ id: string; part: DeviceEditablePart } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   useEffect(() => {
     if (storeScene) {
       setDraft(JSON.parse(JSON.stringify(storeScene)));
       setSelectedElementId('');
+      setActiveDevicePart(null);
       setEditMode(false);
     }
   }, [storeScene?.id, activeSiteId]);
@@ -206,11 +225,13 @@ export function ScadaView() {
   const removeElement = (id: string) => {
     setDraft((current) => ({ ...current, elements: current.elements.filter((element) => element.id !== id) }));
     setSelectedElementId('');
+    setActiveDevicePart(null);
   };
 
   const saveScene = () => {
     if (!activeSite) return;
     updateScadaScene(activeSite.id, draft);
+    setActiveDevicePart(null);
     setEditMode(false);
   };
 
@@ -219,7 +240,34 @@ export function ScadaView() {
     event.stopPropagation();
     const point = toSvgPoint(event.clientX, event.clientY);
     setSelectedElementId(element.id);
+    setActiveDevicePart(null);
     setDragState({ type: 'element', id: element.id, dx: point.x - element.x, dy: point.y - element.y });
+  };
+
+  const activateDevicePart = (event: React.MouseEvent, element: ScadaElement, part: DeviceEditablePart) => {
+    if (!editMode || element.type !== 'device') return;
+    event.stopPropagation();
+    setSelectedElementId(element.id);
+    setActiveDevicePart({ id: element.id, part });
+  };
+
+  const handleDevicePartPointerDown = (event: React.PointerEvent, element: ScadaElement, part: DeviceEditablePart) => {
+    if (!editMode || element.type !== 'device') return;
+    event.stopPropagation();
+    setSelectedElementId(element.id);
+    if (activeDevicePart?.id !== element.id || activeDevicePart.part !== part) return;
+    const point = toSvgPoint(event.clientX, event.clientY);
+    const {device} = getDeviceValue(element, devices);
+    const layout = part === 'icon'
+      ? { ...getDefaultIconLayout(element, device), ...(element.iconStyle || {}) }
+      : { ...getDefaultLabelLayout(), ...(element.labelStyle || {}) };
+    setDragState({
+      type: 'devicePart',
+      id: element.id,
+      part,
+      dx: point.x - (element.x + (layout.x || 0)),
+      dy: point.y - (element.y + (layout.y || 0)),
+    });
   };
 
   const handleEndpointPointerDown = (event: React.PointerEvent, element: ScadaElement, endpoint: LineEndpoint) => {
@@ -240,6 +288,41 @@ export function ScadaView() {
         x: Math.max(8, Math.min(CANVAS_WIDTH - 80, point.x - dragState.dx)),
         y: Math.max(8, Math.min(CANVAS_HEIGHT - 50, point.y - dragState.dy)),
       });
+      return;
+    }
+
+    if (dragState.type === 'devicePart') {
+      setDraft((current) => ({
+        ...current,
+        elements: current.elements.map((element) => {
+          if (element.id !== dragState.id || element.type !== 'device') return element;
+          const width = element.width || 150;
+          const height = element.height || 76;
+          const nextX = Math.max(-40, Math.min(width + 40, point.x - element.x - dragState.dx));
+          const nextY = Math.max(-30, Math.min(height + 40, point.y - element.y - dragState.dy));
+          if (dragState.part === 'icon') {
+            const {device} = getDeviceValue(element, devices);
+            return {
+              ...element,
+              iconStyle: {
+                ...getDefaultIconLayout(element, device),
+                ...(element.iconStyle || {}),
+                x: nextX,
+                y: nextY,
+              },
+            };
+          }
+          return {
+            ...element,
+            labelStyle: {
+              ...getDefaultLabelLayout(),
+              ...(element.labelStyle || {}),
+              x: nextX,
+              y: nextY,
+            },
+          };
+        }),
+      }));
       return;
     }
 
@@ -349,14 +432,26 @@ export function ScadaView() {
       strokeWidth: isSelected ? 3 : 2,
       className: state === 'critical' ? 'scada-alarm-pulse' : undefined,
     };
-    const iconSize = Math.max(24, Math.min(42, Math.min(width, height) * 0.34));
-    const iconX = x + width / 2 - iconSize / 2;
-    const iconY = y + Math.max(16, height * 0.34 - iconSize / 2);
+    const iconLayout = { ...getDefaultIconLayout(element, device), ...(element.iconStyle || {}) };
+    const iconSize = iconLayout.size || 32;
+    const iconX = x + (iconLayout.x || 0);
+    const iconY = y + (iconLayout.y || 0);
     const deviceType = device?.type || 'default';
-    const renderIcon = (iconOverrideX = iconX, iconOverrideY = iconY, size = iconSize) => (
-      svgHref
-        ? <image href={svgHref} x={iconOverrideX} y={iconOverrideY} width={size} height={size} preserveAspectRatio="xMidYMid meet" />
-        : <Icon x={iconOverrideX} y={iconOverrideY} width={size} height={size} color={style.text} strokeWidth={2.2} />
+    const iconActive = activeDevicePart?.id === element.id && activeDevicePart.part === 'icon';
+    const renderIcon = () => (
+      <g
+        className={cn(editMode && (iconActive ? 'cursor-move' : 'cursor-pointer'))}
+        onClick={(event) => editMode && event.stopPropagation()}
+        onDoubleClick={(event) => activateDevicePart(event, element, 'icon')}
+        onPointerDown={(event) => handleDevicePartPointerDown(event, element, 'icon')}
+      >
+        {svgHref
+          ? <image href={svgHref} x={iconX} y={iconY} width={iconSize} height={iconSize} preserveAspectRatio="xMidYMid meet" />
+          : <Icon x={iconX} y={iconY} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />}
+        {editMode && iconActive && (
+          <rect x={iconX - 4} y={iconY - 4} width={iconSize + 8} height={iconSize + 8} rx={4} fill="none" stroke="#fb923c" strokeDasharray="4 3" />
+        )}
+      </g>
     );
 
     if (deviceType === 'air_compressor') {
@@ -378,7 +473,7 @@ export function ScadaView() {
           <circle cx={x + 46} cy={y + height / 2} r={radius} {...commonProps} />
           <rect x={x + 58} y={y + height * 0.28} width={width - 72} height={height * 0.44} rx={8} {...commonProps} />
           <circle cx={x + 46} cy={y + height / 2} r={radius * 0.42} fill="#020617" stroke={stroke} strokeWidth="2" />
-          {renderIcon(x + width - iconSize - 22, iconY)}
+          {renderIcon()}
         </>
       );
     }
@@ -390,7 +485,7 @@ export function ScadaView() {
         <>
           <rect x={sensorX} y={y + 8} width={sensorWidth} height={height - 16} rx={sensorWidth / 2} {...commonProps} />
           <circle cx={x + width / 2} cy={y + height - 24} r={sensorWidth * 0.28} fill="#020617" stroke={stroke} strokeWidth="2" />
-          {renderIcon(iconX, y + 18)}
+          {renderIcon()}
         </>
       );
     }
@@ -403,7 +498,7 @@ export function ScadaView() {
           <circle cx={x + 32} cy={y + height - 22} r={4} fill={style.badge} />
           <circle cx={x + 46} cy={y + height - 22} r={4} fill="#334155" />
           <circle cx={x + 60} cy={y + height - 22} r={4} fill="#334155" />
-          {renderIcon(iconX, iconY + 2)}
+          {renderIcon()}
         </>
       );
     }
@@ -414,7 +509,7 @@ export function ScadaView() {
           <rect x={x + 14} y={y + 8} width={width - 28} height={height - 16} rx={8} {...commonProps} />
           <rect x={x + 28} y={y + 22} width={width - 56} height={18} rx={4} fill="#020617" stroke="rgba(148,163,184,0.35)" />
           <line x1={x + 28} y1={y + height - 22} x2={x + width - 28} y2={y + height - 22} stroke={stroke} strokeWidth="2" strokeDasharray="4 4" />
-          {renderIcon(iconX, iconY + 4)}
+          {renderIcon()}
         </>
       );
     }
@@ -436,6 +531,8 @@ export function ScadaView() {
     const width = element.width || 150;
     const height = element.height || 76;
     const isSelected = selectedElementId === element.id;
+    const labelLayout = { ...getDefaultLabelLayout(), ...(element.labelStyle || {}) };
+    const labelActive = activeDevicePart?.id === element.id && activeDevicePart.part === 'label';
 
     if (element.type === 'label') {
       return (
@@ -453,6 +550,7 @@ export function ScadaView() {
         onClick={(event) => {
           event.stopPropagation();
           setSelectedElementId(element.id);
+          if (activeDevicePart?.id !== element.id) setActiveDevicePart(null);
           if (!editMode && element.deviceId) navigate(`/devices/${element.deviceId}`);
         }}
         className={cn(editMode ? 'cursor-move' : element.deviceId && 'cursor-pointer')}
@@ -463,7 +561,26 @@ export function ScadaView() {
           <rect x={element.x} y={element.y} width={width} height={height} rx={8} fill={style.fill} stroke={isSelected ? '#fb923c' : style.stroke} strokeWidth={isSelected ? 3 : 2} className={state === 'critical' ? 'scada-alarm-pulse' : ''} />
         )}
         <circle cx={element.x + 18} cy={element.y + 20} r={5} fill={style.badge} />
-        <text x={element.x + 32} y={element.y + 24} fill="#e5e7eb" fontSize="13" fontWeight="700">{element.label}</text>
+        <g
+          className={cn(editMode && element.type === 'device' && (labelActive ? 'cursor-move' : 'cursor-pointer'))}
+          onClick={(event) => editMode && element.type === 'device' && event.stopPropagation()}
+          onDoubleClick={(event) => activateDevicePart(event, element, 'label')}
+          onPointerDown={(event) => handleDevicePartPointerDown(event, element, 'label')}
+        >
+          <text x={element.x + (labelLayout.x || 0)} y={element.y + (labelLayout.y || 0)} fill="#e5e7eb" fontSize={labelLayout.fontSize || 13} fontWeight="700">{element.label}</text>
+          {editMode && labelActive && (
+            <rect
+              x={element.x + (labelLayout.x || 0) - 4}
+              y={element.y + (labelLayout.y || 0) - (labelLayout.fontSize || 13) - 3}
+              width={Math.max(56, element.label.length * (labelLayout.fontSize || 13) * 0.62)}
+              height={(labelLayout.fontSize || 13) + 8}
+              rx={4}
+              fill="none"
+              stroke="#fb923c"
+              strokeDasharray="4 3"
+            />
+          )}
+        </g>
         <text x={element.x + 16} y={element.y + 52} fill={style.text} fontSize={element.type === 'metric' ? 20 : 17} fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
           {formatMetricValue(value, element.unit)}
         </text>
@@ -540,7 +657,11 @@ export function ScadaView() {
               onPointerMove={handlePointerMove}
               onPointerUp={() => setDragState(null)}
               onPointerLeave={() => setDragState(null)}
-              onClick={() => editMode && setSelectedElementId('')}
+              onClick={() => {
+                if (!editMode) return;
+                setSelectedElementId('');
+                setActiveDevicePart(null);
+              }}
             >
               <defs>
                 <linearGradient id="scada-bg" x1="0" y1="0" x2="1" y2="1">
@@ -616,6 +737,59 @@ export function ScadaView() {
                   <input type="number" value={selectedElement.critical ?? ''} onChange={(event) => updateElement(selectedElement.id, { critical: event.target.value === '' ? undefined : Number(event.target.value) })} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
                 </label>
               </div>
+              {selectedElement.type === 'device' && (() => {
+                const selectedDevice = devices.find((device) => device.id === selectedElement.deviceId || device.config?.externalDeviceId === selectedElement.deviceId);
+                const labelLayout = { ...getDefaultLabelLayout(), ...(selectedElement.labelStyle || {}) };
+                const iconLayout = { ...getDefaultIconLayout(selectedElement, selectedDevice), ...(selectedElement.iconStyle || {}) };
+                return (
+                  <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Device Inner Layout</div>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Double-click text or icon on the canvas, then drag it. Values are relative to the device box.</p>
+                    </div>
+                    <div className="rounded border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className={cn("text-xs font-semibold", activeDevicePart?.id === selectedElement.id && activeDevicePart.part === 'label' ? "text-orange-500" : "text-slate-600 dark:text-slate-300")}>Text</span>
+                        <button type="button" onClick={() => updateElement(selectedElement.id, { labelStyle: undefined })} className="text-xs text-slate-500 hover:text-orange-500">Reset</button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          X
+                          <input type="number" value={Math.round(labelLayout.x || 0)} onChange={(event) => updateElement(selectedElement.id, { labelStyle: { ...labelLayout, x: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                        </label>
+                        <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          Y
+                          <input type="number" value={Math.round(labelLayout.y || 0)} onChange={(event) => updateElement(selectedElement.id, { labelStyle: { ...labelLayout, y: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                        </label>
+                        <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          Size
+                          <input type="number" min={8} max={42} value={Math.round(labelLayout.fontSize || 13)} onChange={(event) => updateElement(selectedElement.id, { labelStyle: { ...labelLayout, fontSize: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                        </label>
+                      </div>
+                    </div>
+                    <div className="rounded border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className={cn("text-xs font-semibold", activeDevicePart?.id === selectedElement.id && activeDevicePart.part === 'icon' ? "text-orange-500" : "text-slate-600 dark:text-slate-300")}>Icon</span>
+                        <button type="button" onClick={() => updateElement(selectedElement.id, { iconStyle: undefined })} className="text-xs text-slate-500 hover:text-orange-500">Reset</button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          X
+                          <input type="number" value={Math.round(iconLayout.x || 0)} onChange={(event) => updateElement(selectedElement.id, { iconStyle: { ...iconLayout, x: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                        </label>
+                        <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          Y
+                          <input type="number" value={Math.round(iconLayout.y || 0)} onChange={(event) => updateElement(selectedElement.id, { iconStyle: { ...iconLayout, y: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                        </label>
+                        <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          Size
+                          <input type="number" min={12} max={120} value={Math.round(iconLayout.size || 32)} onChange={(event) => updateElement(selectedElement.id, { iconStyle: { ...iconLayout, size: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
               {selectedElement.deviceId && (
                 <button type="button" onClick={() => navigate(`/devices/${selectedElement.deviceId}`)} className="inline-flex w-full items-center justify-center gap-2 rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600">
                   Open Device Details
