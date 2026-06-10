@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Cpu, Droplets, Gauge, Move, Network, Save, Trash2, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene } from '../lib/store';
+import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene, type ScadaShapePreset, type ScadaShapePrimitive, type ScadaShapePrimitiveType } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
@@ -24,7 +24,8 @@ type ScadaAnchor = {
 type DragState =
   | { type: 'element'; id: string; dx: number; dy: number }
   | { type: 'endpoint'; id: string; endpoint: LineEndpoint; lockedAnchor?: ScadaAnchor | null }
-  | { type: 'innerPart'; id: string; part: ScadaEditablePart; dx: number; dy: number };
+  | { type: 'innerPart'; id: string; part: ScadaEditablePart; dx: number; dy: number }
+  | { type: 'resize'; id: string; startX: number; startY: number; startWidth: number; startHeight: number };
 
 const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> = [
   { type: 'device', label: 'Device', icon: Cpu },
@@ -33,6 +34,31 @@ const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> 
   { type: 'power', label: 'Power Line', icon: Zap },
   { type: 'label', label: 'Label', icon: Activity },
 ];
+const shapePresets = [
+  { id: 'auto', label: 'Auto' },
+  { id: 'rectangle', label: 'Rectangle' },
+  { id: 'rounded', label: 'Rounded' },
+  { id: 'soft-panel', label: 'Soft Panel' },
+  { id: 'capsule', label: 'Capsule' },
+  { id: 'circle', label: 'Circle' },
+  { id: 'diamond', label: 'Diamond' },
+  { id: 'hexagon', label: 'Hexagon' },
+  { id: 'octagon', label: 'Octagon' },
+  { id: 'tag', label: 'Tag' },
+  { id: 'notched', label: 'Notched' },
+  { id: 'terminal', label: 'Terminal' },
+  { id: 'dashed', label: 'Dashed' },
+  { id: 'double', label: 'Double Border' },
+];
+const createShapeId = () => `custom-shape-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+const createPrimitiveId = () => `primitive-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+const createPrimitive = (type: ScadaShapePrimitiveType): ScadaShapePrimitive => {
+  const base = { id: createPrimitiveId(), type, x: 12, y: 12, strokeMode: 'state' as const, fillMode: 'panel' as const, strokeWidth: 2, opacity: 1 };
+  if (type === 'ellipse') return { ...base, width: 42, height: 38, fillMode: 'state' };
+  if (type === 'line') return { ...base, y: 50, width: 88, height: 50, fillMode: 'none', strokeMode: 'muted' };
+  if (type === 'polygon') return { ...base, x: 0, y: 0, points: [{ x: 14, y: 0 }, { x: 86, y: 0 }, { x: 100, y: 50 }, { x: 86, y: 100 }, { x: 14, y: 100 }, { x: 0, y: 50 }], fillMode: 'state' };
+  return { ...base, width: 76, height: 76, rx: 8, fillMode: 'state' };
+};
 
 const createElementId = (type: ScadaElementType) => `scada-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 const createBlankScene = (siteId: string, siteName: string): ScadaScene => ({
@@ -119,6 +145,8 @@ const getDefaultIconLayout = (element: ScadaElement, device?: Device) => {
 };
 
 const isLineElement = (element: ScadaElement) => element.type === 'pipe' || element.type === 'power';
+const isResizableElement = (element: ScadaElement) => !isLineElement(element);
+const getShapePreset = (element: ScadaElement) => element.shapePreset || (element.type === 'device' ? 'auto' : 'rounded');
 const getElementSize = (element: ScadaElement) => ({
   width: element.width || 150,
   height: element.height || 76,
@@ -136,7 +164,17 @@ const distanceBetween = (first: { x: number; y: number }, second: { x: number; y
 
 export function ScadaView() {
   const navigate = useNavigate();
-  const { activeSiteId, sites, devices, scadaScenesBySite, updateScadaScene } = useAppStore();
+  const {
+    activeSiteId,
+    sites,
+    devices,
+    scadaScenesBySite,
+    scadaShapePresets,
+    updateScadaScene,
+    addScadaShapePreset,
+    updateScadaShapePreset,
+    deleteScadaShapePreset,
+  } = useAppStore();
   const activeSite = sites.find((site) => site.id === activeSiteId) || sites[0];
   const fallbackScene = createBlankScene(activeSite?.id || 'factory-a', activeSite?.name || 'Site');
   const storeScene = scadaScenesBySite[activeSite?.id || 'factory-a'] || fallbackScene;
@@ -145,6 +183,9 @@ export function ScadaView() {
   const [editMode, setEditMode] = useState(false);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [activeInnerPart, setActiveInnerPart] = useState<{ id: string; part: ScadaEditablePart } | null>(null);
+  const [shapeManagerOpen, setShapeManagerOpen] = useState(false);
+  const [editingShape, setEditingShape] = useState<ScadaShapePreset | null>(null);
+  const [selectedPrimitiveId, setSelectedPrimitiveId] = useState('');
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   useEffect(() => {
@@ -161,6 +202,17 @@ export function ScadaView() {
     [activeSite, devices]
   );
   const selectedElement = draft?.elements.find((element) => element.id === selectedElementId) || null;
+  const customShapeById = useMemo(
+    () => Object.fromEntries(scadaShapePresets.map((preset) => [preset.id, preset])),
+    [scadaShapePresets]
+  );
+  const selectableShapePresets = useMemo(
+    () => [
+      ...shapePresets,
+      ...scadaShapePresets.map((preset) => ({ id: preset.id, label: `Custom / ${preset.name}` })),
+    ],
+    [scadaShapePresets]
+  );
   const metricOptions = useMemo(() => {
     const device = devices.find((item) => item.id === selectedElement?.deviceId);
     return Object.keys(device?.metrics || {}).sort();
@@ -240,6 +292,70 @@ export function ScadaView() {
     setEditMode(false);
   };
 
+  const startNewShape = () => {
+    const primitive = createPrimitive('rect');
+    setEditingShape({
+      id: createShapeId(),
+      name: `Custom Shape ${scadaShapePresets.length + 1}`,
+      primitives: [primitive],
+      createdAt: new Date().toISOString(),
+    });
+    setSelectedPrimitiveId(primitive.id);
+  };
+
+  const startEditShape = (preset: ScadaShapePreset) => {
+    const copy = JSON.parse(JSON.stringify(preset)) as ScadaShapePreset;
+    setEditingShape(copy);
+    setSelectedPrimitiveId(copy.primitives[0]?.id || '');
+  };
+
+  const updateEditingPrimitive = (id: string, patch: Partial<ScadaShapePrimitive>) => {
+    setEditingShape((current) => current ? {
+      ...current,
+      primitives: current.primitives.map((primitive) => primitive.id === id ? { ...primitive, ...patch } : primitive),
+    } : current);
+  };
+
+  const addEditingPrimitive = (type: ScadaShapePrimitiveType) => {
+    const primitive = createPrimitive(type);
+    setEditingShape((current) => current ? { ...current, primitives: [...current.primitives, primitive] } : current);
+    setSelectedPrimitiveId(primitive.id);
+  };
+
+  const removeEditingPrimitive = (id: string) => {
+    setEditingShape((current) => {
+      if (!current || current.primitives.length <= 1) return current;
+      const nextPrimitives = current.primitives.filter((primitive) => primitive.id !== id);
+      setSelectedPrimitiveId(nextPrimitives[0]?.id || '');
+      return { ...current, primitives: nextPrimitives };
+    });
+  };
+
+  const saveEditingShape = () => {
+    if (!editingShape || !editingShape.name.trim()) return;
+    const savedShape = {
+      ...editingShape,
+      name: editingShape.name.trim(),
+      primitives: editingShape.primitives.length ? editingShape.primitives : [createPrimitive('rect')],
+    };
+    if (scadaShapePresets.some((preset) => preset.id === savedShape.id)) {
+      updateScadaShapePreset(savedShape.id, savedShape);
+    } else {
+      addScadaShapePreset(savedShape);
+    }
+    setEditingShape(null);
+    setSelectedPrimitiveId('');
+  };
+
+  const deleteShape = (preset: ScadaShapePreset) => {
+    if (!confirmDelete({ title: 'Delete custom shape', itemName: preset.name, description: 'Elements using this shape will fall back to the default SCADA frame.' })) return;
+    deleteScadaShapePreset(preset.id);
+    if (editingShape?.id === preset.id) {
+      setEditingShape(null);
+      setSelectedPrimitiveId('');
+    }
+  };
+
   const handlePointerDown = (event: React.PointerEvent, element: ScadaElement) => {
     if (!editMode || isLineElement(element)) return;
     event.stopPropagation();
@@ -280,6 +396,16 @@ export function ScadaView() {
       dx: point.x - (element.x + (layout.x || 0)),
       dy: point.y - (element.y + (layout.y || 0)),
     });
+  };
+
+  const handleResizePointerDown = (event: React.PointerEvent, element: ScadaElement) => {
+    if (!editMode || !isResizableElement(element)) return;
+    event.stopPropagation();
+    const point = toSvgPoint(event.clientX, event.clientY);
+    const {width, height} = getElementSize(element);
+    setSelectedElementId(element.id);
+    setActiveInnerPart(null);
+    setDragState({ type: 'resize', id: element.id, startX: point.x, startY: point.y, startWidth: width, startHeight: height });
   };
 
   const handleEndpointPointerDown = (event: React.PointerEvent, element: ScadaElement, endpoint: LineEndpoint) => {
@@ -357,6 +483,16 @@ export function ScadaView() {
           };
         }),
       }));
+      return;
+    }
+
+    if (dragState.type === 'resize') {
+      const nextWidth = Math.max(60, Math.min(CANVAS_WIDTH, dragState.startWidth + point.x - dragState.startX));
+      const nextHeight = Math.max(36, Math.min(CANVAS_HEIGHT, dragState.startHeight + point.y - dragState.startY));
+      updateElement(dragState.id, {
+        width: Math.round(nextWidth),
+        height: Math.round(nextHeight),
+      });
       return;
     }
 
@@ -495,6 +631,117 @@ export function ScadaView() {
     );
   };
 
+  const renderShapeFrame = (
+    element: ScadaElement,
+    style: typeof stateStyles.normal,
+    isSelected: boolean,
+    state: string,
+    inset = 0
+  ) => {
+    const width = (element.width || 150) - inset * 2;
+    const height = (element.height || 76) - inset * 2;
+    const x = element.x + inset;
+    const y = element.y + inset;
+    const stroke = isSelected ? '#fb923c' : style.stroke;
+    const preset = getShapePreset(element) === 'auto' ? 'rounded' : getShapePreset(element);
+    const commonProps = {
+      fill: style.fill,
+      stroke,
+      strokeWidth: isSelected ? 3 : 2,
+      className: state === 'critical' ? 'scada-alarm-pulse' : undefined,
+    };
+    const points: Record<string, string> = {
+      diamond: `${x + width / 2},${y} ${x + width},${y + height / 2} ${x + width / 2},${y + height} ${x},${y + height / 2}`,
+      hexagon: `${x + width * 0.18},${y} ${x + width * 0.82},${y} ${x + width},${y + height / 2} ${x + width * 0.82},${y + height} ${x + width * 0.18},${y + height} ${x},${y + height / 2}`,
+      octagon: `${x + width * 0.14},${y} ${x + width * 0.86},${y} ${x + width},${y + height * 0.24} ${x + width},${y + height * 0.76} ${x + width * 0.86},${y + height} ${x + width * 0.14},${y + height} ${x},${y + height * 0.76} ${x},${y + height * 0.24}`,
+      tag: `${x},${y} ${x + width * 0.86},${y} ${x + width},${y + height / 2} ${x + width * 0.86},${y + height} ${x},${y + height}`,
+      notched: `${x + 18},${y} ${x + width},${y} ${x + width},${y + height - 18} ${x + width - 18},${y + height} ${x},${y + height} ${x},${y + 18}`,
+      terminal: `${x},${y} ${x + width - 20},${y} ${x + width},${y + 20} ${x + width},${y + height} ${x},${y + height}`,
+    };
+    const customShape = customShapeById[preset];
+    const primitivePaint = (primitive: ScadaShapePrimitive) => {
+      const fillMap = {
+        state: style.fill,
+        panel: 'rgba(15,23,42,0.54)',
+        accent: style.badge,
+        none: 'none',
+      };
+      const strokeMap = {
+        state: stroke,
+        muted: 'rgba(148,163,184,0.38)',
+        accent: style.badge,
+        none: 'none',
+      };
+      return {
+        fill: fillMap[primitive.fillMode || 'none'],
+        stroke: strokeMap[primitive.strokeMode || 'state'],
+        strokeWidth: primitive.strokeWidth ?? 2,
+        opacity: primitive.opacity ?? 1,
+        strokeDasharray: primitive.dash || undefined,
+        className: state === 'critical' ? 'scada-alarm-pulse' : undefined,
+      };
+    };
+    const toX = (value = 0) => x + (value / 100) * width;
+    const toY = (value = 0) => y + (value / 100) * height;
+
+    if (customShape) {
+      return (
+        <g>
+          {customShape.primitives.map((primitive) => {
+            const paint = primitivePaint(primitive);
+            if (primitive.type === 'ellipse') {
+              const primitiveWidth = primitive.width ?? 30;
+              const primitiveHeight = primitive.height ?? 30;
+              return <ellipse key={primitive.id} cx={toX(primitive.x + primitiveWidth / 2)} cy={toY(primitive.y + primitiveHeight / 2)} rx={(primitiveWidth / 100) * width / 2} ry={(primitiveHeight / 100) * height / 2} {...paint} />;
+            }
+            if (primitive.type === 'line') {
+              return <line key={primitive.id} x1={toX(primitive.x)} y1={toY(primitive.y)} x2={toX(primitive.width ?? primitive.x)} y2={toY(primitive.height ?? primitive.y)} strokeLinecap="round" {...paint} />;
+            }
+            if (primitive.type === 'polygon') {
+              const primitivePoints = (primitive.points || []).map((point) => `${toX(point.x)},${toY(point.y)}`).join(' ');
+              return <polygon key={primitive.id} points={primitivePoints} {...paint} />;
+            }
+            return <rect key={primitive.id} x={toX(primitive.x)} y={toY(primitive.y)} width={((primitive.width ?? 40) / 100) * width} height={((primitive.height ?? 40) / 100) * height} rx={primitive.rx ?? 0} {...paint} />;
+          })}
+          {isSelected && <rect x={x} y={y} width={width} height={height} rx={8} fill="none" stroke="#fb923c" strokeWidth={2} strokeDasharray="5 5" />}
+        </g>
+      );
+    }
+
+    if (preset === 'circle') {
+      return <ellipse cx={x + width / 2} cy={y + height / 2} rx={width / 2} ry={height / 2} {...commonProps} />;
+    }
+    if (preset === 'diamond' || preset === 'hexagon' || preset === 'octagon' || preset === 'tag' || preset === 'notched' || preset === 'terminal') {
+      return <polygon points={points[preset]} {...commonProps} />;
+    }
+    if (preset === 'capsule') {
+      return <rect x={x} y={y} width={width} height={height} rx={height / 2} {...commonProps} />;
+    }
+    if (preset === 'rectangle') {
+      return <rect x={x} y={y} width={width} height={height} rx={0} {...commonProps} />;
+    }
+    if (preset === 'soft-panel') {
+      return (
+        <>
+          <rect x={x} y={y} width={width} height={height} rx={14} {...commonProps} />
+          <rect x={x + 8} y={y + 8} width={Math.max(0, width - 16)} height={Math.max(0, height - 16)} rx={9} fill="none" stroke="rgba(148,163,184,0.28)" strokeWidth={1} />
+        </>
+      );
+    }
+    if (preset === 'dashed') {
+      return <rect x={x} y={y} width={width} height={height} rx={8} {...commonProps} strokeDasharray="8 6" />;
+    }
+    if (preset === 'double') {
+      return (
+        <>
+          <rect x={x} y={y} width={width} height={height} rx={8} {...commonProps} />
+          <rect x={x + 6} y={y + 6} width={Math.max(0, width - 12)} height={Math.max(0, height - 12)} rx={5} fill="none" stroke={stroke} strokeWidth={1} opacity={0.7} />
+        </>
+      );
+    }
+    return <rect x={x} y={y} width={width} height={height} rx={8} {...commonProps} />;
+  };
+
   const renderDeviceGraphic = (element: ScadaElement, device: Device | undefined, style: typeof stateStyles.normal, isSelected: boolean, state: string) => {
     const width = element.width || 150;
     const height = element.height || 76;
@@ -530,6 +777,15 @@ export function ScadaView() {
         )}
       </g>
     );
+
+    if (getShapePreset(element) !== 'auto') {
+      return (
+        <>
+          {renderShapeFrame(element, style, isSelected, state)}
+          {renderIcon()}
+        </>
+      );
+    }
 
     if (deviceType === 'air_compressor') {
       return (
@@ -612,12 +868,23 @@ export function ScadaView() {
     const valueLayout = { ...getDefaultValueLayout(element), ...(element.valueStyle || {}) };
     const metaLayout = { ...getDefaultMetaLayout(element), ...(element.metaStyle || {}) };
     const metaText = device ? `${device.name} / ${element.metricKey || '-'}` : 'Unbound';
+    const resizeHandle = editMode && isSelected && isResizableElement(element) ? (
+      <g
+        className="cursor-nwse-resize"
+        onPointerDown={(event) => handleResizePointerDown(event, element)}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <rect x={element.x + width - 14} y={element.y + height - 14} width={14} height={14} rx={3} fill="rgba(251,146,60,0.2)" stroke="#fb923c" strokeWidth={1.5} />
+        <path d={`M ${element.x + width - 10} ${element.y + height - 4} L ${element.x + width - 4} ${element.y + height - 10}`} stroke="#fb923c" strokeWidth={1.5} strokeLinecap="round" />
+      </g>
+    ) : null;
 
     if (element.type === 'label') {
       return (
         <g key={element.id} onPointerDown={(event) => handlePointerDown(event, element)} onClick={(event) => { event.stopPropagation(); setSelectedElementId(element.id); }} className={cn(editMode && 'cursor-move')}>
           <text x={element.x} y={element.y} fill="#e5e7eb" fontSize="24" fontWeight="700">{element.label}</text>
           {isSelected && <rect x={element.x - 8} y={element.y - 30} width={width} height={height} fill="none" stroke="#fb923c" strokeDasharray="5 5" />}
+          {resizeHandle}
         </g>
       );
     }
@@ -637,12 +904,13 @@ export function ScadaView() {
         {element.type === 'device' ? (
           renderDeviceGraphic(element, device, style, isSelected, state)
         ) : (
-          <rect x={element.x} y={element.y} width={width} height={height} rx={8} fill={style.fill} stroke={isSelected ? '#fb923c' : style.stroke} strokeWidth={isSelected ? 3 : 2} className={state === 'critical' ? 'scada-alarm-pulse' : ''} />
+          renderShapeFrame(element, style, isSelected, state)
         )}
         <circle cx={element.x + 18} cy={element.y + 20} r={5} fill={style.badge} />
         {renderEditableText(element, 'label', element.label, labelLayout, { fill: '#e5e7eb', fontWeight: 700 })}
         {renderEditableText(element, 'value', formatMetricValue(value, element.unit), valueLayout, { fill: style.text, fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' })}
         {renderEditableText(element, 'meta', metaText, metaLayout, { fill: '#94a3b8' })}
+        {resizeHandle}
       </g>
     );
   };
@@ -666,6 +934,160 @@ export function ScadaView() {
           </g>
         ))}
       </g>
+    );
+  };
+
+  const renderShapePreviewPrimitive = (primitive: ScadaShapePrimitive, selected = false) => {
+    const paint = {
+      fill: primitive.fillMode === 'none' ? 'none' : primitive.fillMode === 'accent' ? '#f97316' : primitive.fillMode === 'state' ? 'rgba(16,185,129,0.35)' : 'rgba(15,23,42,0.72)',
+      stroke: primitive.strokeMode === 'none' ? 'none' : primitive.strokeMode === 'accent' ? '#f97316' : primitive.strokeMode === 'muted' ? 'rgba(148,163,184,0.5)' : '#10b981',
+      strokeWidth: selected ? 3 : primitive.strokeWidth ?? 2,
+      opacity: primitive.opacity ?? 1,
+      strokeDasharray: primitive.dash || undefined,
+    };
+    if (primitive.type === 'ellipse') {
+      const width = primitive.width ?? 30;
+      const height = primitive.height ?? 30;
+      return <ellipse key={primitive.id} cx={primitive.x + width / 2} cy={primitive.y + height / 2} rx={width / 2} ry={height / 2} {...paint} />;
+    }
+    if (primitive.type === 'line') {
+      return <line key={primitive.id} x1={primitive.x} y1={primitive.y} x2={primitive.width ?? primitive.x} y2={primitive.height ?? primitive.y} strokeLinecap="round" {...paint} />;
+    }
+    if (primitive.type === 'polygon') {
+      return <polygon key={primitive.id} points={(primitive.points || []).map((point) => `${point.x},${point.y}`).join(' ')} {...paint} />;
+    }
+    return <rect key={primitive.id} x={primitive.x} y={primitive.y} width={primitive.width ?? 40} height={primitive.height ?? 40} rx={primitive.rx ?? 0} {...paint} />;
+  };
+
+  const renderShapeManager = () => {
+    if (!shapeManagerOpen) return null;
+    const selectedPrimitive = editingShape?.primitives.find((primitive) => primitive.id === selectedPrimitiveId) || null;
+    const primitivePointsText = (selectedPrimitive?.points || []).map((point) => `${point.x},${point.y}`).join(' ');
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
+        <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-white shadow-2xl dark:bg-[#1c2128]">
+          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">Custom SCADA Shape Presets</h2>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Build reusable frames from rectangles, ellipses, lines, and polygons. Coordinates are relative from 0 to 100.</p>
+            </div>
+            <button type="button" onClick={() => { setShapeManagerOpen(false); setEditingShape(null); }} className="rounded px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Close</button>
+          </div>
+
+          <div className="grid min-h-0 flex-1 grid-cols-[260px_1fr] overflow-hidden">
+            <aside className="min-h-0 overflow-auto border-r border-slate-200 p-4 dark:border-slate-800">
+              <button type="button" onClick={startNewShape} className="mb-3 inline-flex h-9 w-full items-center justify-center rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500">
+                New Custom Shape
+              </button>
+              <div className="space-y-2">
+                {!scadaShapePresets.length && (
+                  <div className="rounded border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-700">
+                    No custom shapes yet.
+                  </div>
+                )}
+                {scadaShapePresets.map((preset) => (
+                  <div key={preset.id} className={cn('rounded border p-3', editingShape?.id === preset.id ? 'border-orange-500 bg-orange-500/10' : 'border-slate-200 dark:border-slate-700')}>
+                    <button type="button" onClick={() => startEditShape(preset)} className="block w-full text-left text-sm font-semibold text-slate-900 dark:text-white">{preset.name}</button>
+                    <div className="mt-2 h-16 rounded bg-slate-950 p-2">
+                      <svg viewBox="0 0 100 100" className="h-full w-full">
+                        {preset.primitives.map((primitive) => renderShapePreviewPrimitive(primitive))}
+                      </svg>
+                    </div>
+                    <button type="button" onClick={() => deleteShape(preset)} className="mt-2 text-xs font-semibold text-red-500 hover:text-red-400">Delete</button>
+                  </div>
+                ))}
+              </div>
+            </aside>
+
+            <section className="min-h-0 overflow-auto p-4">
+              {editingShape ? (
+                <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
+                  <div className="space-y-4">
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                      Shape Name
+                      <input value={editingShape.name} onChange={(event) => setEditingShape({ ...editingShape, name: event.target.value })} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                    </label>
+                    <div className="rounded border border-slate-200 bg-slate-950 p-4 dark:border-slate-800">
+                      <svg viewBox="0 0 100 100" className="h-72 w-full rounded bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:10px_10px]">
+                        <rect x="0" y="0" width="100" height="100" fill="rgba(2,6,23,0.5)" />
+                        {editingShape.primitives.map((primitive) => (
+                          <g key={primitive.id} onClick={() => setSelectedPrimitiveId(primitive.id)} className="cursor-pointer">
+                            {renderShapePreviewPrimitive(primitive, primitive.id === selectedPrimitiveId)}
+                          </g>
+                        ))}
+                      </svg>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {(['rect', 'ellipse', 'line', 'polygon'] as ScadaShapePrimitiveType[]).map((type) => (
+                        <button key={type} type="button" onClick={() => addEditingPrimitive(type)} className="rounded border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                          Add {type}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button type="button" onClick={() => setEditingShape(null)} className="rounded border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</button>
+                      <button type="button" onClick={saveEditingShape} className="rounded bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500">Save Shape</button>
+                    </div>
+                  </div>
+
+                  <div className="rounded border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Primitive Settings</h3>
+                    {selectedPrimitive ? (
+                      <div className="mt-3 space-y-3">
+                        <div className="flex items-center justify-between rounded bg-white p-2 text-xs font-semibold text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+                          <span>{selectedPrimitive.type}</span>
+                          {editingShape.primitives.length > 1 && (
+                            <button type="button" onClick={() => removeEditingPrimitive(selectedPrimitive.id)} className="text-red-500 hover:text-red-400">Remove</button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {(['x', 'y', 'width', 'height', 'rx', 'strokeWidth', 'opacity'] as const).map((key) => (
+                            <label key={key} className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              {key}
+                              <input type="number" step={key === 'opacity' ? 0.1 : 1} min={key === 'opacity' ? 0 : undefined} max={key === 'opacity' ? 1 : 100} value={Number(selectedPrimitive[key] ?? (key === 'opacity' ? 1 : 0))} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { [key]: Number(event.target.value) } as Partial<ScadaShapePrimitive>)} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                            </label>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                            Fill
+                            <select value={selectedPrimitive.fillMode || 'none'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { fillMode: event.target.value as ScadaShapePrimitive['fillMode'] })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+                              {['state', 'panel', 'accent', 'none'].map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                            Stroke
+                            <select value={selectedPrimitive.strokeMode || 'state'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { strokeMode: event.target.value as ScadaShapePrimitive['strokeMode'] })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+                              {['state', 'muted', 'accent', 'none'].map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          Dash
+                          <input value={selectedPrimitive.dash || ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { dash: event.target.value })} placeholder="8 6" className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                        </label>
+                        {selectedPrimitive.type === 'polygon' && (
+                          <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                            Polygon Points
+                            <textarea value={primitivePointsText} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { points: event.target.value.split(/\s+/).map((pair) => pair.split(',').map(Number)).filter(([xValue, yValue]) => Number.isFinite(xValue) && Number.isFinite(yValue)).map(([xValue, yValue]) => ({ x: xValue, y: yValue })) })} className="mt-1 h-20 w-full rounded border border-slate-300 bg-white px-2 py-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                          </label>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-slate-500">Select or add a primitive to edit its geometry.</p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex h-full min-h-[360px] items-center justify-center rounded border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-700">
+                  Select a custom shape or create a new one.
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      </div>
     );
   };
 
@@ -697,6 +1119,9 @@ export function ScadaView() {
           >
             <Move className="h-4 w-4" />
             {editMode ? 'Editing' : 'Edit Mode'}
+          </button>
+          <button type="button" onClick={() => setShapeManagerOpen(true)} className="inline-flex h-9 items-center gap-2 rounded border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+            Shape Library
           </button>
           <button type="button" onClick={saveScene} className="inline-flex h-9 items-center gap-2 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500">
             <Save className="h-4 w-4" />
@@ -769,6 +1194,49 @@ export function ScadaView() {
                 Label
                 <input value={selectedElement.label} onChange={(event) => updateElement(selectedElement.id, { label: event.target.value })} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
               </label>
+              {(selectedElement.type === 'device' || selectedElement.type === 'metric') && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                    Shape Preset
+                    <select
+                      value={getShapePreset(selectedElement)}
+                      onChange={(event) => updateElement(selectedElement.id, { shapePreset: event.target.value })}
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    >
+                      {selectableShapePresets
+                        .filter((preset) => selectedElement.type === 'device' || preset.id !== 'auto')
+                        .map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => setShapeManagerOpen(true)} className="inline-flex h-8 w-full items-center justify-center rounded border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                    Manage Custom Shapes
+                  </button>
+                </div>
+              )}
+              {isResizableElement(selectedElement) && (
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                    Width
+                    <input
+                      type="number"
+                      min={60}
+                      value={Math.round((selectedElement.width || getElementSize(selectedElement).width))}
+                      onChange={(event) => updateElement(selectedElement.id, { width: Math.max(60, Number(event.target.value) || 60) })}
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                  </label>
+                  <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                    Height
+                    <input
+                      type="number"
+                      min={36}
+                      value={Math.round((selectedElement.height || getElementSize(selectedElement).height))}
+                      onChange={(event) => updateElement(selectedElement.id, { height: Math.max(36, Number(event.target.value) || 36) })}
+                      className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                  </label>
+                </div>
+              )}
               <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
                 Device
                 <select value={selectedElement.deviceId || ''} onChange={(event) => updateElement(selectedElement.id, { deviceId: event.target.value, metricKey: '' })} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
@@ -877,6 +1345,7 @@ export function ScadaView() {
           )}
         </aside>
       </div>
+      {renderShapeManager()}
     </div>
   );
 }

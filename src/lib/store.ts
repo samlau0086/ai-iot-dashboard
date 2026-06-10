@@ -172,6 +172,32 @@ export interface OverviewDashboardState {
 
 export type ScadaElementType = 'device' | 'metric' | 'pipe' | 'power' | 'label';
 
+export type ScadaShapePrimitiveType = 'rect' | 'ellipse' | 'line' | 'polygon';
+
+export interface ScadaShapePrimitive {
+  id: string;
+  type: ScadaShapePrimitiveType;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  rx?: number;
+  points?: Array<{ x: number; y: number }>;
+  strokeMode?: 'state' | 'muted' | 'accent' | 'none';
+  fillMode?: 'state' | 'panel' | 'accent' | 'none';
+  strokeWidth?: number;
+  opacity?: number;
+  dash?: string;
+}
+
+export interface ScadaShapePreset {
+  id: string;
+  name: string;
+  primitives: ScadaShapePrimitive[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface ScadaElement {
   id: string;
   type: ScadaElementType;
@@ -180,6 +206,7 @@ export interface ScadaElement {
   y: number;
   width?: number;
   height?: number;
+  shapePreset?: string;
   labelStyle?: {
     x?: number;
     y?: number;
@@ -219,6 +246,29 @@ export interface ScadaScene {
   elements: ScadaElement[];
   updatedAt?: string;
 }
+
+const createDefaultScadaShapePresets = (): ScadaShapePreset[] => [
+  {
+    id: 'custom-panel-header',
+    name: 'Header Panel',
+    createdAt: new Date().toISOString(),
+    primitives: [
+      { id: 'header-frame', type: 'rect', x: 0, y: 0, width: 100, height: 100, rx: 8, fillMode: 'state', strokeMode: 'state', strokeWidth: 2 },
+      { id: 'header-line', type: 'line', x: 0, y: 28, width: 100, height: 28, fillMode: 'none', strokeMode: 'muted', strokeWidth: 1 },
+      { id: 'header-pill', type: 'rect', x: 8, y: 10, width: 18, height: 8, rx: 4, fillMode: 'accent', strokeMode: 'none', opacity: 0.75 },
+    ],
+  },
+  {
+    id: 'custom-control-node',
+    name: 'Control Node',
+    createdAt: new Date().toISOString(),
+    primitives: [
+      { id: 'node-body', type: 'polygon', x: 0, y: 0, points: [{ x: 8, y: 0 }, { x: 92, y: 0 }, { x: 100, y: 50 }, { x: 92, y: 100 }, { x: 8, y: 100 }, { x: 0, y: 50 }], fillMode: 'state', strokeMode: 'state', strokeWidth: 2 },
+      { id: 'node-inner', type: 'rect', x: 10, y: 12, width: 80, height: 76, rx: 10, fillMode: 'panel', strokeMode: 'muted', strokeWidth: 1, opacity: 0.9 },
+      { id: 'node-dot', type: 'ellipse', x: 82, y: 12, width: 8, height: 8, fillMode: 'accent', strokeMode: 'none' },
+    ],
+  },
+];
 
 const DEFAULT_TAG_TEMPLATE_MAP: Record<string, string> = {
   All: 'factory-energy',
@@ -709,7 +759,11 @@ interface AppState {
   removeOverviewWidget: (id: string, siteId?: string) => void;
   // SCADA Operations View
   scadaScenesBySite: Record<string, ScadaScene>;
+  scadaShapePresets: ScadaShapePreset[];
   updateScadaScene: (siteId: string, scene: ScadaScene) => void;
+  addScadaShapePreset: (preset: ScadaShapePreset) => void;
+  updateScadaShapePreset: (id: string, preset: Partial<ScadaShapePreset>) => void;
+  deleteScadaShapePreset: (id: string) => void;
   // Workflows
   workflows: Workflow[];
   addWorkflow: (workflow: Workflow) => void;
@@ -740,6 +794,7 @@ type BackendState = Partial<Pick<AppState,
   | 'activeDashboardTemplateId'
   | 'tagDashboardTemplateMap'
   | 'scadaScenesBySite'
+  | 'scadaShapePresets'
   | 'workflows'
 >>;
 
@@ -803,6 +858,7 @@ const pickBackendState = (state: AppState): BackendState => ({
   activeDashboardTemplateId: state.activeDashboardTemplateId,
   tagDashboardTemplateMap: state.tagDashboardTemplateMap,
   scadaScenesBySite: state.scadaScenesBySite,
+  scadaShapePresets: state.scadaShapePresets,
   workflows: state.workflows,
 });
 
@@ -849,6 +905,7 @@ export const useAppStore = create<AppState>()(
           );
           const activeDashboard = overviewDashboardsBySite[activeSiteId] || createDefaultOverviewDashboard(activeSiteId, sites, state?.tagDashboardTemplateMap || DEFAULT_TAG_TEMPLATE_MAP);
           const scadaScenesBySite = mergeDefaultScadaScenes(state?.scadaScenesBySite, sites);
+          const scadaShapePresets = Array.isArray(state?.scadaShapePresets) ? state.scadaShapePresets : createDefaultScadaShapePresets();
           const sessionUserId = getStoredSessionUserId();
           const sessionUser = sessionUserId
             ? users.find((user) => user.id === sessionUserId && user.status === 'approved') || null
@@ -868,6 +925,7 @@ export const useAppStore = create<AppState>()(
             accessCredentials: Array.isArray(state?.accessCredentials) ? state.accessCredentials : [],
             overviewDashboardsBySite,
             scadaScenesBySite,
+            scadaShapePresets,
             overviewLayout: cloneLayout(activeDashboard.layout),
             overviewWidgets: cloneWidgets(activeDashboard.widgets),
             overviewWidgetLibrary: cloneWidgets(activeDashboard.widgetLibrary),
@@ -1166,6 +1224,7 @@ export const useAppStore = create<AppState>()(
       overviewWidgetLibrary: [],
       overviewDashboardsBySite: mergeDefaultOverviewDashboards({}, DEFAULT_SITES),
       scadaScenesBySite: mergeDefaultScadaScenes({}, DEFAULT_SITES),
+      scadaShapePresets: createDefaultScadaShapePresets(),
       dashboardTemplates: DASHBOARD_TEMPLATES.map((template) => ({
         ...template,
         layout: cloneLayout(template.layout),
@@ -1286,6 +1345,28 @@ export const useAppStore = create<AppState>()(
             updatedAt: new Date().toISOString(),
           },
         },
+      })),
+      addScadaShapePreset: (preset) => set((state) => ({
+        scadaShapePresets: [...state.scadaShapePresets, preset],
+      })),
+      updateScadaShapePreset: (id, preset) => set((state) => ({
+        scadaShapePresets: state.scadaShapePresets.map((item) => (
+          item.id === id ? { ...item, ...preset, updatedAt: new Date().toISOString() } : item
+        )),
+      })),
+      deleteScadaShapePreset: (id) => set((state) => ({
+        scadaShapePresets: state.scadaShapePresets.filter((item) => item.id !== id),
+        scadaScenesBySite: Object.fromEntries(
+          Object.entries(state.scadaScenesBySite).map(([siteId, scene]) => [
+            siteId,
+            {
+              ...scene,
+              elements: scene.elements.map((element) => (
+                element.shapePreset === id ? { ...element, shapePreset: element.type === 'device' ? 'auto' : 'rounded' } : element
+              )),
+            },
+          ])
+        ),
       })),
       
       workflows: [
