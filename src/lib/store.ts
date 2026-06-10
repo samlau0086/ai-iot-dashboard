@@ -170,7 +170,7 @@ export interface OverviewDashboardState {
   updatedAt?: string;
 }
 
-export type ScadaElementType = 'device' | 'metric' | 'pipe' | 'power' | 'wireless' | 'signal' | 'label';
+export type ScadaElementType = 'device' | 'metric' | 'pipe' | 'power' | 'wireless' | 'signal' | 'image' | 'label';
 
 export type ScadaShapePrimitiveType =
   | 'rect'
@@ -215,8 +215,9 @@ export interface ScadaShapePrimitive {
   };
   animation?: {
     type?: 'none' | 'rotate' | 'scale' | 'translate' | 'visibility' | 'pulse' | 'strokeFlow';
-    trigger?: 'always' | 'deviceOnline' | 'metricNonZero' | 'metricGreaterThan' | 'metricEquals' | 'deviceStatus';
+    trigger?: 'always' | 'deviceOnline' | 'metricNonZero' | 'metricGreaterThan' | 'metricEquals' | 'deviceStatus' | 'workflowTruthy' | 'workflowEquals';
     metricKey?: string;
+    workflowPath?: string;
     operatorValue?: string | number;
     deviceStatus?: 'online' | 'offline' | 'warning' | 'normal' | 'critical';
     durationSeconds?: number;
@@ -289,6 +290,15 @@ export interface ScadaElement {
   lineAnimation?: 'none' | 'flow' | 'pulse' | 'glow';
   lineAnimationSpeed?: number;
   lineProtocol?: 'ethernet' | 'rs485' | 'rs232' | 'can' | 'modbus' | 'wifi' | 'lora' | 'custom';
+  imageSrc?: string;
+  imageFileName?: string;
+  imageOpacity?: number;
+  scadaIcon?: {
+    mode: 'auto' | 'preset' | 'svg';
+    iconId?: string;
+    svg?: string;
+    fileName?: string;
+  };
   deviceId?: string;
   metricKey?: string;
   unit?: string;

@@ -94,9 +94,14 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
 
   const handleConfigChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
+    const nextValue = type === 'checkbox'
+      ? (e.target as HTMLInputElement).checked
+      : type === 'number'
+        ? Number(value)
+        : value;
     setConfigData((prev: any) => ({
       ...prev,
-      [name]: type === 'number' ? Number(value) : value
+      [name]: nextValue
     }));
   };
 
@@ -718,6 +723,36 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
                 <option value="mqtt">MQTT</option>
               </select>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose where live metrics for this device should come from.</p>
+             </div>
+             <div className="sm:col-span-3 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+              <label className="flex items-start gap-3 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  name="scadaOfflineDetectionEnabled"
+                  checked={Boolean(configData.scadaOfflineDetectionEnabled)}
+                  onChange={handleConfigChange}
+                  className="mt-1 rounded border-slate-300 text-orange-600 focus:ring-orange-500 dark:border-slate-700"
+                />
+                <span>
+                  SCADA telemetry timeout marks device offline
+                  <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
+                    Disabled by default. When enabled, SCADA treats this device as offline if no telemetry is received within the configured time window.
+                  </span>
+                </span>
+              </label>
+              {configData.scadaOfflineDetectionEnabled && (
+                <label className="mt-3 block text-xs font-medium uppercase tracking-wider text-slate-500">
+                  Timeout Seconds
+                  <input
+                    type="number"
+                    name="scadaOfflineTimeoutSeconds"
+                    min={5}
+                    value={configData.scadaOfflineTimeoutSeconds || 120}
+                    onChange={handleConfigChange}
+                    className="mt-1 block h-10 w-full rounded-md border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                  />
+                </label>
+              )}
              </div>
              <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Industrial Protocol</label>

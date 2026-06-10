@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Cable, Cpu, Droplets, Gauge, Move, Network, Save, Trash2, Wifi, Zap } from 'lucide-react';
+import { Activity, Cable, Cpu, Droplets, Gauge, Image as ImageIcon, Move, Network, Save, Trash2, Wifi, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene, type ScadaShapePreset, type ScadaShapePrimitive, type ScadaShapePrimitiveType, type ScadaShapeEndpoint } from '../lib/store';
-import { getDeviceIcon } from '../lib/icons';
+import { IOT_ICONS, getDeviceIcon } from '../lib/icons';
 import { scadaIconPresets } from '../lib/scadaIconPresets';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
@@ -11,6 +11,7 @@ import type { Device } from '../types';
 const CANVAS_WIDTH = 2200;
 const CANVAS_HEIGHT = 1400;
 const CANVAS_ZOOM_OPTIONS = [0.35, 0.5, 0.75, 1, 1.25, 1.5, 2];
+const WORKFLOW_TRIGGER_ACTIVE_MS = 2 * 60 * 1000;
 const SNAP_DISTANCE = 28;
 const DETACH_DISTANCE = 52;
 
@@ -30,6 +31,28 @@ type ScadaIconPresetOption = {
   url?: string;
   svg?: string;
 };
+type ScadaWorkflowStep = {
+  nodeId?: string;
+  nodeName?: string;
+  type?: string;
+  status?: string;
+  input?: unknown;
+  output?: unknown;
+  startedAt?: string;
+  finishedAt?: string;
+};
+type ScadaWorkflowRun = {
+  id: string;
+  workflowId?: string;
+  workflowName?: string;
+  triggerType?: string;
+  eventSource?: string;
+  status?: string;
+  event?: unknown;
+  steps?: ScadaWorkflowStep[];
+  startedAt?: string;
+  finishedAt?: string;
+};
 type DragState =
   | { type: 'element'; id: string; dx: number; dy: number }
   | { type: 'endpoint'; id: string; endpoint: LineEndpoint; lockedAnchor?: ScadaAnchor | null }
@@ -48,6 +71,7 @@ const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> 
   { type: 'power', label: 'Power Line', icon: Zap },
   { type: 'wireless', label: 'Wireless', icon: Wifi },
   { type: 'signal', label: 'Signal Line', icon: Cable },
+  { type: 'image', label: 'Image', icon: ImageIcon },
   { type: 'label', label: 'Label', icon: Activity },
 ];
 const shapePresets = [
@@ -96,18 +120,28 @@ const createBlankScene = (siteId: string, siteName: string): ScadaScene => ({
   ],
 });
 
-const getDeviceValue = (element: ScadaElement, devices: Device[]) => {
+const isDeviceReadingFresh = (device: Device | undefined, now = Date.now()) => {
+  if (!device?.lastSeen) return false;
+  if (!device.config?.scadaOfflineDetectionEnabled) return true;
+  const timeoutMs = Math.max(5, Number(device.config.scadaOfflineTimeoutSeconds || 120)) * 1000;
+  const lastSeen = new Date(device.lastSeen).getTime();
+  return Number.isFinite(lastSeen) && now - lastSeen <= timeoutMs;
+};
+
+const getDeviceValue = (element: ScadaElement, devices: Device[], now = Date.now()) => {
   const device = devices.find((item) => item.id === element.deviceId || item.config?.externalDeviceId === element.deviceId);
-  const rawValue = element.metricKey ? Number(device?.metrics?.[element.metricKey]) : Number.NaN;
+  const fresh = isDeviceReadingFresh(device, now);
+  const rawValue = fresh && element.metricKey ? Number(device?.metrics?.[element.metricKey]) : Number.NaN;
   return {
     device,
+    fresh,
     value: Number.isFinite(rawValue) ? rawValue : Number.NaN,
   };
 };
 
-const getElementState = (element: ScadaElement, devices: Device[]) => {
-  const {device, value} = getDeviceValue(element, devices);
-  if (!device || !device.lastSeen) return 'noData';
+const getElementState = (element: ScadaElement, devices: Device[], now = Date.now()) => {
+  const {device, fresh, value} = getDeviceValue(element, devices, now);
+  if (!device || !fresh) return 'noData';
   if (device.status === 'offline') return 'critical';
   if (device.status === 'warning') return 'warning';
   if (Number.isFinite(value) && element.critical !== undefined && value >= element.critical) return 'critical';
@@ -142,16 +176,25 @@ const scadaIconByDeviceType: Record<string, string> = {
   temperature_sensor: 'thermometer',
 };
 
-const getScadaDeviceIcon = (device?: Device) => getDeviceIcon(
-  device?.scadaIcon?.mode === 'preset'
-    ? device.scadaIcon.iconId
-    : scadaIconByDeviceType[device?.type || ''] || 'server'
+const getElementScadaIconConfig = (element?: ScadaElement, device?: Device) => (
+  element?.scadaIcon && element.scadaIcon.mode !== 'auto' ? element.scadaIcon : device?.scadaIcon
 );
-const getScadaSvgHref = (device?: Device) => (
-  device?.scadaIcon?.mode === 'svg' && device.scadaIcon.svg
-    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(device.scadaIcon.svg)}`
+const getScadaDeviceIcon = (element?: ScadaElement, device?: Device) => {
+  const iconConfig = getElementScadaIconConfig(element, device);
+  return getDeviceIcon(
+    iconConfig?.mode === 'preset'
+      ? iconConfig.iconId
+      : scadaIconByDeviceType[device?.type || ''] || 'server'
+  );
+};
+const getScadaSvgHref = (element?: ScadaElement, device?: Device) => {
+  const iconConfig = getElementScadaIconConfig(element, device);
+  return (
+    iconConfig?.mode === 'svg' && iconConfig.svg
+      ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(iconConfig.svg)}`
     : ''
-);
+  );
+};
 
 const getDefaultLabelLayout = () => ({ x: 32, y: 24, fontSize: 13 });
 const getDefaultValueLayout = (element: ScadaElement) => ({ x: 16, y: 52, fontSize: element.type === 'metric' ? 20 : 17 });
@@ -214,21 +257,40 @@ const getEmbeddedSvg = (svg = '') => {
   embeddedSvgCache.set(svg, embedded);
   return embedded;
 };
+
+const normalizeRuntimeKey = (value = '') => value.trim().replace(/\s+/g, '_');
+const getObjectPathValue = (source: unknown, path = ''): unknown => {
+  const cleanPath = path.trim().replace(/^\$\./, '').replace(/^\$/, '');
+  if (!cleanPath) return source;
+  return cleanPath.split('.').filter(Boolean).reduce<unknown>((current, segment) => {
+    if (current === null || current === undefined) return undefined;
+    if (Array.isArray(current) && /^\d+$/.test(segment)) return current[Number(segment)];
+    if (typeof current === 'object') return (current as Record<string, unknown>)[segment];
+    return undefined;
+  }, source);
+};
+
 const shouldPlayPrimitiveAnimation = (
   primitive: ScadaShapePrimitive,
   device: Device | undefined,
   elementState: string | undefined,
   fallbackMetricKey: string | undefined,
   fallbackMetricValue: number | undefined,
+  resolveRuntimePath?: (path: string) => unknown,
 ) => {
   const animation = primitive.animation;
   const trigger = animation?.trigger || 'always';
   if (!animation || animation.type === 'none' || trigger === 'always') return true;
-  if (trigger === 'deviceOnline') return Boolean(device?.lastSeen && device.status !== 'offline');
+  if (trigger === 'deviceOnline') return Boolean(isDeviceReadingFresh(device) && device?.status !== 'offline');
   if (trigger === 'deviceStatus') return Boolean(animation.deviceStatus && (device?.status === animation.deviceStatus || elementState === animation.deviceStatus));
+  if (trigger === 'workflowTruthy') return Boolean(animation.workflowPath && resolveRuntimePath?.(animation.workflowPath));
+  if (trigger === 'workflowEquals') {
+    const runtimeValue = animation.workflowPath ? resolveRuntimePath?.(animation.workflowPath) : undefined;
+    return String(runtimeValue ?? '') === String(animation.operatorValue ?? '');
+  }
 
   const metricKey = animation.metricKey || fallbackMetricKey;
-  const rawMetric = metricKey ? device?.metrics?.[metricKey] : fallbackMetricValue;
+  const rawMetric = metricKey && isDeviceReadingFresh(device) ? device?.metrics?.[metricKey] : fallbackMetricValue;
   const numericMetric = Number(rawMetric);
 
   if (trigger === 'metricNonZero') return Number.isFinite(numericMetric) && numericMetric !== 0;
@@ -266,9 +328,37 @@ export function ScadaView() {
   const [importedIconPresets, setImportedIconPresets] = useState<ScadaIconPresetOption[]>([]);
   const [svgIconMarkupByUrl, setSvgIconMarkupByUrl] = useState<Record<string, string>>({});
   const [canvasZoom, setCanvasZoom] = useState(0.75);
+  const [scadaNow, setScadaNow] = useState(Date.now());
+  const [workflowRunsForScada, setWorkflowRunsForScada] = useState<ScadaWorkflowRun[]>([]);
   const [shapeEditorDragState, setShapeEditorDragState] = useState<ShapeEditorDragState | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const shapeEditorSvgRef = useRef<SVGSVGElement | null>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setScadaNow(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadWorkflowRuns = async () => {
+      try {
+        const response = await fetch('/api/workflow-runs?limit=100');
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (!cancelled) setWorkflowRunsForScada(Array.isArray(payload.runs) ? payload.runs : []);
+      } catch {
+        if (!cancelled) setWorkflowRunsForScada([]);
+      }
+    };
+
+    loadWorkflowRuns();
+    const timer = window.setInterval(loadWorkflowRuns, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (storeScene) {
@@ -318,6 +408,87 @@ export function ScadaView() {
     () => [...importedIconPresets, ...scadaIconPresets.map((preset) => ({ ...preset }))],
     [importedIconPresets]
   );
+  const workflowRuntimeContext = useMemo(() => {
+    const runtime: Record<string, unknown> = {
+      workflow: {},
+      trigger: {},
+      node: {},
+      latest: null,
+    };
+    const workflows = runtime.workflow as Record<string, unknown>;
+    const triggers = runtime.trigger as Record<string, unknown>;
+    const nodes = runtime.node as Record<string, unknown>;
+    const sortedRuns = [...workflowRunsForScada].sort((first, second) => (
+      new Date(second.startedAt || second.finishedAt || 0).getTime() - new Date(first.startedAt || first.finishedAt || 0).getTime()
+    ));
+
+    sortedRuns.forEach((run, index) => {
+      const runTime = new Date(run.startedAt || run.finishedAt || 0).getTime();
+      const eventRecord = (run.event && typeof run.event === 'object') ? run.event as Record<string, unknown> : {};
+      const triggerAliases = [
+        run.triggerType,
+        run.eventSource,
+        eventRecord.type,
+        eventRecord.source,
+        eventRecord.source ? `${eventRecord.source}_trigger` : '',
+      ].filter(Boolean).map((value) => normalizeRuntimeKey(String(value)));
+      const workflowKeys = [run.workflowId, run.workflowName].filter(Boolean).map((value) => normalizeRuntimeKey(String(value)));
+      const runSummary = {
+        id: run.id,
+        workflowId: run.workflowId,
+        workflowName: run.workflowName,
+        status: run.status,
+        triggerType: run.triggerType,
+        eventSource: run.eventSource,
+        event: run.event,
+        steps: run.steps || [],
+        startedAt: run.startedAt,
+        finishedAt: run.finishedAt,
+        active: Number.isFinite(runTime) && scadaNow - runTime <= WORKFLOW_TRIGGER_ACTIVE_MS,
+      };
+
+      if (index === 0) runtime.latest = runSummary;
+      workflowKeys.forEach((key) => {
+        if (key && workflows[key] === undefined) workflows[key] = runSummary;
+      });
+      triggerAliases.forEach((triggerKey) => {
+        if (!triggerKey || triggers[triggerKey] !== undefined) return;
+        triggers[triggerKey] = {
+          active: runSummary.active,
+          status: run.status,
+          source: run.eventSource,
+          workflowId: run.workflowId,
+          workflowName: run.workflowName,
+          event: run.event,
+          runId: run.id,
+          startedAt: run.startedAt,
+          finishedAt: run.finishedAt,
+        };
+      });
+      (run.steps || []).forEach((step) => {
+        const nodeKeys = [step.nodeName, step.nodeId].filter(Boolean).map((value) => normalizeRuntimeKey(String(value)));
+        const nodeSummary = {
+          workflowId: run.workflowId,
+          workflowName: run.workflowName,
+          runId: run.id,
+          nodeId: step.nodeId,
+          nodeName: step.nodeName,
+          type: step.type,
+          status: step.status,
+          input: step.input,
+          output: step.output,
+          startedAt: step.startedAt,
+          finishedAt: step.finishedAt,
+        };
+        nodeKeys.forEach((key) => {
+          if (key && nodes[key] === undefined) nodes[key] = nodeSummary;
+        });
+      });
+    });
+
+    return runtime;
+  }, [scadaNow, workflowRunsForScada]);
+  const resolveScadaRuntimePath = (path: string) => getObjectPathValue(workflowRuntimeContext, path);
   const stepCanvasZoom = (direction: 1 | -1) => {
     setCanvasZoom((current) => {
       const currentIndex = CANVAS_ZOOM_OPTIONS.findIndex((value) => value >= current);
@@ -422,9 +593,41 @@ export function ScadaView() {
     }));
   };
 
+  const uploadElementImage = (event: React.ChangeEvent<HTMLInputElement>, elementId: string) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      updateElement(elementId, {
+        imageSrc: String(reader.result || ''),
+        imageFileName: file.name,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const uploadElementSvgIcon = (event: React.ChangeEvent<HTMLInputElement>, elementId: string) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const svg = String(reader.result || '')
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/\son\w+="[^"]*"/gi, '')
+        .replace(/\son\w+='[^']*'/gi, '')
+        .trim();
+      updateElement(elementId, { scadaIcon: { mode: 'svg', svg, fileName: file.name } });
+    };
+    reader.readAsText(file);
+  };
+
   const addElement = (type: ScadaElementType) => {
     const id = createElementId(type);
     const base: ScadaElement = { id, type, label: elementTypes.find((item) => item.type === type)?.label || type, x: 120, y: 120, width: 150, height: 76 };
+    const image: ScadaElement = { id, type, label: 'Image Hotspot', x: 120, y: 120, width: 260, height: 160, imageOpacity: 1 };
     const lineDefaults: Record<string, Partial<ScadaElement>> = {
       pipe: { label: 'Pipe', lineWidth: 8, lineAnimation: 'flow' },
       power: { label: 'Power Line', lineWidth: 8, lineAnimation: 'flow' },
@@ -432,7 +635,7 @@ export function ScadaView() {
       signal: { label: 'Signal Line', lineWidth: 5, lineAnimation: 'flow', lineProtocol: 'ethernet' },
     };
     const line: ScadaElement = { id, type, label: lineDefaults[type]?.label || type, x: 0, y: 0, points: [{ x: 280, y: 260 }, { x: 520, y: 260 }], ...(lineDefaults[type] || {}) };
-    const nextElement = isLineElement(line as ScadaElement) ? line : base;
+    const nextElement = type === 'image' ? image : isLineElement(line as ScadaElement) ? line : base;
     setDraft((current) => ({ ...current, elements: [...current.elements, nextElement] }));
     setSelectedElementId(id);
     setEditMode(true);
@@ -728,7 +931,7 @@ export function ScadaView() {
   };
 
   const getInnerPartLayout = (element: ScadaElement, part: ScadaEditablePart) => {
-    const {device} = getDeviceValue(element, devices);
+    const {device} = getDeviceValue(element, devices, scadaNow);
     if (part === 'icon') return { ...getDefaultIconLayout(element, device), ...(element.iconStyle || {}) };
     if (part === 'value') return { ...getDefaultValueLayout(element), ...(element.valueStyle || {}) };
     if (part === 'meta') return { ...getDefaultMetaLayout(element), ...(element.metaStyle || {}) };
@@ -802,7 +1005,7 @@ export function ScadaView() {
           const nextX = Math.max(-40, Math.min(width + 40, point.x - element.x - dragState.dx));
           const nextY = Math.max(-30, Math.min(height + 40, point.y - element.y - dragState.dy));
           if (dragState.part === 'icon') {
-            const {device} = getDeviceValue(element, devices);
+            const {device} = getDeviceValue(element, devices, scadaNow);
             return {
               ...element,
               iconStyle: {
@@ -925,7 +1128,7 @@ export function ScadaView() {
   const renderLine = (element: ScadaElement) => {
     const points = resolveLinePoints(element);
     if (points.length < 2) return null;
-    const state = getElementState(element, devices);
+    const state = getElementState(element, devices, scadaNow);
     const style = stateStyles[state];
     const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
     const active = state === 'normal' || state === 'warning';
@@ -1037,7 +1240,7 @@ export function ScadaView() {
     const rotationCenterX = mapX(primitive.rotation?.centerX ?? primitiveCenter.x);
     const rotationCenterY = mapY(primitive.rotation?.centerY ?? primitiveCenter.y);
     const animation = shouldPlayAnimation ? primitive.animation : undefined;
-    const duration = Math.max(0.2, animation?.durationSeconds || 2);
+    const duration = Math.max(0.02, animation?.durationSeconds || 2);
     const staticRotation = primitive.rotation?.angle
       ? `rotate(${primitive.rotation.angle} ${rotationCenterX} ${rotationCenterY})`
       : undefined;
@@ -1251,7 +1454,7 @@ export function ScadaView() {
               content,
               toX,
               toY,
-              shouldPlayPrimitiveAnimation(primitive, device, state, element.metricKey, metricValue)
+              shouldPlayPrimitiveAnimation(primitive, device, state, element.metricKey, metricValue, resolveScadaRuntimePath)
             );
             if (primitive.type === 'svgIcon') {
               return wrapPrimitive(renderSvgIconPrimitive(primitive, primitiveX, primitiveY, scaledWidth, scaledHeight, paint));
@@ -1371,8 +1574,8 @@ export function ScadaView() {
     const height = element.height || 76;
     const x = element.x;
     const y = element.y;
-    const Icon = getScadaDeviceIcon(device);
-    const svgHref = getScadaSvgHref(device);
+    const Icon = getScadaDeviceIcon(element, device);
+    const svgHref = getScadaSvgHref(element, device);
     const stroke = isSelected ? '#fb923c' : style.stroke;
     const commonProps = {
       fill: style.fill,
@@ -1482,8 +1685,8 @@ export function ScadaView() {
   const renderElement = (element: ScadaElement) => {
     if (isLineElement(element)) return renderLine(element);
 
-    const {device, value} = getDeviceValue(element, devices);
-    const state = getElementState(element, devices);
+    const {device, value} = getDeviceValue(element, devices, scadaNow);
+    const state = getElementState(element, devices, scadaNow);
     const style = stateStyles[state];
     const width = element.width || 150;
     const height = element.height || 76;
@@ -1508,6 +1711,49 @@ export function ScadaView() {
         <g key={element.id} onPointerDown={(event) => handlePointerDown(event, element)} onClick={(event) => { event.stopPropagation(); setSelectedElementId(element.id); }} className={cn(editMode && 'cursor-move')}>
           <text x={element.x} y={element.y} fill="#e5e7eb" fontSize="24" fontWeight="700">{element.label}</text>
           {isSelected && <rect x={element.x - 8} y={element.y - 30} width={width} height={height} fill="none" stroke="#fb923c" strokeDasharray="5 5" />}
+          {resizeHandle}
+        </g>
+      );
+    }
+
+    if (element.type === 'image') {
+      return (
+        <g
+          key={element.id}
+          onPointerDown={(event) => handlePointerDown(event, element)}
+          onClick={(event) => {
+            event.stopPropagation();
+            setSelectedElementId(element.id);
+            if (!editMode && element.deviceId) navigate(`/devices/${element.deviceId}`, { state: { from: '/scada' } });
+          }}
+          className={cn(editMode ? 'cursor-move' : element.deviceId && 'cursor-pointer')}
+        >
+          {element.imageSrc ? (
+            <image
+              href={element.imageSrc}
+              x={element.x}
+              y={element.y}
+              width={width}
+              height={height}
+              opacity={element.imageOpacity ?? 1}
+              preserveAspectRatio="xMidYMid slice"
+            />
+          ) : (
+            <rect x={element.x} y={element.y} width={width} height={height} rx={10} fill="rgba(15,23,42,0.72)" stroke="#475569" strokeDasharray="8 6" />
+          )}
+          {element.imageSrc ? null : <text x={element.x + width / 2} y={element.y + height / 2} textAnchor="middle" dominantBaseline="middle" fill="#94a3b8" fontSize="13">Upload image</text>}
+          <rect
+            x={element.x}
+            y={element.y}
+            width={width}
+            height={height}
+            rx={10}
+            fill={state === 'critical' ? 'rgba(239,68,68,0.18)' : 'transparent'}
+            stroke={isSelected ? '#fb923c' : state === 'critical' ? '#ef4444' : 'rgba(148,163,184,0.35)'}
+            strokeWidth={isSelected ? 3 : state === 'critical' ? 2 : 1}
+            strokeDasharray={state === 'critical' ? undefined : '6 6'}
+            className={state === 'critical' ? 'scada-alarm-pulse' : undefined}
+          />
           {resizeHandle}
         </g>
       );
@@ -2012,9 +2258,28 @@ export function ScadaView() {
                                 <option value="metricGreaterThan">Metric greater than</option>
                                 <option value="metricEquals">Metric equals</option>
                                 <option value="deviceStatus">Device status</option>
+                                <option value="workflowTruthy">Workflow value truthy</option>
+                                <option value="workflowEquals">Workflow value equals</option>
                               </select>
                             </label>
                           </div>
+                          {(selectedPrimitive.animation?.trigger === 'workflowTruthy' || selectedPrimitive.animation?.trigger === 'workflowEquals') && (
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                Workflow Path
+                                <input value={selectedPrimitive.animation?.workflowPath || ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), workflowPath: event.target.value } })} placeholder="$.trigger.access.active" className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                              </label>
+                              {selectedPrimitive.animation?.trigger === 'workflowEquals' && (
+                                <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                  Value
+                                  <input value={selectedPrimitive.animation?.operatorValue ?? ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), operatorValue: event.target.value } })} placeholder="success / true / DEV-001" className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                                </label>
+                              )}
+                              <p className="col-span-2 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
+                                Examples: $.trigger.access.active, $.trigger.nfc.active, $.node.notification_2.output, $.workflow.New_Workflow.status.
+                              </p>
+                            </div>
+                          )}
                           {(selectedPrimitive.animation?.trigger === 'metricNonZero' || selectedPrimitive.animation?.trigger === 'metricGreaterThan' || selectedPrimitive.animation?.trigger === 'metricEquals') && (
                             <div className="mt-2 grid grid-cols-2 gap-2">
                               <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
@@ -2039,8 +2304,8 @@ export function ScadaView() {
                           )}
                           <div className="mt-2 grid grid-cols-2 gap-2">
                             <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
-                              Duration
-                              <input type="number" min={0.2} step={0.1} value={selectedPrimitive.animation?.durationSeconds ?? 2} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), durationSeconds: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                              Duration (ms)
+                              <input type="number" min={20} step={50} value={Math.round((selectedPrimitive.animation?.durationSeconds ?? 2) * 1000)} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), durationSeconds: Math.max(20, Number(event.target.value) || 2000) / 1000 } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
                             </label>
                           </div>
                           {(selectedPrimitive.animation?.type === 'rotate' || selectedPrimitive.animation?.type === 'scale') && (
@@ -2077,8 +2342,8 @@ export function ScadaView() {
                           )}
                           {selectedPrimitive.animation?.type === 'visibility' && (
                             <div className="mt-2 grid grid-cols-2 gap-2">
-                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Visible Seconds<input type="number" min={0.1} step={0.1} value={selectedPrimitive.animation?.visibleSeconds ?? 1} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), visibleSeconds: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
-                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Hidden Seconds<input type="number" min={0.1} step={0.1} value={selectedPrimitive.animation?.hiddenSeconds ?? 1} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), hiddenSeconds: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Visible (ms)<input type="number" min={100} step={50} value={Math.round((selectedPrimitive.animation?.visibleSeconds ?? 1) * 1000)} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), visibleSeconds: Math.max(100, Number(event.target.value) || 1000) / 1000 } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Hidden (ms)<input type="number" min={100} step={50} value={Math.round((selectedPrimitive.animation?.hiddenSeconds ?? 1) * 1000)} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), hiddenSeconds: Math.max(100, Number(event.target.value) || 1000) / 1000 } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
                             </div>
                           )}
                         </div>
@@ -2303,6 +2568,82 @@ export function ScadaView() {
                   <button type="button" onClick={() => setShapeManagerOpen(true)} className="inline-flex h-8 w-full items-center justify-center rounded border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
                     Manage Custom Shapes
                   </button>
+                </div>
+              )}
+              {selectedElement.type === 'image' && (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Image Hotspot</div>
+                  <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800">
+                    Upload Image
+                    <input type="file" accept="image/*" className="hidden" onChange={(event) => uploadElementImage(event, selectedElement.id)} />
+                  </label>
+                  {selectedElement.imageFileName && (
+                    <div className="mt-2 flex items-center justify-between gap-2 rounded bg-slate-200 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                      <span className="truncate">{selectedElement.imageFileName}</span>
+                      <button type="button" onClick={() => updateElement(selectedElement.id, { imageSrc: '', imageFileName: '' })} className="text-slate-500 hover:text-red-500">Remove</button>
+                    </div>
+                  )}
+                  <label className="mt-3 block text-xs font-medium uppercase tracking-wider text-slate-500">
+                    Opacity
+                    <input
+                      type="range"
+                      min={0.1}
+                      max={1}
+                      step={0.05}
+                      value={selectedElement.imageOpacity ?? 1}
+                      onChange={(event) => updateElement(selectedElement.id, { imageOpacity: Number(event.target.value) })}
+                      className="mt-1 w-full"
+                    />
+                  </label>
+                </div>
+              )}
+              {selectedElement.type === 'device' && (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">SCADA Icon Override</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['auto', 'preset', 'svg'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => updateElement(selectedElement.id, { scadaIcon: mode === 'auto' ? { mode: 'auto' } : mode === 'preset' ? { mode: 'preset', iconId: selectedElement.scadaIcon?.iconId || 'server' } : { mode: 'svg', svg: selectedElement.scadaIcon?.svg, fileName: selectedElement.scadaIcon?.fileName } })}
+                        className={cn(
+                          'rounded border px-2 py-1.5 text-xs font-semibold capitalize',
+                          (selectedElement.scadaIcon?.mode || 'auto') === mode
+                            ? 'border-orange-500 bg-orange-50 text-orange-600 dark:bg-orange-500/10'
+                            : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:hover:bg-slate-800'
+                        )}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                  {(selectedElement.scadaIcon?.mode || 'auto') === 'preset' && (
+                    <div className="mt-3 grid max-h-32 grid-cols-6 gap-1 overflow-auto rounded border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+                      {Object.keys(IOT_ICONS).map((iconId) => {
+                        const IconComp = getDeviceIcon(iconId);
+                        return (
+                          <button
+                            key={iconId}
+                            type="button"
+                            title={iconId}
+                            onClick={() => updateElement(selectedElement.id, { scadaIcon: { mode: 'preset', iconId } })}
+                            className={cn('flex h-8 items-center justify-center rounded border', selectedElement.scadaIcon?.iconId === iconId ? 'border-orange-500 bg-orange-500/10 text-orange-500' : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800')}
+                          >
+                            <IconComp className="h-4 w-4" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {(selectedElement.scadaIcon?.mode || 'auto') === 'svg' && (
+                    <div className="mt-3">
+                      <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800">
+                        Upload SVG Icon
+                        <input type="file" accept=".svg,image/svg+xml" className="hidden" onChange={(event) => uploadElementSvgIcon(event, selectedElement.id)} />
+                      </label>
+                      {selectedElement.scadaIcon?.fileName && <div className="mt-2 truncate text-xs text-slate-500">{selectedElement.scadaIcon.fileName}</div>}
+                    </div>
+                  )}
                 </div>
               )}
               {isResizableElement(selectedElement) && (

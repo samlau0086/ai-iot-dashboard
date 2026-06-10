@@ -39,6 +39,8 @@ export interface DeviceConfig {
   }>;
   mqttReceiveTemplate?: string;
   mqttCommandTemplate?: string;
+  scadaOfflineDetectionEnabled?: boolean;
+  scadaOfflineTimeoutSeconds?: number;
 
   // Industrial protocol / edge gateway binding
   protocol?: string;
