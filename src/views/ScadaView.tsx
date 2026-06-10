@@ -416,10 +416,12 @@ export function ScadaView() {
       return;
     }
 
-    updateEditingPrimitive(primitive.id, {
-      width: Math.max(4, Math.min(100 - primitive.x, Math.round(shapeEditorDragState.startWidth + point.x - shapeEditorDragState.startX))),
-      height: Math.max(primitive.type === 'line' ? 0 : 4, Math.min(100 - primitive.y, Math.round(shapeEditorDragState.startHeight + point.y - shapeEditorDragState.startY))),
-    });
+    if (shapeEditorDragState.type === 'resize') {
+      updateEditingPrimitive(primitive.id, {
+        width: Math.max(4, Math.min(100 - primitive.x, Math.round(shapeEditorDragState.startWidth + point.x - shapeEditorDragState.startX))),
+        height: Math.max(primitive.type === 'line' ? 0 : 4, Math.min(100 - primitive.y, Math.round(shapeEditorDragState.startHeight + point.y - shapeEditorDragState.startY))),
+      });
+    }
   };
 
   const addEditingPrimitive = (type: ScadaShapePrimitiveType) => {
