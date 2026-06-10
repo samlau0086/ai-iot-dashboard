@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
 import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play, Plus, Trash2, X } from 'lucide-react';
@@ -12,6 +12,7 @@ import { confirmDelete } from '../lib/confirm';
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { devices, language, updateDevice, currentUser } = useAppStore();
   const t = translations[language];
 
@@ -45,8 +46,8 @@ export function DeviceDetails() {
       <div className="flex flex-col items-center justify-center p-12 text-slate-500">
         <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Device Not Found</h2>
         <p>The requested device could not be found.</p>
-        <button onClick={() => navigate('/devices')} className="mt-4 px-4 py-2 bg-orange-600 text-white rounded hover:bg-orange-500">
-          Back to Devices
+        <button onClick={() => navigate((location.state as { from?: string } | null)?.from || '/devices')} className="mt-4 px-4 py-2 bg-orange-600 text-white rounded hover:bg-orange-500">
+          Back
         </button>
       </div>
     );
@@ -340,7 +341,7 @@ export function DeviceDetails() {
       {/* Header */}
       <div className="flex items-center gap-4">
         <button 
-          onClick={() => navigate('/devices')}
+          onClick={() => navigate((location.state as { from?: string } | null)?.from || '/devices')}
           className="p-2 -ml-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors"
         >
           <ArrowLeft className="h-5 w-5" />

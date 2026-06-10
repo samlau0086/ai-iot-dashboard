@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Cpu, Droplets, Gauge, Move, Network, Save, Trash2, Zap } from 'lucide-react';
+import { Activity, Cable, Cpu, Droplets, Gauge, Move, Network, Save, Trash2, Wifi, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene, type ScadaShapePreset, type ScadaShapePrimitive, type ScadaShapePrimitiveType, type ScadaShapeEndpoint } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
@@ -46,6 +46,8 @@ const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> 
   { type: 'metric', label: 'Metric', icon: Gauge },
   { type: 'pipe', label: 'Pipe', icon: Droplets },
   { type: 'power', label: 'Power Line', icon: Zap },
+  { type: 'wireless', label: 'Wireless', icon: Wifi },
+  { type: 'signal', label: 'Signal Line', icon: Cable },
   { type: 'label', label: 'Label', icon: Activity },
 ];
 const shapePresets = [
@@ -168,7 +170,7 @@ const getDefaultIconLayout = (element: ScadaElement, device?: Device) => {
   return { x: baseX, y: baseY, size };
 };
 
-const isLineElement = (element: ScadaElement) => element.type === 'pipe' || element.type === 'power';
+const isLineElement = (element: ScadaElement) => ['pipe', 'power', 'wireless', 'signal'].includes(element.type);
 const isResizableElement = (element: ScadaElement) => !isLineElement(element);
 const getShapePreset = (element: ScadaElement) => element.shapePreset || (element.type === 'device' ? 'auto' : 'rounded');
 const getElementSize = (element: ScadaElement) => ({
@@ -422,9 +424,15 @@ export function ScadaView() {
 
   const addElement = (type: ScadaElementType) => {
     const id = createElementId(type);
-    const base = { id, type, label: elementTypes.find((item) => item.type === type)?.label || type, x: 120, y: 120, width: 150, height: 76 };
-    const line = { id, type, label: type === 'power' ? 'Power Line' : 'Pipe', x: 0, y: 0, points: [{ x: 280, y: 260 }, { x: 520, y: 260 }] };
-    const nextElement = type === 'pipe' || type === 'power' ? line : base;
+    const base: ScadaElement = { id, type, label: elementTypes.find((item) => item.type === type)?.label || type, x: 120, y: 120, width: 150, height: 76 };
+    const lineDefaults: Record<string, Partial<ScadaElement>> = {
+      pipe: { label: 'Pipe', lineWidth: 8, lineAnimation: 'flow' },
+      power: { label: 'Power Line', lineWidth: 8, lineAnimation: 'flow' },
+      wireless: { label: 'Wireless Link', lineWidth: 5, lineAnimation: 'glow', lineProtocol: 'wifi' },
+      signal: { label: 'Signal Line', lineWidth: 5, lineAnimation: 'flow', lineProtocol: 'ethernet' },
+    };
+    const line: ScadaElement = { id, type, label: lineDefaults[type]?.label || type, x: 0, y: 0, points: [{ x: 280, y: 260 }, { x: 520, y: 260 }], ...(lineDefaults[type] || {}) };
+    const nextElement = isLineElement(line as ScadaElement) ? line : base;
     setDraft((current) => ({ ...current, elements: [...current.elements, nextElement] }));
     setSelectedElementId(id);
     setEditMode(true);
@@ -925,7 +933,7 @@ export function ScadaView() {
     const startConnected = Boolean(element.connections?.start);
     const endConnected = Boolean(element.connections?.end);
     const lineWidth = Math.max(2, element.lineWidth || 8);
-    const lineAnimation = element.lineAnimation || 'flow';
+    const lineAnimation = element.lineAnimation || (element.type === 'wireless' ? 'glow' : 'flow');
     const animationActive = active && lineAnimation !== 'none';
     const lineClassName = cn(
       animationActive && lineAnimation === 'flow' && 'scada-flow-line',
@@ -942,12 +950,12 @@ export function ScadaView() {
           stroke={style.stroke}
           strokeWidth={lineWidth}
           strokeLinecap="round"
-          strokeDasharray={element.type === 'power' ? '12 10' : '18 12'}
-          markerEnd={element.type === 'power' ? 'url(#scada-arrow-power)' : 'url(#scada-arrow-pipe)'}
+          strokeDasharray={element.type === 'power' ? '12 10' : element.type === 'wireless' ? '3 14' : element.type === 'signal' ? '10 7' : '18 12'}
+          markerEnd={element.type === 'power' ? 'url(#scada-arrow-power)' : element.type === 'pipe' ? 'url(#scada-arrow-pipe)' : undefined}
           className={lineClassName}
           style={{ animationDuration: `${Math.max(0.2, element.lineAnimationSpeed || 1.4)}s` }}
         />
-        <text x={(points[0].x + points[points.length - 1].x) / 2} y={(points[0].y + points[points.length - 1].y) / 2 - 14} fill="#94a3b8" fontSize="12" textAnchor="middle">{element.label}</text>
+        <text x={(points[0].x + points[points.length - 1].x) / 2} y={(points[0].y + points[points.length - 1].y) / 2 - 14} fill="#94a3b8" fontSize="12" textAnchor="middle">{element.label}{element.lineProtocol ? ` / ${element.lineProtocol}` : ''}</text>
         {editMode && isSelected && (
           <>
             {[0, 1].map((endpoint) => {
@@ -1124,6 +1132,8 @@ export function ScadaView() {
       stroke: string;
       strokeWidth?: number;
       opacity?: number;
+      fillOpacity?: number;
+      strokeOpacity?: number;
       strokeDasharray?: string;
     }
   ) => {
@@ -1152,6 +1162,8 @@ export function ScadaView() {
         transform={`translate(${x} ${y}) scale(${scaleX} ${scaleY}) translate(${-embedded.viewBox.x} ${-embedded.viewBox.y})`}
         fill={paint.fill === 'none' ? 'none' : 'currentColor'}
         opacity={paint.opacity}
+        fillOpacity={paint.fillOpacity}
+        strokeOpacity={paint.strokeOpacity}
         strokeWidth={paint.strokeWidth}
         strokeDasharray={paint.strokeDasharray}
         style={{ color: iconColor }}
@@ -1192,15 +1204,15 @@ export function ScadaView() {
     const customShape = customShapeById[preset];
     const primitivePaint = (primitive: ScadaShapePrimitive) => {
       const fillMap = {
-        state: style.fill,
-        panel: 'rgba(15,23,42,0.54)',
+        state: style.badge,
+        panel: '#0f172a',
         accent: style.badge,
         custom: primitive.fillColor || style.badge,
         none: 'none',
       };
       const strokeMap = {
         state: stroke,
-        muted: 'rgba(148,163,184,0.38)',
+        muted: '#64748b',
         accent: style.badge,
         custom: primitive.strokeColor || style.badge,
         none: 'none',
@@ -1210,6 +1222,8 @@ export function ScadaView() {
         stroke: strokeMap[primitive.strokeMode || 'state'],
         strokeWidth: primitive.strokeWidth ?? 2,
         opacity: primitive.opacity ?? 1,
+        fillOpacity: primitive.fillOpacity ?? 1,
+        strokeOpacity: primitive.strokeOpacity ?? 1,
         strokeDasharray: primitive.dash || undefined,
         className: state === 'critical' ? 'scada-alarm-pulse' : undefined,
       };
@@ -1507,7 +1521,7 @@ export function ScadaView() {
           event.stopPropagation();
           setSelectedElementId(element.id);
           if (activeInnerPart?.id !== element.id) setActiveInnerPart(null);
-          if (!editMode && element.deviceId) navigate(`/devices/${element.deviceId}`);
+          if (!editMode && element.deviceId) navigate(`/devices/${element.deviceId}`, { state: { from: '/scada' } });
         }}
         className={cn(editMode ? 'cursor-move' : element.deviceId && 'cursor-pointer')}
       >
@@ -1542,10 +1556,12 @@ export function ScadaView() {
 
   const renderShapePreviewPrimitive = (primitive: ScadaShapePrimitive, selected = false) => {
     const paint = {
-      fill: primitive.fillMode === 'none' ? 'none' : primitive.fillMode === 'custom' ? primitive.fillColor || '#f97316' : primitive.fillMode === 'accent' ? '#f97316' : primitive.fillMode === 'state' ? 'rgba(16,185,129,0.35)' : 'rgba(15,23,42,0.72)',
-      stroke: primitive.strokeMode === 'none' ? 'none' : primitive.strokeMode === 'custom' ? primitive.strokeColor || '#f97316' : primitive.strokeMode === 'accent' ? '#f97316' : primitive.strokeMode === 'muted' ? 'rgba(148,163,184,0.5)' : '#10b981',
+      fill: primitive.fillMode === 'none' ? 'none' : primitive.fillMode === 'custom' ? primitive.fillColor || '#f97316' : primitive.fillMode === 'accent' ? '#f97316' : primitive.fillMode === 'state' ? '#10b981' : '#0f172a',
+      stroke: primitive.strokeMode === 'none' ? 'none' : primitive.strokeMode === 'custom' ? primitive.strokeColor || '#f97316' : primitive.strokeMode === 'accent' ? '#f97316' : primitive.strokeMode === 'muted' ? '#64748b' : '#10b981',
       strokeWidth: selected ? 3 : primitive.strokeWidth ?? 2,
       opacity: primitive.opacity ?? 1,
+      fillOpacity: primitive.fillOpacity ?? 1,
+      strokeOpacity: primitive.strokeOpacity ?? 1,
       strokeDasharray: primitive.dash || undefined,
     };
     const width = primitive.width ?? 32;
@@ -1701,14 +1717,18 @@ export function ScadaView() {
                   </div>
                 )}
                 {scadaShapePresets.map((preset) => (
-                  <div key={preset.id} className={cn('rounded border p-3', editingShape?.id === preset.id ? 'border-orange-500 bg-orange-500/10' : 'border-slate-200 dark:border-slate-700')}>
-                    <button type="button" onClick={() => startEditShape(preset)} className="block w-full text-left text-sm font-semibold text-slate-900 dark:text-white">{preset.name}</button>
+                  <div
+                    key={preset.id}
+                    onClick={() => startEditShape(preset)}
+                    className={cn('cursor-pointer rounded border p-3', editingShape?.id === preset.id ? 'border-orange-500 bg-orange-500/10' : 'border-slate-200 dark:border-slate-700')}
+                  >
+                    <div className="text-sm font-semibold text-slate-900 dark:text-white">{preset.name}</div>
                     <div className="mt-2 h-16 rounded bg-slate-950 p-2">
                       <svg viewBox="0 0 100 100" className="h-full w-full">
                         {preset.primitives.map((primitive) => renderShapePreviewPrimitive(primitive))}
                       </svg>
                     </div>
-                    <button type="button" onClick={() => deleteShape(preset)} className="mt-2 text-xs font-semibold text-red-500 hover:text-red-400">Delete</button>
+                    <button type="button" onClick={(event) => { event.stopPropagation(); deleteShape(preset); }} className="mt-2 text-xs font-semibold text-red-500 hover:text-red-400">Delete</button>
                   </div>
                 ))}
               </div>
@@ -1788,9 +1808,9 @@ export function ScadaView() {
                           </label>
                         </div>
                       </div>
-                      <div className="mt-2 max-h-24 overflow-auto rounded bg-slate-950 p-2">
+                      <div className="mt-2 max-h-56 overflow-auto rounded bg-slate-950 p-2">
                         <div className="grid grid-cols-8 gap-2">
-                          {allScadaIconPresets.slice(0, 32).map((preset) => (
+                          {allScadaIconPresets.map((preset) => (
                             <button key={preset.id} type="button" onClick={() => setSelectedIconPresetId(preset.id)} className={cn('flex h-8 items-center justify-center rounded border bg-white p-1', selectedIconPresetId === preset.id ? 'border-orange-500' : 'border-slate-700')}>
                               {preset.svg ? (
                                 <svg viewBox="0 0 100 100" className="h-full w-full text-orange-500">
@@ -1819,19 +1839,23 @@ export function ScadaView() {
                           {primitiveLayers.map(({ primitive, index }) => {
                             const selected = selectedPrimitiveId === primitive.id;
                             return (
-                              <div key={primitive.id} className={cn('rounded border p-2', selected ? 'border-orange-500 bg-orange-500/10' : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950')}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
+                              <div
+                                key={primitive.id}
+                                onClick={() => {
+                                  setSelectedPrimitiveId(primitive.id);
+                                  setSelectedEndpointId('');
+                                }}
+                                className={cn('cursor-pointer rounded border p-2', selected ? 'border-orange-500 bg-orange-500/10' : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950')}
+                              >
+                                <div className="flex w-full items-center justify-between text-left">
+                                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{primitive.name || primitive.iconName || primitive.type}</span>
+                                  <span className="font-mono text-[10px] text-slate-500">#{index + 1}</span>
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-1" onClick={(event) => event.stopPropagation()}>
+                                  <button type="button" onClick={() => {
                                     setSelectedPrimitiveId(primitive.id);
                                     setSelectedEndpointId('');
-                                  }}
-                                  className="flex w-full items-center justify-between text-left"
-                                >
-                                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{primitive.iconName || primitive.type}</span>
-                                  <span className="font-mono text-[10px] text-slate-500">#{index + 1}</span>
-                                </button>
-                                <div className="mt-2 flex flex-wrap gap-1">
+                                  }} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Select</button>
                                   <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'front')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Top</button>
                                   <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'up')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Up</button>
                                   <button type="button" onClick={() => moveEditingPrimitive(primitive.id, 'down')} className="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Down</button>
@@ -1879,11 +1903,15 @@ export function ScadaView() {
                     {selectedPrimitive ? (
                       <div className="mt-3 space-y-3">
                         <div className="flex items-center justify-between rounded bg-white p-2 text-xs font-semibold text-slate-600 dark:bg-slate-950 dark:text-slate-300">
-                          <span>{selectedPrimitive.iconName || selectedPrimitive.type}</span>
+                          <span>{selectedPrimitive.name || selectedPrimitive.iconName || selectedPrimitive.type}</span>
                           {editingShape.primitives.length > 1 && (
                             <button type="button" onClick={() => removeEditingPrimitive(selectedPrimitive.id)} className="text-red-500 hover:text-red-400">Remove</button>
                           )}
                         </div>
+                        <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          Layer Name
+                          <input value={selectedPrimitive.name || ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { name: event.target.value })} placeholder={selectedPrimitive.iconName || selectedPrimitive.type} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                        </label>
                         {selectedPrimitive.type === 'svgIcon' && (
                           <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
                             Preset Shape
@@ -1900,10 +1928,18 @@ export function ScadaView() {
                           </label>
                         )}
                         <div className="grid grid-cols-2 gap-2">
-                          {(['x', 'y', 'width', 'height', 'rx', 'strokeWidth', 'opacity'] as const).map((key) => (
+                          {(['x', 'y', 'width', 'height', 'rx', 'strokeWidth', 'opacity', 'fillOpacity', 'strokeOpacity'] as const).map((key) => (
                             <label key={key} className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
                               {key}
-                              <input type="number" step={key === 'opacity' ? 0.1 : 1} min={key === 'opacity' ? 0 : undefined} max={key === 'opacity' ? 1 : 100} value={Number(selectedPrimitive[key] ?? (key === 'opacity' ? 1 : 0))} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { [key]: Number(event.target.value) } as Partial<ScadaShapePrimitive>)} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                              <input
+                                type="number"
+                                step={key === 'opacity' || key === 'fillOpacity' || key === 'strokeOpacity' ? 0.1 : 1}
+                                min={key === 'opacity' || key === 'fillOpacity' || key === 'strokeOpacity' ? 0 : undefined}
+                                max={key === 'opacity' || key === 'fillOpacity' || key === 'strokeOpacity' ? 1 : 100}
+                                value={Number(selectedPrimitive[key] ?? (key === 'opacity' || key === 'fillOpacity' || key === 'strokeOpacity' ? 1 : 0))}
+                                onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { [key]: Number(event.target.value) } as Partial<ScadaShapePrimitive>)}
+                                className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                              />
                             </label>
                           ))}
                         </div>
@@ -2061,7 +2097,7 @@ export function ScadaView() {
                         <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Connection Endpoints</h3>
                         <button type="button" onClick={addEditingEndpoint} className="rounded border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Add</button>
                       </div>
-                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Pipe and power line endpoints snap to these points when this shape is used.</p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Pipe, power, wireless, and signal endpoints snap to these points when this shape is used.</p>
                       <div className="mt-3 space-y-2">
                         {shapeEndpoints.map((endpoint) => (
                           <button
@@ -2294,7 +2330,7 @@ export function ScadaView() {
                 </div>
               )}
               {isLineElement(selectedElement) && (
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
                     Line Width
                     <input
@@ -2330,6 +2366,33 @@ export function ScadaView() {
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
                   </label>
+                  {(selectedElement.type === 'signal' || selectedElement.type === 'wireless') && (
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                      Protocol
+                      <select
+                        value={selectedElement.lineProtocol || (selectedElement.type === 'wireless' ? 'wifi' : 'ethernet')}
+                        onChange={(event) => updateElement(selectedElement.id, { lineProtocol: event.target.value as ScadaElement['lineProtocol'] })}
+                        className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                      >
+                        {selectedElement.type === 'wireless' ? (
+                          <>
+                            <option value="wifi">WiFi</option>
+                            <option value="lora">LoRa</option>
+                            <option value="custom">Custom</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="ethernet">Ethernet</option>
+                            <option value="rs485">RS485</option>
+                            <option value="rs232">RS232</option>
+                            <option value="can">CAN</option>
+                            <option value="modbus">Modbus</option>
+                            <option value="custom">Custom</option>
+                          </>
+                        )}
+                      </select>
+                    </label>
+                  )}
                 </div>
               )}
               <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">

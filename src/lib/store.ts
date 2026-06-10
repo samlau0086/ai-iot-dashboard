@@ -170,7 +170,7 @@ export interface OverviewDashboardState {
   updatedAt?: string;
 }
 
-export type ScadaElementType = 'device' | 'metric' | 'pipe' | 'power' | 'label';
+export type ScadaElementType = 'device' | 'metric' | 'pipe' | 'power' | 'wireless' | 'signal' | 'label';
 
 export type ScadaShapePrimitiveType =
   | 'rect'
@@ -188,6 +188,7 @@ export type ScadaShapePrimitiveType =
 
 export interface ScadaShapePrimitive {
   id: string;
+  name?: string;
   type: ScadaShapePrimitiveType;
   x: number;
   y: number;
@@ -204,6 +205,8 @@ export interface ScadaShapePrimitive {
   fillColor?: string;
   strokeWidth?: number;
   opacity?: number;
+  fillOpacity?: number;
+  strokeOpacity?: number;
   dash?: string;
   rotation?: {
     angle?: number;
@@ -285,6 +288,7 @@ export interface ScadaElement {
   lineWidth?: number;
   lineAnimation?: 'none' | 'flow' | 'pulse' | 'glow';
   lineAnimationSpeed?: number;
+  lineProtocol?: 'ethernet' | 'rs485' | 'rs232' | 'can' | 'modbus' | 'wifi' | 'lora' | 'custom';
   deviceId?: string;
   metricKey?: string;
   unit?: string;
