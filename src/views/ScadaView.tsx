@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Cpu, Droplets, Gauge, Move, Network, Save, Trash2, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene } from '../lib/store';
+import { getDeviceIcon } from '../lib/icons';
 import { cn } from '../lib/utils';
 import type { Device } from '../types';
 
@@ -71,6 +72,22 @@ const formatMetricValue = (value: number, unit?: string) => {
   const formatted = Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
   return unit ? `${formatted} ${unit}` : formatted;
 };
+
+const scadaIconByDeviceType: Record<string, string> = {
+  air_compressor: 'gauge-circle',
+  energy_meter: 'plug-zap',
+  gateway: 'router',
+  dtu: 'antenna',
+  rtu: 'radio',
+  lora_gateway: 'satellite',
+  plc: 'microchip',
+  pump_controller: 'droplet',
+  sensor: 'activity',
+  solar_inverter: 'sun',
+  temperature_sensor: 'thermometer',
+};
+
+const getScadaDeviceIcon = (device?: Device) => getDeviceIcon(device?.icon || scadaIconByDeviceType[device?.type || ''] || 'server');
 
 const isLineElement = (element: ScadaElement) => element.type === 'pipe' || element.type === 'power';
 const getElementSize = (element: ScadaElement) => ({
@@ -309,6 +326,92 @@ export function ScadaView() {
     );
   };
 
+  const renderDeviceGraphic = (element: ScadaElement, device: Device | undefined, style: typeof stateStyles.normal, isSelected: boolean, state: string) => {
+    const width = element.width || 150;
+    const height = element.height || 76;
+    const x = element.x;
+    const y = element.y;
+    const Icon = getScadaDeviceIcon(device);
+    const stroke = isSelected ? '#fb923c' : style.stroke;
+    const commonProps = {
+      fill: style.fill,
+      stroke,
+      strokeWidth: isSelected ? 3 : 2,
+      className: state === 'critical' ? 'scada-alarm-pulse' : undefined,
+    };
+    const iconSize = Math.max(24, Math.min(42, Math.min(width, height) * 0.34));
+    const iconX = x + width / 2 - iconSize / 2;
+    const iconY = y + Math.max(16, height * 0.34 - iconSize / 2);
+    const deviceType = device?.type || 'default';
+
+    if (deviceType === 'air_compressor') {
+      return (
+        <>
+          <rect x={x + 8} y={y + 18} width={width - 16} height={height - 34} rx={(height - 34) / 2} {...commonProps} />
+          <circle cx={x + width - 28} cy={y + 20} r={12} fill="#0f172a" stroke={stroke} strokeWidth="2" />
+          <line x1={x + 34} y1={y + height - 16} x2={x + 34} y2={y + height - 8} stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+          <line x1={x + width - 34} y1={y + height - 16} x2={x + width - 34} y2={y + height - 8} stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+          <Icon x={iconX} y={iconY} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+        </>
+      );
+    }
+
+    if (deviceType === 'pump_controller') {
+      const radius = Math.min(height * 0.36, width * 0.22);
+      return (
+        <>
+          <circle cx={x + 46} cy={y + height / 2} r={radius} {...commonProps} />
+          <rect x={x + 58} y={y + height * 0.28} width={width - 72} height={height * 0.44} rx={8} {...commonProps} />
+          <circle cx={x + 46} cy={y + height / 2} r={radius * 0.42} fill="#020617" stroke={stroke} strokeWidth="2" />
+          <Icon x={x + width - iconSize - 22} y={iconY} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+        </>
+      );
+    }
+
+    if (deviceType === 'temperature_sensor' || deviceType === 'sensor') {
+      const sensorWidth = Math.max(44, Math.min(64, width * 0.34));
+      const sensorX = x + width / 2 - sensorWidth / 2;
+      return (
+        <>
+          <rect x={sensorX} y={y + 8} width={sensorWidth} height={height - 16} rx={sensorWidth / 2} {...commonProps} />
+          <circle cx={x + width / 2} cy={y + height - 24} r={sensorWidth * 0.28} fill="#020617" stroke={stroke} strokeWidth="2" />
+          <Icon x={iconX} y={y + 18} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+        </>
+      );
+    }
+
+    if (deviceType === 'gateway' || deviceType === 'dtu' || deviceType === 'rtu' || deviceType === 'lora_gateway' || deviceType === 'plc') {
+      return (
+        <>
+          <rect x={x + 12} y={y + 10} width={width - 24} height={height - 20} rx={10} {...commonProps} />
+          <rect x={x + 24} y={y + 22} width={width - 48} height={12} rx={3} fill="#020617" stroke="rgba(148,163,184,0.35)" />
+          <circle cx={x + 32} cy={y + height - 22} r={4} fill={style.badge} />
+          <circle cx={x + 46} cy={y + height - 22} r={4} fill="#334155" />
+          <circle cx={x + 60} cy={y + height - 22} r={4} fill="#334155" />
+          <Icon x={iconX} y={iconY + 2} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+        </>
+      );
+    }
+
+    if (deviceType === 'energy_meter' || deviceType === 'solar_inverter') {
+      return (
+        <>
+          <rect x={x + 14} y={y + 8} width={width - 28} height={height - 16} rx={8} {...commonProps} />
+          <rect x={x + 28} y={y + 22} width={width - 56} height={18} rx={4} fill="#020617" stroke="rgba(148,163,184,0.35)" />
+          <line x1={x + 28} y1={y + height - 22} x2={x + width - 28} y2={y + height - 22} stroke={stroke} strokeWidth="2" strokeDasharray="4 4" />
+          <Icon x={iconX} y={iconY + 4} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+        </>
+      );
+    }
+
+    return (
+      <>
+        <rect x={x} y={y} width={width} height={height} rx={10} {...commonProps} />
+        <Icon x={iconX} y={iconY} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />
+      </>
+    );
+  };
+
   const renderElement = (element: ScadaElement) => {
     if (isLineElement(element)) return renderLine(element);
 
@@ -339,7 +442,11 @@ export function ScadaView() {
         }}
         className={cn(editMode ? 'cursor-move' : element.deviceId && 'cursor-pointer')}
       >
-        <rect x={element.x} y={element.y} width={width} height={height} rx={8} fill={style.fill} stroke={isSelected ? '#fb923c' : style.stroke} strokeWidth={isSelected ? 3 : 2} className={state === 'critical' ? 'scada-alarm-pulse' : ''} />
+        {element.type === 'device' ? (
+          renderDeviceGraphic(element, device, style, isSelected, state)
+        ) : (
+          <rect x={element.x} y={element.y} width={width} height={height} rx={8} fill={style.fill} stroke={isSelected ? '#fb923c' : style.stroke} strokeWidth={isSelected ? 3 : 2} className={state === 'critical' ? 'scada-alarm-pulse' : ''} />
+        )}
         <circle cx={element.x + 18} cy={element.y + 20} r={5} fill={style.badge} />
         <text x={element.x + 32} y={element.y + 24} fill="#e5e7eb" fontSize="13" fontWeight="700">{element.label}</text>
         <text x={element.x + 16} y={element.y + 52} fill={style.text} fontSize={element.type === 'metric' ? 20 : 17} fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">

@@ -542,6 +542,9 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
               )
             })}
           </div>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Used in device lists, device details, control panels, and the SCADA operations view.
+          </p>
         </div>
 
         {/* Config / Advanced */}
