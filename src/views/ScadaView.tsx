@@ -1419,7 +1419,6 @@ export function ScadaView() {
         ) : (
           renderShapeFrame(element, style, isSelected, state, value, device)
         )}
-        <circle cx={element.x + 18} cy={element.y + 20} r={5} fill={style.badge} />
         {renderEditableText(element, 'label', element.label, labelLayout, { fill: '#e5e7eb', fontWeight: 700 })}
         {renderEditableText(element, 'value', formatMetricValue(value, element.unit), valueLayout, { fill: style.text, fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' })}
         {renderEditableText(element, 'meta', metaText, metaLayout, { fill: '#94a3b8' })}
