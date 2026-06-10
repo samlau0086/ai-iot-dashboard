@@ -222,6 +222,7 @@ export interface ScadaShapePrimitive {
     operatorValue?: string | number;
     deviceStatus?: 'online' | 'offline' | 'warning' | 'normal' | 'critical';
     durationSeconds?: number;
+    repeatCount?: number | 'indefinite';
     centerX?: number;
     centerY?: number;
     rotateFrom?: number;

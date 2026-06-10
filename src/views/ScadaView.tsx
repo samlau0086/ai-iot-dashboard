@@ -704,6 +704,20 @@ export function ScadaView() {
     setSelectedEndpointId('');
   };
 
+  const openShapeManager = () => {
+    const selectedElement = draft.elements.find((element) => element.id === selectedElementId);
+    const shapePresetId = selectedElement ? getShapePreset(selectedElement) : '';
+    const customShape = scadaShapePresets.find((preset) => preset.id === shapePresetId);
+    if (customShape) {
+      startEditShape(customShape);
+    } else {
+      setEditingShape(null);
+      setSelectedPrimitiveId('');
+      setSelectedEndpointId('');
+    }
+    setShapeManagerOpen(true);
+  };
+
   const updateEditingPrimitive = (id: string, patch: Partial<ScadaShapePrimitive>) => {
     setEditingShape((current) => current ? {
       ...current,
@@ -1265,6 +1279,9 @@ export function ScadaView() {
     const rotationCenterY = mapY(primitive.rotation?.centerY ?? primitiveCenter.y);
     const animation = shouldPlayAnimation ? primitive.animation : undefined;
     const duration = Math.max(0.02, animation?.durationSeconds || 2);
+    const repeatCount = animation?.repeatCount === undefined || animation.repeatCount === 'indefinite'
+      ? 'indefinite'
+      : String(Math.max(1, Number(animation.repeatCount) || 1));
     const staticRotation = primitive.rotation?.angle
       ? `rotate(${primitive.rotation.angle} ${rotationCenterX} ${rotationCenterY})`
       : undefined;
@@ -1276,7 +1293,7 @@ export function ScadaView() {
       const to = animation.scaleTo ?? 1.12;
       return (
         <g key={primitive.id} transform={`translate(${centerX} ${centerY})`}>
-          <animateTransform attributeName="transform" type="scale" values={`${from};${to};${from}`} dur={`${duration}s`} repeatCount="indefinite" additive="sum" />
+          <animateTransform attributeName="transform" type="scale" values={`${from};${to};${from}`} dur={`${duration}s`} repeatCount={repeatCount} additive="sum" />
           <g transform={`translate(${-centerX} ${-centerY})`}>
             <g transform={staticRotation}>{content}</g>
           </g>
@@ -1296,7 +1313,7 @@ export function ScadaView() {
             values="1;1;0;0"
             keyTimes={`0;${visibleRatio};${visibleRatio};1`}
             dur={`${totalSeconds}s`}
-            repeatCount="indefinite"
+            repeatCount={repeatCount}
           />
           {content}
         </g>
@@ -1306,7 +1323,7 @@ export function ScadaView() {
     if (animation?.type === 'pulse') {
       return (
         <g key={primitive.id} transform={staticRotation}>
-          <animate attributeName="opacity" values=".45;1;.45" dur={`${duration}s`} repeatCount="indefinite" />
+          <animate attributeName="opacity" values=".45;1;.45" dur={`${duration}s`} repeatCount={repeatCount} />
           {content}
         </g>
       );
@@ -1315,7 +1332,7 @@ export function ScadaView() {
     if (animation?.type === 'strokeFlow') {
       return (
         <g key={primitive.id} transform={staticRotation} strokeDasharray={primitive.dash || '10 8'}>
-          <animate attributeName="stroke-dashoffset" values="0;-36" dur={`${duration}s`} repeatCount="indefinite" />
+          <animate attributeName="stroke-dashoffset" values="0;-36" dur={`${duration}s`} repeatCount={repeatCount} />
           {content}
         </g>
       );
@@ -1329,7 +1346,7 @@ export function ScadaView() {
             type="rotate"
             values={`${animation.rotateFrom ?? 0} ${rotationCenterX} ${rotationCenterY};${animation.rotateTo ?? 360} ${rotationCenterX} ${rotationCenterY}`}
             dur={`${duration}s`}
-            repeatCount="indefinite"
+            repeatCount={repeatCount}
             additive="sum"
           />
         )}
@@ -1339,7 +1356,7 @@ export function ScadaView() {
             type="translate"
             values={`${mapX(animation.fromX ?? primitive.x) - mapX(primitive.x)} ${mapY(animation.fromY ?? primitive.y) - mapY(primitive.y)};${mapX(animation.toX ?? primitive.x) - mapX(primitive.x)} ${mapY(animation.toY ?? primitive.y) - mapY(primitive.y)};${mapX(animation.fromX ?? primitive.x) - mapX(primitive.x)} ${mapY(animation.fromY ?? primitive.y) - mapY(primitive.y)}`}
             dur={`${duration}s`}
-            repeatCount="indefinite"
+            repeatCount={repeatCount}
             additive="sum"
           />
         )}
@@ -2344,6 +2361,24 @@ export function ScadaView() {
                               Duration (ms)
                               <input type="number" min={20} step={50} value={Math.round((selectedPrimitive.animation?.durationSeconds ?? 2) * 1000)} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), durationSeconds: Math.max(20, Number(event.target.value) || 2000) / 1000 } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
                             </label>
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Run Count
+                              <input
+                                type="text"
+                                value={selectedPrimitive.animation?.repeatCount ?? 'indefinite'}
+                                onChange={(event) => {
+                                  const value = event.target.value.trim();
+                                  updateEditingPrimitive(selectedPrimitive.id, {
+                                    animation: {
+                                      ...(selectedPrimitive.animation || {}),
+                                      repeatCount: value === '' || value.toLowerCase() === 'indefinite' ? 'indefinite' : Math.max(1, Number(value) || 1),
+                                    },
+                                  });
+                                }}
+                                placeholder="indefinite / 3"
+                                className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                              />
+                            </label>
                           </div>
                           {(selectedPrimitive.animation?.type === 'rotate' || selectedPrimitive.animation?.type === 'scale') && (
                             <div className="mt-2 grid grid-cols-2 gap-2">
@@ -2508,7 +2543,7 @@ export function ScadaView() {
             <Move className="h-4 w-4" />
             {editMode ? 'Editing' : 'Edit Mode'}
           </button>
-          <button type="button" onClick={() => setShapeManagerOpen(true)} className="inline-flex h-9 items-center gap-2 rounded border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+          <button type="button" onClick={openShapeManager} className="inline-flex h-9 items-center gap-2 rounded border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
             Shape Library
           </button>
           <button type="button" onClick={saveScene} className="inline-flex h-9 items-center gap-2 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500">
@@ -2602,7 +2637,7 @@ export function ScadaView() {
                         .map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
                     </select>
                   </label>
-                  <button type="button" onClick={() => setShapeManagerOpen(true)} className="inline-flex h-8 w-full items-center justify-center rounded border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                  <button type="button" onClick={openShapeManager} className="inline-flex h-8 w-full items-center justify-center rounded border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
                     Manage Custom Shapes
                   </button>
                 </div>
