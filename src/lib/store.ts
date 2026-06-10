@@ -183,7 +183,8 @@ export type ScadaShapePrimitiveType =
   | 'busbar'
   | 'terminal'
   | 'bracket'
-  | 'tank';
+  | 'tank'
+  | 'svgIcon';
 
 export interface ScadaShapePrimitive {
   id: string;
@@ -194,6 +195,8 @@ export interface ScadaShapePrimitive {
   height?: number;
   rx?: number;
   points?: Array<{ x: number; y: number }>;
+  iconUrl?: string;
+  iconName?: string;
   strokeMode?: 'state' | 'muted' | 'accent' | 'none';
   fillMode?: 'state' | 'panel' | 'accent' | 'none';
   strokeWidth?: number;
@@ -206,6 +209,10 @@ export interface ScadaShapePrimitive {
   };
   animation?: {
     type?: 'none' | 'rotate' | 'scale' | 'translate';
+    trigger?: 'always' | 'deviceOnline' | 'metricNonZero' | 'metricGreaterThan' | 'metricEquals' | 'deviceStatus';
+    metricKey?: string;
+    operatorValue?: string | number;
+    deviceStatus?: 'online' | 'offline' | 'warning' | 'normal' | 'critical';
     durationSeconds?: number;
     centerX?: number;
     centerY?: number;

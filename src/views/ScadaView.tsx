@@ -3,6 +3,7 @@ import { Activity, Cpu, Droplets, Gauge, Move, Network, Save, Trash2, Zap } from
 import { useNavigate } from 'react-router-dom';
 import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene, type ScadaShapePreset, type ScadaShapePrimitive, type ScadaShapePrimitiveType, type ScadaShapeEndpoint } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
+import { scadaIconPresets } from '../lib/scadaIconPresets';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import type { Device } from '../types';
@@ -70,6 +71,7 @@ const createPrimitive = (type: ScadaShapePrimitiveType): ScadaShapePrimitive => 
   if (type === 'terminal') return { ...base, x: 22, y: 28, width: 56, height: 44, fillMode: 'panel', strokeMode: 'state' };
   if (type === 'bracket') return { ...base, x: 12, y: 18, width: 76, height: 64, fillMode: 'none', strokeMode: 'muted', strokeWidth: 3 };
   if (type === 'tank') return { ...base, x: 24, y: 12, width: 52, height: 76, fillMode: 'state', strokeMode: 'state' };
+  if (type === 'svgIcon') return { ...base, x: 24, y: 18, width: 52, height: 52, fillMode: 'none', strokeMode: 'none' };
   return { ...base, width: 76, height: 76, rx: 8, fillMode: 'state' };
 };
 const primitiveTypes: ScadaShapePrimitiveType[] = ['rect', 'ellipse', 'line', 'polygon', 'propeller', 'valve', 'arrow', 'busbar', 'terminal', 'bracket', 'tank'];
@@ -175,6 +177,28 @@ const getPrimitiveCenter = (primitive: ScadaShapePrimitive) => ({
   x: primitive.x + (primitive.width ?? 32) / 2,
   y: primitive.y + (primitive.height ?? 32) / 2,
 });
+const shouldPlayPrimitiveAnimation = (
+  primitive: ScadaShapePrimitive,
+  device: Device | undefined,
+  elementState: string | undefined,
+  fallbackMetricKey: string | undefined,
+  fallbackMetricValue: number | undefined,
+) => {
+  const animation = primitive.animation;
+  const trigger = animation?.trigger || 'always';
+  if (!animation || animation.type === 'none' || trigger === 'always') return true;
+  if (trigger === 'deviceOnline') return Boolean(device?.lastSeen && device.status !== 'offline');
+  if (trigger === 'deviceStatus') return Boolean(animation.deviceStatus && (device?.status === animation.deviceStatus || elementState === animation.deviceStatus));
+
+  const metricKey = animation.metricKey || fallbackMetricKey;
+  const rawMetric = metricKey ? device?.metrics?.[metricKey] : fallbackMetricValue;
+  const numericMetric = Number(rawMetric);
+
+  if (trigger === 'metricNonZero') return Number.isFinite(numericMetric) && numericMetric !== 0;
+  if (trigger === 'metricGreaterThan') return Number.isFinite(numericMetric) && numericMetric > Number(animation.operatorValue ?? 0);
+  if (trigger === 'metricEquals') return String(rawMetric ?? '') === String(animation.operatorValue ?? '');
+  return true;
+};
 
 export function ScadaView() {
   const navigate = useNavigate();
@@ -201,6 +225,7 @@ export function ScadaView() {
   const [editingShape, setEditingShape] = useState<ScadaShapePreset | null>(null);
   const [selectedPrimitiveId, setSelectedPrimitiveId] = useState('');
   const [selectedEndpointId, setSelectedEndpointId] = useState('');
+  const [selectedIconPresetId, setSelectedIconPresetId] = useState(scadaIconPresets[0]?.id || '');
   const [shapeEditorDragState, setShapeEditorDragState] = useState<ShapeEditorDragState | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const shapeEditorSvgRef = useRef<SVGSVGElement | null>(null);
@@ -430,6 +455,19 @@ export function ScadaView() {
 
   const addEditingPrimitive = (type: ScadaShapePrimitiveType) => {
     const primitive = createPrimitive(type);
+    setEditingShape((current) => current ? { ...current, primitives: [...current.primitives, primitive] } : current);
+    setSelectedPrimitiveId(primitive.id);
+    setSelectedEndpointId('');
+  };
+
+  const addEditingIconPreset = () => {
+    const preset = scadaIconPresets.find((item) => item.id === selectedIconPresetId) || scadaIconPresets[0];
+    if (!preset) return;
+    const primitive = {
+      ...createPrimitive('svgIcon'),
+      iconUrl: preset.url,
+      iconName: preset.name,
+    };
     setEditingShape((current) => current ? { ...current, primitives: [...current.primitives, primitive] } : current);
     setSelectedPrimitiveId(primitive.id);
     setSelectedEndpointId('');
@@ -798,12 +836,13 @@ export function ScadaView() {
     primitive: ScadaShapePrimitive,
     content: React.ReactNode,
     mapX: (value?: number) => number,
-    mapY: (value?: number) => number
+    mapY: (value?: number) => number,
+    shouldPlayAnimation = true
   ) => {
     const primitiveCenter = getPrimitiveCenter(primitive);
     const rotationCenterX = mapX(primitive.rotation?.centerX ?? primitiveCenter.x);
     const rotationCenterY = mapY(primitive.rotation?.centerY ?? primitiveCenter.y);
-    const animation = primitive.animation;
+    const animation = shouldPlayAnimation ? primitive.animation : undefined;
     const duration = Math.max(0.2, animation?.durationSeconds || 2);
     const staticRotation = primitive.rotation?.angle
       ? `rotate(${primitive.rotation.angle} ${rotationCenterX} ${rotationCenterY})`
@@ -856,6 +895,8 @@ export function ScadaView() {
     style: typeof stateStyles.normal,
     isSelected: boolean,
     state: string,
+    metricValue?: number,
+    device?: Device,
     inset = 0
   ) => {
     const width = (element.width || 150) - inset * 2;
@@ -919,7 +960,26 @@ export function ScadaView() {
             const centerY = primitiveY + scaledHeight / 2;
             const scaleX = scaledWidth / 100;
             const scaleY = scaledHeight / 100;
-            const wrapPrimitive = (content: React.ReactNode) => renderPrimitiveMotion(primitive, content, toX, toY);
+            const wrapPrimitive = (content: React.ReactNode) => renderPrimitiveMotion(
+              primitive,
+              content,
+              toX,
+              toY,
+              shouldPlayPrimitiveAnimation(primitive, device, state, element.metricKey, metricValue)
+            );
+            if (primitive.type === 'svgIcon') {
+              return wrapPrimitive(
+                <image
+                  href={primitive.iconUrl || ''}
+                  x={primitiveX}
+                  y={primitiveY}
+                  width={scaledWidth}
+                  height={scaledHeight}
+                  opacity={paint.opacity}
+                  preserveAspectRatio="xMidYMid meet"
+                />
+              );
+            }
             if (primitive.type === 'propeller') {
               return wrapPrimitive(
                 <g transform={`translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY})`} {...paint}>
@@ -1030,7 +1090,7 @@ export function ScadaView() {
     return <rect x={x} y={y} width={width} height={height} rx={8} {...commonProps} />;
   };
 
-  const renderDeviceGraphic = (element: ScadaElement, device: Device | undefined, style: typeof stateStyles.normal, isSelected: boolean, state: string) => {
+  const renderDeviceGraphic = (element: ScadaElement, device: Device | undefined, style: typeof stateStyles.normal, isSelected: boolean, state: string, value?: number) => {
     const width = element.width || 150;
     const height = element.height || 76;
     const x = element.x;
@@ -1069,7 +1129,7 @@ export function ScadaView() {
     if (getShapePreset(element) !== 'auto') {
       return (
         <>
-          {renderShapeFrame(element, style, isSelected, state)}
+          {renderShapeFrame(element, style, isSelected, state, value, device)}
           {renderIcon()}
         </>
       );
@@ -1190,9 +1250,9 @@ export function ScadaView() {
         className={cn(editMode ? 'cursor-move' : element.deviceId && 'cursor-pointer')}
       >
         {element.type === 'device' ? (
-          renderDeviceGraphic(element, device, style, isSelected, state)
+          renderDeviceGraphic(element, device, style, isSelected, state, value)
         ) : (
-          renderShapeFrame(element, style, isSelected, state)
+          renderShapeFrame(element, style, isSelected, state, value, device)
         )}
         <circle cx={element.x + 18} cy={element.y + 20} r={5} fill={style.badge} />
         {renderEditableText(element, 'label', element.label, labelLayout, { fill: '#e5e7eb', fontWeight: 700 })}
@@ -1234,6 +1294,19 @@ export function ScadaView() {
     const scaleX = width / 100;
     const scaleY = height / 100;
     const wrapPrimitive = (content: React.ReactNode) => renderPrimitiveMotion(primitive, content, (value = 0) => value, (value = 0) => value);
+    if (primitive.type === 'svgIcon') {
+      return wrapPrimitive(
+        <image
+          href={primitive.iconUrl || ''}
+          x={primitive.x}
+          y={primitive.y}
+          width={width}
+          height={height}
+          opacity={paint.opacity}
+          preserveAspectRatio="xMidYMid meet"
+        />
+      );
+    }
     if (primitive.type === 'propeller') {
       return wrapPrimitive(
         <g transform={`translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY})`} {...paint}>
@@ -1425,6 +1498,26 @@ export function ScadaView() {
                       ))}
                     </div>
                     <div className="rounded border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Preset Shapes</div>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+                        <select value={selectedIconPresetId} onChange={(event) => setSelectedIconPresetId(event.target.value)} className="h-9 rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+                          {scadaIconPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                        </select>
+                        <button type="button" onClick={addEditingIconPreset} className="rounded bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600">
+                          Add Preset
+                        </button>
+                      </div>
+                      <div className="mt-2 max-h-24 overflow-auto rounded bg-slate-950 p-2">
+                        <div className="grid grid-cols-8 gap-2">
+                          {scadaIconPresets.slice(0, 32).map((preset) => (
+                            <button key={preset.id} type="button" onClick={() => setSelectedIconPresetId(preset.id)} className={cn('flex h-8 items-center justify-center rounded border bg-white p-1', selectedIconPresetId === preset.id ? 'border-orange-500' : 'border-slate-700')}>
+                              <img src={preset.url} alt={preset.name} className="h-full w-full object-contain" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
                       <div className="flex items-center justify-between">
                         <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Layers</h3>
                         <span className="text-xs text-slate-500">Top layer first</span>
@@ -1444,7 +1537,7 @@ export function ScadaView() {
                                   }}
                                   className="flex w-full items-center justify-between text-left"
                                 >
-                                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{primitive.type}</span>
+                                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{primitive.iconName || primitive.type}</span>
                                   <span className="font-mono text-[10px] text-slate-500">#{index + 1}</span>
                                 </button>
                                 <div className="mt-2 flex flex-wrap gap-1">
@@ -1494,11 +1587,26 @@ export function ScadaView() {
                     {selectedPrimitive ? (
                       <div className="mt-3 space-y-3">
                         <div className="flex items-center justify-between rounded bg-white p-2 text-xs font-semibold text-slate-600 dark:bg-slate-950 dark:text-slate-300">
-                          <span>{selectedPrimitive.type}</span>
+                          <span>{selectedPrimitive.iconName || selectedPrimitive.type}</span>
                           {editingShape.primitives.length > 1 && (
                             <button type="button" onClick={() => removeEditingPrimitive(selectedPrimitive.id)} className="text-red-500 hover:text-red-400">Remove</button>
                           )}
                         </div>
+                        {selectedPrimitive.type === 'svgIcon' && (
+                          <label className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                            Preset Shape
+                            <select
+                              value={scadaIconPresets.find((preset) => preset.url === selectedPrimitive.iconUrl)?.id || ''}
+                              onChange={(event) => {
+                                const preset = scadaIconPresets.find((item) => item.id === event.target.value);
+                                if (preset) updateEditingPrimitive(selectedPrimitive.id, { iconUrl: preset.url, iconName: preset.name });
+                              }}
+                              className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                            >
+                              {scadaIconPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                            </select>
+                          </label>
+                        )}
                         <div className="grid grid-cols-2 gap-2">
                           {(['x', 'y', 'width', 'height', 'rx', 'strokeWidth', 'opacity'] as const).map((key) => (
                             <label key={key} className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
@@ -1551,6 +1659,41 @@ export function ScadaView() {
                                 {['none', 'rotate', 'scale', 'translate'].map((value) => <option key={value} value={value}>{value}</option>)}
                               </select>
                             </label>
+                            <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Trigger
+                              <select value={selectedPrimitive.animation?.trigger || 'always'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), trigger: event.target.value as NonNullable<ScadaShapePrimitive['animation']>['trigger'] } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+                                <option value="always">Always</option>
+                                <option value="deviceOnline">Device online</option>
+                                <option value="metricNonZero">When reading != 0</option>
+                                <option value="metricGreaterThan">Metric greater than</option>
+                                <option value="metricEquals">Metric equals</option>
+                                <option value="deviceStatus">Device status</option>
+                              </select>
+                            </label>
+                          </div>
+                          {(selectedPrimitive.animation?.trigger === 'metricNonZero' || selectedPrimitive.animation?.trigger === 'metricGreaterThan' || selectedPrimitive.animation?.trigger === 'metricEquals') && (
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                Metric Key
+                                <input value={selectedPrimitive.animation?.metricKey || ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), metricKey: event.target.value } })} placeholder="Default metric" className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                              </label>
+                              {(selectedPrimitive.animation?.trigger === 'metricGreaterThan' || selectedPrimitive.animation?.trigger === 'metricEquals') && (
+                                <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                  Value
+                                  <input value={selectedPrimitive.animation?.operatorValue ?? ''} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), operatorValue: event.target.value } })} placeholder="0 / running" className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+                                </label>
+                              )}
+                            </div>
+                          )}
+                          {selectedPrimitive.animation?.trigger === 'deviceStatus' && (
+                            <label className="mt-2 block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                              Device Status
+                              <select value={selectedPrimitive.animation?.deviceStatus || 'online'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), deviceStatus: event.target.value as NonNullable<ScadaShapePrimitive['animation']>['deviceStatus'] } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+                                {['online', 'normal', 'warning', 'critical', 'offline'].map((statusOption) => <option key={statusOption} value={statusOption}>{statusOption}</option>)}
+                              </select>
+                            </label>
+                          )}
+                          <div className="mt-2 grid grid-cols-2 gap-2">
                             <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
                               Duration
                               <input type="number" min={0.2} step={0.1} value={selectedPrimitive.animation?.durationSeconds ?? 2} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), durationSeconds: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
