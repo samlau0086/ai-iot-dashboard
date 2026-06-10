@@ -36,6 +36,11 @@ const splitTopics = (value) => Array.isArray(value)
   : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
 const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+const isHex = (value, length = null) => {
+  const text = String(value || '').trim();
+  return /^[0-9a-f]+$/i.test(text) && (length === null || text.length === length);
+};
+const normalizeHex = (value) => String(value || '').replace(/[^0-9a-f]/gi, '').toLowerCase();
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;',
   '<': '&lt;',
@@ -43,6 +48,56 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => 
   '"': '&quot;',
   "'": '&#39;',
 }[char]));
+
+const aesEncryptBlock = (key, block) => {
+  const cipher = crypto.createCipheriv(`aes-${key.length * 8}-ecb`, key, null);
+  cipher.setAutoPadding(false);
+  return Buffer.concat([cipher.update(block), cipher.final()]);
+};
+
+const xorBuffers = (first, second) => Buffer.from(first.map((byte, index) => byte ^ second[index]));
+const leftShiftOneBit = (input) => {
+  const output = Buffer.alloc(input.length);
+  let carry = 0;
+  for (let index = input.length - 1; index >= 0; index--) {
+    const byte = input[index];
+    output[index] = ((byte << 1) & 0xff) | carry;
+    carry = (byte & 0x80) ? 1 : 0;
+  }
+  return output;
+};
+const generateCmacSubkeys = (key) => {
+  const zero = Buffer.alloc(16, 0);
+  const l = aesEncryptBlock(key, zero);
+  const k1 = leftShiftOneBit(l);
+  if (l[0] & 0x80) k1[15] ^= 0x87;
+  const k2 = leftShiftOneBit(k1);
+  if (k1[0] & 0x80) k2[15] ^= 0x87;
+  return {k1, k2};
+};
+const aesCmac = (key, message) => {
+  const {k1, k2} = generateCmacSubkeys(key);
+  const blockCount = Math.max(1, Math.ceil(message.length / 16));
+  const completeLastBlock = message.length > 0 && message.length % 16 === 0;
+  const lastBlockStart = (blockCount - 1) * 16;
+  let lastBlock;
+
+  if (completeLastBlock) {
+    lastBlock = xorBuffers(message.subarray(lastBlockStart, lastBlockStart + 16), k1);
+  } else {
+    const padded = Buffer.alloc(16, 0);
+    message.subarray(lastBlockStart).copy(padded);
+    padded[message.length - lastBlockStart] = 0x80;
+    lastBlock = xorBuffers(padded, k2);
+  }
+
+  let x = Buffer.alloc(16, 0);
+  for (let index = 0; index < blockCount - 1; index++) {
+    const block = message.subarray(index * 16, index * 16 + 16);
+    x = aesEncryptBlock(key, xorBuffers(x, block));
+  }
+  return aesEncryptBlock(key, xorBuffers(x, lastBlock));
+};
 
 const sendRealtimeEvent = (res, type, payload) => {
   res.write(`event: ${type}\n`);
@@ -499,6 +554,7 @@ const publicAccessCredential = (credential) => ({
   enabled: credential.enabled !== false,
   tagId: credential.tagId || '',
   groups: Array.isArray(credential.groups) ? credential.groups : [],
+  lastCounter: Number.isFinite(Number(credential.lastCounter)) ? Number(credential.lastCounter) : null,
   hasLink: Boolean(credential.token),
   hasLatestQrLink: Boolean(credential.latestToken),
   rotateOnUse: Boolean(credential.rotateOnUse),
@@ -520,6 +576,56 @@ const normalizeAccessMethod = (value) => {
 const normalizeAccessGroups = (value) => {
   const source = Array.isArray(value) ? value : String(value || '').split(',');
   return Array.from(new Set(source.map((item) => String(item).trim()).filter(Boolean)));
+};
+const parseNfcCounter = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const parsed = /^[0-9]+$/.test(text)
+    ? Number.parseInt(text, 10)
+    : /^[0-9a-f]+$/i.test(text)
+      ? Number.parseInt(text, 16)
+      : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+};
+const counterToBuffer = (counter, endian = 'be') => {
+  const buffer = Buffer.alloc(3);
+  if (endian === 'le') {
+    buffer[0] = counter & 0xff;
+    buffer[1] = (counter >> 8) & 0xff;
+    buffer[2] = (counter >> 16) & 0xff;
+  } else {
+    buffer[0] = (counter >> 16) & 0xff;
+    buffer[1] = (counter >> 8) & 0xff;
+    buffer[2] = counter & 0xff;
+  }
+  return buffer;
+};
+const verifyNfcCmac = ({aesKey, uid, counter, cmac}) => {
+  const normalizedKey = normalizeHex(aesKey);
+  const normalizedUid = normalizeHex(uid);
+  const normalizedCmac = normalizeHex(cmac);
+  if (![32, 48, 64].includes(normalizedKey.length)) return {ok: false, reason: 'Access AES Key must be 16, 24, or 32 bytes in hex.'};
+  if (!isHex(normalizedUid) || normalizedUid.length < 8 || normalizedUid.length % 2 !== 0) return {ok: false, reason: 'NFC uid must be a hex string.'};
+  if (!isHex(normalizedCmac, 16)) return {ok: false, reason: 'NFC cmac must be 8 bytes / 16 hex characters.'};
+
+  const key = Buffer.from(normalizedKey, 'hex');
+  const uidBytes = Buffer.from(normalizedUid, 'hex');
+  const messages = [
+    Buffer.concat([uidBytes, counterToBuffer(counter, 'be')]),
+    Buffer.concat([uidBytes, counterToBuffer(counter, 'le')]),
+  ];
+  const candidates = messages.flatMap((message) => {
+    const mac = aesCmac(key, message);
+    return [
+      mac.subarray(0, 8).toString('hex'),
+      mac.subarray(8, 16).toString('hex'),
+      Buffer.from([mac[1], mac[3], mac[5], mac[7], mac[9], mac[11], mac[13], mac[15]]).toString('hex'),
+    ];
+  });
+
+  return candidates.includes(normalizedCmac)
+    ? {ok: true}
+    : {ok: false, reason: 'NFC CMAC verification failed.'};
 };
 const sanitizeAccessDefinition = (payload = {}, existing = {}) => ({
   ...existing,
@@ -551,7 +657,7 @@ const createLatestQrLink = (req, token) => {
 const createNfcAccessLink = (req, token) => {
   const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
   const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
-  return `${proto}://${host}/nfc/${token}?e=00000000000000000000000000000000&c=0000000000000000`;
+  return `${proto}://${host}/nfc/${token}?uid=00000000000000&ctr=000000&cmac=0000000000000000`;
 };
 
 const rotateCredentialIfNeeded = (credential, now = new Date()) => {
@@ -3843,7 +3949,9 @@ app.get('/a/:token', handleQrAccessRequest);
 
 const handleNfcAccessRequest = async (req, res) => {
   const now = new Date();
-  const providedTagId = String(req.query.tag_id || req.query.tagId || req.query.uid || '').trim();
+  const providedUid = normalizeHex(req.query.uid || '');
+  const providedCounter = parseNfcCounter(req.query.ctr ?? req.query.counter);
+  const providedCmac = normalizeHex(req.query.cmac || req.query.c || '');
   const requestMeta = {
     ip: req.ip,
     userAgent: req.get('user-agent') || '',
@@ -3870,7 +3978,9 @@ const handleNfcAccessRequest = async (req, res) => {
         reason,
         params: {
           ...(access?.extraParams || {}),
-          tagId: credential?.tagId || providedTagId,
+          uid: credential?.tagId || providedUid,
+          counter: providedCounter,
+          cmac: providedCmac,
           credentialGroups: normalizeAccessGroups(credential?.groups),
         },
         request: requestMeta,
@@ -3891,8 +4001,31 @@ const handleNfcAccessRequest = async (req, res) => {
       await reject(403, 'NFC tag is disabled.');
       return;
     }
-    if (credential.tagId && providedTagId && credential.tagId !== providedTagId) {
-      await reject(403, 'NFC tag ID does not match this credential.');
+    if (!providedUid || providedCounter === null || !providedCmac) {
+      await reject(400, 'NFC uid, ctr, and cmac are required.');
+      return;
+    }
+    if (!credential.tagId) {
+      await reject(403, 'NFC credential UID is not configured.');
+      return;
+    }
+    if (normalizeHex(credential.tagId) !== providedUid) {
+      await reject(403, 'NFC UID does not match this credential.');
+      return;
+    }
+    const cmacResult = verifyNfcCmac({
+      aesKey: access.aesKey,
+      uid: providedUid,
+      counter: providedCounter,
+      cmac: providedCmac,
+    });
+    if (!cmacResult.ok) {
+      await reject(403, cmacResult.reason);
+      return;
+    }
+    const lastCounter = Number.isFinite(Number(credential.lastCounter)) ? Number(credential.lastCounter) : -1;
+    if (providedCounter <= lastCounter) {
+      await reject(409, `NFC counter replay detected. Last accepted counter is ${lastCounter}.`);
       return;
     }
     if (credential.validFrom && now < new Date(credential.validFrom)) {
@@ -3912,7 +4045,10 @@ const handleNfcAccessRequest = async (req, res) => {
     const credentialGroups = normalizeAccessGroups(credential.groups);
     const eventParams = {
       ...(access.extraParams || {}),
-      tagId: credential.tagId || providedTagId,
+      uid: providedUid,
+      tagId: providedUid,
+      counter: providedCounter,
+      cmac: providedCmac,
       credentialGroups,
     };
     const nextCredentials = accessCredentials.map((item) => (
@@ -3920,6 +4056,7 @@ const handleNfcAccessRequest = async (req, res) => {
         ? {
             ...item,
             usedCount: Number(item.usedCount || 0) + 1,
+            lastCounter: providedCounter,
             lastUsedAt: acceptedAt,
           }
         : item
@@ -3947,7 +4084,9 @@ const handleNfcAccessRequest = async (req, res) => {
       credentialId: credential.id,
       credentialName: credential.name,
       credentialGroups,
-      tagId: credential.tagId || providedTagId,
+      tagId: providedUid,
+      uid: providedUid,
+      counter: providedCounter,
       params: eventParams,
       request: requestMeta,
       accessEvent,

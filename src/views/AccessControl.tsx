@@ -589,10 +589,10 @@ export function AccessControl() {
                     <input
                       value={selectedAccess.aesKey || ''}
                       onChange={(event) => patchAccess(selectedAccess.id, { aesKey: event.target.value })}
-                      placeholder="32 hex chars for AES-128, reserved for NTAG424 SDM validation"
+                      placeholder="32 hex chars for AES-128 CMAC validation"
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored on this Access for NTAG424 DNA URL Based validation. Current URL access validates token, Tag ID, validity, and usage.</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Used to verify NTAG424 DNA UID Mirror + Counter Mirror CMAC before triggering workflows.</p>
                   </div>
                 )}
                 <div>
@@ -680,14 +680,14 @@ export function AccessControl() {
                 </div>
                 {selectedAccess.method === 'nfc' && (
                   <div>
-                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tag ID</label>
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tag UID</label>
                     <input
                       value={credentialTagId}
                       onChange={(event) => setCredentialTagId(event.target.value)}
-                      placeholder="NTAG424 UID / Tag ID"
+                      placeholder="NTAG424 UID, for example 0491ABCD123456"
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 font-mono text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional hardware tag identifier. If the NFC URL sends tag_id, it must match this value.</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Required NFC tag UID. The tapped URL must send the same uid with an increasing ctr and valid cmac.</p>
                   </div>
                 )}
                 <div className={selectedAccess.method === 'nfc' ? 'md:col-span-2' : ''}>
@@ -843,7 +843,7 @@ export function AccessControl() {
                     <tr>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Name</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Type</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Groups / Tag</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">Groups / UID</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Usage</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Valid Until</th>
                       <th className="px-3 py-2 text-right font-medium text-slate-500">Actions</th>
@@ -860,7 +860,10 @@ export function AccessControl() {
                               <span key={group} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] dark:bg-slate-800">{group}</span>
                             ))}
                           </div>
-                          {credential.tagId && <div className="mt-1 font-mono text-[10px]">{credential.tagId}</div>}
+                          {credential.tagId && <div className="mt-1 font-mono text-[10px]">UID {credential.tagId}</div>}
+                          {credential.type === 'nfc' && (
+                            <div className="mt-1 text-[10px] text-slate-400">last ctr {credential.lastCounter ?? '-'}</div>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-slate-500">{credential.usedCount}/{credential.maxUses}</td>
                         <td className="px-3 py-2 text-slate-500">{new Date(credential.validUntil).toLocaleString()}</td>
@@ -1068,8 +1071,14 @@ export function AccessControl() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   {credentialModal.credential.type === 'nfc' && (
                     <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
-                      <span className="block text-xs text-slate-500">Tag ID</span>
+                      <span className="block text-xs text-slate-500">Tag UID</span>
                       <span className="font-mono text-xs font-semibold text-slate-900 dark:text-white">{credentialModal.credential.tagId || '-'}</span>
+                    </div>
+                  )}
+                  {credentialModal.credential.type === 'nfc' && (
+                    <div className="rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
+                      <span className="block text-xs text-slate-500">Last Counter</span>
+                      <span className="font-mono text-xs font-semibold text-slate-900 dark:text-white">{credentialModal.credential.lastCounter ?? '-'}</span>
                     </div>
                   )}
                   {(credentialModal.credential.groups || []).length > 0 && (
@@ -1100,11 +1109,11 @@ export function AccessControl() {
                 </div>
                 {credentialModal.credential.type === 'nfc' && (
                   <div>
-                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tag ID</label>
+                    <label className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tag UID</label>
                     <input
                       value={credentialDraft.tagId || ''}
                       onChange={(event) => setCredentialDraft((current) => ({ ...current, tagId: event.target.value }))}
-                      placeholder="NTAG424 UID / Tag ID"
+                      placeholder="NTAG424 UID, for example 0491ABCD123456"
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 font-mono text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
                   </div>

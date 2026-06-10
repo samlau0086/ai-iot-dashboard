@@ -88,6 +88,7 @@ export interface AccessCredential {
   enabled: boolean;
   tagId?: string;
   groups?: string[];
+  lastCounter?: number;
   hasLink?: boolean;
   hasLatestQrLink?: boolean;
   rotateOnUse?: boolean;

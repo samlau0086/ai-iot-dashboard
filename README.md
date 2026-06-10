@@ -706,7 +706,7 @@ Access Control adds QR-link and NFC URL based workflow triggers for visitor, ope
 
    ```text
    https://your-domain.com/qr/<random-token>
-   https://your-domain.com/nfc/<random-token>?e=00000000000000000000000000000000&c=0000000000000000
+   https://your-domain.com/nfc/<random-token>?uid=00000000000000&ctr=000000&cmac=0000000000000000
    ```
 
    The link does not contain Access ID, Credential ID, device ID, device name, or other business identifiers.
@@ -717,5 +717,7 @@ Access Control adds QR-link and NFC URL based workflow triggers for visitor, ope
    ```text
    $.access_trigger.output.params.deviceId
    ```
+
+For NFC credentials, configure NTAG424 DNA with UID Mirroring, Counter Mirroring, and CMAC. The backend validates the Access AES Key, `uid`, `ctr`, and `cmac`, then rejects replayed taps where `ctr <= lastCounter`. Only a verified NFC tap dispatches the `NFC Trigger` workflow event.
 
 When the QR or NFC link is visited, the backend validates that the credential is enabled, within its valid period, still has remaining uses, and belongs to an enabled Access entry. If accepted, it dispatches an Access workflow event containing the Access extra parameters and credential groups.
