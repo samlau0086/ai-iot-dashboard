@@ -1598,10 +1598,21 @@ const resolveWorkflowValue = (value, context, currentNodeName) => {
   return value;
 };
 
-const createWorkflowNodeInput = (node, event, context, currentNodeName = normalizeWorkflowNodeName(node, node?.id)) => ({
-  config: resolveWorkflowValue(node.config || {}, context, currentNodeName),
-  event,
-});
+const createWorkflowNodeInput = (node, event, context, currentNodeName = normalizeWorkflowNodeName(node, node?.id)) => {
+  const upstream = context.__lastOutput;
+  const upstreamObject = upstream && typeof upstream === 'object' && !Array.isArray(upstream)
+    ? upstream
+    : upstream !== undefined
+      ? {value: upstream}
+      : {};
+
+  return {
+    ...upstreamObject,
+    config: resolveWorkflowValue(node.config || {}, context, currentNodeName),
+    event,
+    ...(upstream !== undefined ? {previous: sanitizeWorkflowLogValue(upstream)} : {}),
+  };
+};
 
 const createWorkflowTriggerOutput = (trigger, event) => {
   if (trigger?.config?.type === 'access' || trigger?.config?.type === 'nfc_access') {
@@ -1627,6 +1638,13 @@ const recordWorkflowNodeResult = (context, nodeName, step) => {
     input: sanitizeWorkflowLogValue(step.input),
     output: sanitizeWorkflowLogValue(step.output),
   };
+
+  const isConditionStep = step.output
+    && typeof step.output === 'object'
+    && ('passed' in step.output || ['if', 'elif', 'else', 'switch', 'case', 'default'].includes(step.type));
+  if (!isConditionStep && step.status !== 'skipped') {
+    context.__lastOutput = sanitizeWorkflowLogValue(step.output);
+  }
 };
 
 const parseWorkflowRetryInterval = (value) => {
