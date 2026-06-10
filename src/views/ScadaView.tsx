@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
 import { cn } from '../lib/utils';
+import { confirmDelete } from '../lib/confirm';
 import type { Device } from '../types';
 
 const CANVAS_WIDTH = 1100;
@@ -225,6 +226,8 @@ export function ScadaView() {
   };
 
   const removeElement = (id: string) => {
+    const element = draft.elements.find((item) => item.id === id);
+    if (!confirmDelete({ title: 'Delete SCADA element', itemName: element?.label || 'this SCADA element', description: 'The element will be removed from the current SCADA scene.' })) return;
     setDraft((current) => ({ ...current, elements: current.elements.filter((element) => element.id !== id) }));
     setSelectedElementId('');
     setActiveInnerPart(null);

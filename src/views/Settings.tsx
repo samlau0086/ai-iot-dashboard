@@ -3,6 +3,7 @@ import { Bell, Building2, CheckCircle2, Copy, Database, KeyRound, Plus, Send, Se
 import { useAppStore, type NotificationChannel, type SiteTenant } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
+import { confirmDelete } from '../lib/confirm';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
@@ -377,6 +378,7 @@ export function Settings() {
   const removeMqttTopic = (channelId: string, topic: string) => {
     const channel = mqttChannels.find((item) => item.id === channelId);
     if (!channel) return;
+    if (!confirmDelete({ title: 'Remove MQTT topic', itemName: topic, description: `The topic will be removed from ${channel.name}.` })) return;
     updateMqttTopics(channelId, normalizeTopics(channel.topics).filter((item) => item !== topic));
   };
 
@@ -465,6 +467,8 @@ export function Settings() {
 
   const handleRevokeToken = async (tokenId: string) => {
     setTokenMessage('');
+    const token = ingestTokens.find((item) => item.id === tokenId);
+    if (!confirmDelete({ title: 'Revoke ingest token', itemName: token?.name || 'this token', description: 'Gateways using this token will no longer be able to send telemetry.' })) return;
     if (isDemoUser) {
       setTokenMessage('Demo account cannot revoke backend ingest tokens.');
       return;
@@ -720,7 +724,7 @@ export function Settings() {
                         <td className="px-4 py-3 text-right">
                           <button
                             type="button"
-                            onClick={() => deleteSite(site.id)}
+                            onClick={() => confirmDelete({ title: 'Delete site', itemName: site.name, description: 'Dashboards, SCADA scenes, and site assignments for this site may be removed or reassigned.' }) && deleteSite(site.id)}
                             className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
                             title="Delete site"
                           >
@@ -794,7 +798,7 @@ export function Settings() {
                           </label>
                           <button
                             type="button"
-                            onClick={() => setHttpPushChannels((current) => current.filter((item) => item.id !== channel.id))}
+                            onClick={() => confirmDelete({ title: 'Delete HTTP channel', itemName: channel.name, description: 'Gateways using this HTTP endpoint will stop sending telemetry until reconfigured.' }) && setHttpPushChannels((current) => current.filter((item) => item.id !== channel.id))}
                             className="mb-1 rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
                             title="Delete HTTP channel"
                           >
@@ -871,7 +875,7 @@ export function Settings() {
                             </label>
                             <button
                               type="button"
-                              onClick={() => setMqttChannels((current) => current.filter((item) => item.id !== channel.id))}
+                              onClick={() => confirmDelete({ title: 'Delete MQTT channel', itemName: channel.name, description: 'The backend subscriber will stop listening to this broker and its topics.' }) && setMqttChannels((current) => current.filter((item) => item.id !== channel.id))}
                               className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
                               title="Delete MQTT channel"
                             >
@@ -1251,7 +1255,7 @@ export function Settings() {
                         <td className="px-4 py-3 text-right align-top">
                           <button
                             type="button"
-                            onClick={() => deleteNotificationChannel(channel.id)}
+                            onClick={() => confirmDelete({ title: 'Delete notification channel', itemName: channel.name || channel.type, description: 'Workflows and alerts will no longer send messages through this channel.' }) && deleteNotificationChannel(channel.id)}
                             className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
                             title="Delete channel"
                           >
@@ -1416,7 +1420,7 @@ export function Settings() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => deleteUser(user.id)}
+                              onClick={() => confirmDelete({ title: 'Delete user', itemName: user.name || user.email, description: 'The user account will be removed from backend access management.' }) && deleteUser(user.id)}
                               disabled={user.id === currentUser?.id}
                               className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-500/10 dark:hover:text-red-400"
                               title="Delete user"

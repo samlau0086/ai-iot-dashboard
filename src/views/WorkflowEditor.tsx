@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
+import { confirmDelete } from '../lib/confirm';
 
 interface WorkflowEditorProps {
   workflowId: string;
@@ -1001,6 +1002,13 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const deleteNode = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const targetNode = draft.nodes.find((node) => node.id === id);
+    if (!confirmDelete({
+      title: 'Delete workflow node',
+      itemName: targetNode?.name || targetNode?.config?.type || 'this node',
+      description: targetNode?.type === 'condition'
+        ? 'Related branch nodes may also be removed.'
+        : 'This node will be removed from the workflow graph.',
+    })) return;
     const idsToDelete = new Set<string>([id]);
 
     if (targetNode?.type === 'condition' && branchConditionTypes.has(targetNode.config.type)) {

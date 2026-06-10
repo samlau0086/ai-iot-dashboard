@@ -7,6 +7,7 @@ import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { DeviceForm } from '../components/DeviceForm';
 import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, sanitizeControlDefinition, type DeviceControlDefinition, type DeviceControlValueType } from '../lib/deviceControls';
+import { confirmDelete } from '../lib/confirm';
 
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
@@ -196,6 +197,8 @@ export function DeviceDetails() {
   };
 
   const deleteControlDefinition = (controlId: string) => {
+    const control = controlDefinitions.find((item) => item.id === controlId);
+    if (!confirmDelete({ title: 'Delete control action', itemName: control?.label || 'this control action', description: 'This control will be removed from the device configuration.' })) return;
     const nextDefinitions = controlDefinitions
       .filter((control) => control.id !== controlId)
       .map(sanitizeControlDefinition);

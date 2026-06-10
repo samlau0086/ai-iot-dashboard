@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { WorkflowEditor } from './WorkflowEditor';
+import { confirmDelete } from '../lib/confirm';
 
 type WorkflowRunStep = {
   nodeId?: string;
@@ -364,7 +365,7 @@ export function Workflows() {
                   >
                     <ListTree className="h-4 w-4" />
                   </button>
-                  <button onClick={() => deleteWorkflow(workflow.id)} className="p-1.5 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-red-600 hover:border-red-200 dark:hover:bg-slate-800 transition-colors">
+                  <button onClick={() => confirmDelete({ title: 'Delete workflow', itemName: workflow.name || 'this workflow', description: 'Workflow nodes, settings, and saved workflow definition will be removed.' }) && deleteWorkflow(workflow.id)} className="p-1.5 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-red-600 hover:border-red-200 dark:hover:bg-slate-800 transition-colors">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>

@@ -9,6 +9,7 @@ import { ChartRenderer } from '../components/ChartRenderer';
 import { cn } from '../lib/utils';
 import { IOT_ICONS } from '../lib/icons';
 import { deriveAlertsFromDevices, deriveEnergyTrendData } from '../lib/derivedData';
+import { confirmDelete } from '../lib/confirm';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
@@ -1095,7 +1096,7 @@ export function Overview() {
       <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
         {false && (
         <button 
-          onClick={() => removeOverviewWidget(widgetConfig.id, selectedSiteId)}
+          onClick={() => confirmDelete({ title: 'Remove dashboard widget', itemName: getWidgetTitle(widgetConfig), description: 'The widget will be removed from this site dashboard.' }) && removeOverviewWidget(widgetConfig.id, selectedSiteId)}
           className="absolute top-3 right-3 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity z-10 block cursor-pointer"
         >
           ×
@@ -1621,7 +1622,7 @@ export function Overview() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => removeOverviewWidgetLibraryItem(widget.id, selectedSiteId)}
+                        onClick={() => confirmDelete({ title: 'Delete widget preset', itemName: widget.title || 'this widget preset', description: 'The widget will be removed from the available widget library.' }) && removeOverviewWidgetLibraryItem(widget.id, selectedSiteId)}
                         className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1848,6 +1849,7 @@ export function Overview() {
                 <button
                   type="button"
                   onClick={() => {
+                    if (!confirmDelete({ title: 'Remove dashboard widget', itemName: getWidgetTitle(widget), description: 'The widget will be removed from this site dashboard.' })) return;
                     removeOverviewWidget(widget.id, selectedSiteId);
                     if (configWidgetId === widget.id) setConfigWidgetId(null);
                   }}
