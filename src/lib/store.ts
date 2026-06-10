@@ -208,7 +208,7 @@ export interface ScadaShapePrimitive {
     centerY?: number;
   };
   animation?: {
-    type?: 'none' | 'rotate' | 'scale' | 'translate';
+    type?: 'none' | 'rotate' | 'scale' | 'translate' | 'visibility';
     trigger?: 'always' | 'deviceOnline' | 'metricNonZero' | 'metricGreaterThan' | 'metricEquals' | 'deviceStatus';
     metricKey?: string;
     operatorValue?: string | number;
@@ -224,6 +224,8 @@ export interface ScadaShapePrimitive {
     fromY?: number;
     toX?: number;
     toY?: number;
+    visibleSeconds?: number;
+    hiddenSeconds?: number;
   };
 }
 

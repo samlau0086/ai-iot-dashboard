@@ -31,7 +31,8 @@ type DragState =
 type ShapeEditorDragState =
   | { type: 'move'; id: string; dx: number; dy: number }
   | { type: 'resize'; id: string; startX: number; startY: number; startWidth: number; startHeight: number }
-  | { type: 'endpoint'; id: string; dx: number; dy: number };
+  | { type: 'endpoint'; id: string; dx: number; dy: number }
+  | { type: 'rotationCenter'; id: string; dx: number; dy: number };
 
 const elementTypes: Array<{ type: ScadaElementType; label: string; icon: any }> = [
   { type: 'device', label: 'Device', icon: Cpu },
@@ -421,6 +422,17 @@ export function ScadaView() {
     setShapeEditorDragState({ type: 'endpoint', id: endpoint.id, dx: point.x - endpoint.x, dy: point.y - endpoint.y });
   };
 
+  const handleShapeRotationCenterPointerDown = (event: React.PointerEvent, primitive: ScadaShapePrimitive) => {
+    event.stopPropagation();
+    const point = toShapeEditorPoint(event.clientX, event.clientY);
+    const center = getPrimitiveCenter(primitive);
+    const centerX = primitive.rotation?.centerX ?? center.x;
+    const centerY = primitive.rotation?.centerY ?? center.y;
+    setSelectedPrimitiveId(primitive.id);
+    setSelectedEndpointId('');
+    setShapeEditorDragState({ type: 'rotationCenter', id: primitive.id, dx: point.x - centerX, dy: point.y - centerY });
+  };
+
   const handleShapeEditorPointerMove = (event: React.PointerEvent) => {
     if (!shapeEditorDragState) return;
     const point = toShapeEditorPoint(event.clientX, event.clientY);
@@ -441,6 +453,17 @@ export function ScadaView() {
       updateEditingPrimitive(primitive.id, {
         x: clampPercent(Math.min(100 - width, point.x - shapeEditorDragState.dx)),
         y: clampPercent(Math.min(100 - height, point.y - shapeEditorDragState.dy)),
+      });
+      return;
+    }
+
+    if (shapeEditorDragState.type === 'rotationCenter') {
+      updateEditingPrimitive(primitive.id, {
+        rotation: {
+          ...(primitive.rotation || {}),
+          centerX: clampPercent(point.x - shapeEditorDragState.dx),
+          centerY: clampPercent(point.y - shapeEditorDragState.dy),
+        },
       });
       return;
     }
@@ -859,6 +882,25 @@ export function ScadaView() {
           <g transform={`translate(${-centerX} ${-centerY})`}>
             <g transform={staticRotation}>{content}</g>
           </g>
+        </g>
+      );
+    }
+
+    if (animation?.type === 'visibility') {
+      const visibleSeconds = Math.max(0.1, animation.visibleSeconds ?? 1);
+      const hiddenSeconds = Math.max(0.1, animation.hiddenSeconds ?? 1);
+      const totalSeconds = visibleSeconds + hiddenSeconds;
+      const visibleRatio = Math.max(0.01, Math.min(0.99, visibleSeconds / totalSeconds));
+      return (
+        <g key={primitive.id} transform={staticRotation}>
+          <animate
+            attributeName="opacity"
+            values="1;1;0;0"
+            keyTimes={`0;${visibleRatio};${visibleRatio};1`}
+            dur={`${totalSeconds}s`}
+            repeatCount="indefinite"
+          />
+          {content}
         </g>
       );
     }
@@ -1402,6 +1444,20 @@ export function ScadaView() {
     );
   };
 
+  const renderPrimitiveRotationCenter = (primitive: ScadaShapePrimitive) => {
+    const center = getPrimitiveCenter(primitive);
+    const centerX = primitive.rotation?.centerX ?? center.x;
+    const centerY = primitive.rotation?.centerY ?? center.y;
+    return (
+      <g className="cursor-move" onPointerDown={(event) => handleShapeRotationCenterPointerDown(event, primitive)}>
+        <line x1={centerX - 5} y1={centerY} x2={centerX + 5} y2={centerY} stroke="#f97316" strokeWidth={1.3} pointerEvents="none" />
+        <line x1={centerX} y1={centerY - 5} x2={centerX} y2={centerY + 5} stroke="#f97316" strokeWidth={1.3} pointerEvents="none" />
+        <circle cx={centerX} cy={centerY} r={4.5} fill="rgba(249,115,22,0.18)" stroke="#f97316" strokeWidth={1.2} />
+        <text x={centerX + 6} y={centerY - 6} fill="#fb923c" fontSize="4.5" pointerEvents="none">rotation</text>
+      </g>
+    );
+  };
+
   const renderShapeManager = () => {
     if (!shapeManagerOpen) return null;
     const selectedPrimitive = editingShape?.primitives.find((primitive) => primitive.id === selectedPrimitiveId) || null;
@@ -1479,6 +1535,7 @@ export function ScadaView() {
                           >
                             {renderShapePreviewPrimitive(primitive, primitive.id === selectedPrimitiveId)}
                             {primitive.id === selectedPrimitiveId && renderPrimitiveSelection(primitive)}
+                            {primitive.id === selectedPrimitiveId && renderPrimitiveRotationCenter(primitive)}
                           </g>
                         ))}
                         {shapeEndpoints.map((endpoint) => (
@@ -1656,7 +1713,7 @@ export function ScadaView() {
                             <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
                               Type
                               <select value={selectedPrimitive.animation?.type || 'none'} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), type: event.target.value as NonNullable<ScadaShapePrimitive['animation']>['type'] } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                                {['none', 'rotate', 'scale', 'translate'].map((value) => <option key={value} value={value}>{value}</option>)}
+                                {['none', 'rotate', 'scale', 'translate', 'visibility'].map((value) => <option key={value} value={value}>{value}</option>)}
                               </select>
                             </label>
                             <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
@@ -1729,6 +1786,12 @@ export function ScadaView() {
                               <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">From Y<input type="number" min={0} max={100} value={selectedPrimitive.animation?.fromY ?? selectedPrimitive.y} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), fromY: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
                               <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">To X<input type="number" min={0} max={100} value={selectedPrimitive.animation?.toX ?? selectedPrimitive.x} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), toX: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
                               <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">To Y<input type="number" min={0} max={100} value={selectedPrimitive.animation?.toY ?? selectedPrimitive.y} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), toY: clampPercent(Number(event.target.value)) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                            </div>
+                          )}
+                          {selectedPrimitive.animation?.type === 'visibility' && (
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Visible Seconds<input type="number" min={0.1} step={0.1} value={selectedPrimitive.animation?.visibleSeconds ?? 1} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), visibleSeconds: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
+                              <label className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Hidden Seconds<input type="number" min={0.1} step={0.1} value={selectedPrimitive.animation?.hiddenSeconds ?? 1} onChange={(event) => updateEditingPrimitive(selectedPrimitive.id, { animation: { ...(selectedPrimitive.animation || {}), hiddenSeconds: Number(event.target.value) } })} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" /></label>
                             </div>
                           )}
                         </div>
