@@ -1518,8 +1518,12 @@ const getObjectPath = (target, pathExpression = '') => {
     .reduce((value, key) => (value == null ? undefined : value[key]), target);
 };
 
+const workflowReferencePattern = String.raw`\$\.(?:([A-Za-z0-9_$\u4e00-\u9fa5-]+)\.)?(input|output|status|nodeId|type)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?`;
+const workflowReferenceRegex = new RegExp(`^${workflowReferencePattern}$`);
+const workflowReferenceTokenRegex = new RegExp(workflowReferencePattern, 'g');
+
 const resolveWorkflowReference = (expression, context, currentNodeName) => {
-  const match = String(expression || '').trim().match(/^\$\.(?:(.+?)\.)?(input|output|status|nodeId|type)(?:\.(.*))?$/);
+  const match = String(expression || '').trim().match(workflowReferenceRegex);
   if (!match) return undefined;
   const [, explicitNodeName, section, pathExpression] = match;
   const nodeName = explicitNodeName || currentNodeName;
@@ -1583,7 +1587,7 @@ const resolveWorkflowValue = (value, context, currentNodeName) => {
     const wholeReference = resolveWorkflowReference(value, context, currentNodeName);
     if (wholeReference !== undefined) return wholeReference;
 
-    return value.replace(/\$\.(?:(.+?)\.)?(input|output|status|nodeId|type)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?/g, (match) => {
+    return value.replace(workflowReferenceTokenRegex, (match) => {
       const resolved = resolveWorkflowReference(match, context, currentNodeName);
       if (resolved === undefined) return match;
       return stringifyReferenceValue(resolved);
