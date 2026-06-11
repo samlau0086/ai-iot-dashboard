@@ -528,14 +528,7 @@ export function ScadaView() {
     () => devices.filter((device) => {
       if (!activeSite) return true;
       if (device.id === selectedElement?.deviceId || device.config?.externalDeviceId === selectedElement?.deviceId) return true;
-      const tags = device.tags || [];
-      const siteTags = activeSite.tags || [];
-      return (
-        device.siteId === activeSite.id
-        || tags.includes(activeSite.id)
-        || tags.includes(activeSite.name)
-        || siteTags.some((tag) => tags.includes(tag))
-      );
+      return device.siteId === activeSite.id;
     }),
     [activeSite, devices, selectedElement?.deviceId]
   );
