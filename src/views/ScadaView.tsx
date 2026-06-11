@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Cable, Cpu, Droplets, Gauge, Image as ImageIcon, Move, Network, Save, Trash2, Wifi, Zap } from 'lucide-react';
+import { Activity, Cable, Cpu, Droplets, Gauge, History, Image as ImageIcon, Move, Network, Pause, Play, RotateCcw, Save, Trash2, Wifi, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene, type ScadaShapePreset, type ScadaShapePrimitive, type ScadaShapePrimitiveType, type ScadaShapeEndpoint } from '../lib/store';
 import { IOT_ICONS, getDeviceIcon } from '../lib/icons';
@@ -17,10 +17,22 @@ const CANVAS_ZOOM_OPTIONS = [0.35, 0.5, 0.75, 1, 1.25, 1.5, 2];
 const WORKFLOW_TRIGGER_ACTIVE_MS = 2 * 60 * 1000;
 const SNAP_DISTANCE = 28;
 const DETACH_DISTANCE = 52;
+const SCADA_HISTORY_TICK_MS = 1000;
+const SCADA_HISTORY_STEPS = 120;
 
 type AnchorSide = string;
 type LineEndpoint = 0 | 1;
 type ScadaEditablePart = 'label' | 'icon' | 'value' | 'meta';
+type ScadaTelemetryMessage = {
+  device_id?: string;
+  deviceId?: string;
+  id?: string;
+  status?: Device['status'];
+  timestamp?: string;
+  received_at?: string;
+  metrics?: Record<string, unknown>;
+  [key: string]: unknown;
+};
 type ScadaAnchor = {
   elementId: string;
   side: AnchorSide;
@@ -114,6 +126,53 @@ const createPrimitive = (type: ScadaShapePrimitiveType): ScadaShapePrimitive => 
 const primitiveTypes: ScadaShapePrimitiveType[] = ['rect', 'ellipse', 'line', 'polygon', 'propeller', 'valve', 'arrow', 'busbar', 'terminal', 'bracket', 'tank'];
 
 const createElementId = (type: ScadaElementType) => `scada-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+const toDateTimeLocal = (date: Date) => {
+  const timezoneOffset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16);
+};
+
+const toIsoOrEmpty = (value: string) => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
+};
+
+const getTelemetryTime = (message: ScadaTelemetryMessage) => {
+  const rawTime = String(message.received_at || message.timestamp || '');
+  const time = new Date(rawTime).getTime();
+  return Number.isFinite(time) ? time : 0;
+};
+
+const getTelemetryDeviceId = (message: ScadaTelemetryMessage) => String(message.device_id || message.deviceId || message.id || '');
+
+const getTelemetryMetrics = (message: ScadaTelemetryMessage) => (
+  Object.entries(message.metrics || {}).reduce<Record<string, number>>((acc, [key, value]) => {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) acc[key] = numericValue;
+    return acc;
+  }, {})
+);
+
+const getTelemetryMessageKey = (message: ScadaTelemetryMessage, index: number) => [
+  getTelemetryDeviceId(message),
+  String(message.received_at || message.timestamp || ''),
+  String(message.topic || message.mqtt_topic || message.source || ''),
+  String(message.id || index),
+].join('|');
+
+const mergeTelemetryMessages = (groups: ScadaTelemetryMessage[][]) => {
+  const seen = new Set<string>();
+  return groups
+    .flat()
+    .filter((message, index) => {
+      const key = getTelemetryMessageKey(message, index);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((first, second) => getTelemetryTime(first) - getTelemetryTime(second));
+};
+
 const createBlankScene = (siteId: string, siteName: string): ScadaScene => ({
   id: `scada-${siteId}`,
   siteId,
@@ -127,9 +186,9 @@ const isDeviceReadingFresh = (device: Device | undefined, now = Date.now()) => {
   return isDeviceTelemetryFresh(device, now);
 };
 
-const getDeviceValue = (element: ScadaElement, devices: Device[], now = Date.now()) => {
+const getDeviceValue = (element: ScadaElement, devices: Device[], now = Date.now(), holdLastValue = false) => {
   const device = devices.find((item) => item.id === element.deviceId || item.config?.externalDeviceId === element.deviceId);
-  const fresh = isDeviceReadingFresh(device, now);
+  const fresh = holdLastValue || isDeviceReadingFresh(device, now);
   const rawValue = fresh && element.metricKey ? Number(device?.metrics?.[element.metricKey]) : Number.NaN;
   return {
     device,
@@ -138,8 +197,8 @@ const getDeviceValue = (element: ScadaElement, devices: Device[], now = Date.now
   };
 };
 
-const getElementState = (element: ScadaElement, devices: Device[], now = Date.now()) => {
-  const {device, fresh, value} = getDeviceValue(element, devices, now);
+const getElementState = (element: ScadaElement, devices: Device[], now = Date.now(), holdLastValue = false) => {
+  const {device, fresh, value} = getDeviceValue(element, devices, now, holdLastValue);
   if (!device) return 'noData';
   if (device.status === 'offline') return 'critical';
   if (!fresh) return 'noData';
@@ -346,15 +405,107 @@ export function ScadaView() {
   const [svgIconMarkupByUrl, setSvgIconMarkupByUrl] = useState<Record<string, string>>({});
   const [canvasZoom, setCanvasZoom] = useState(0.75);
   const [scadaNow, setScadaNow] = useState(Date.now());
+  const [historyFrom, setHistoryFrom] = useState(() => toDateTimeLocal(new Date(Date.now() - 60 * 60 * 1000)));
+  const [historyTo, setHistoryTo] = useState(() => toDateTimeLocal(new Date()));
+  const [historyMode, setHistoryMode] = useState(false);
+  const [historyPlaying, setHistoryPlaying] = useState(false);
+  const [historyCursor, setHistoryCursor] = useState(() => new Date(historyFrom).getTime());
+  const [historyMessages, setHistoryMessages] = useState<ScadaTelemetryMessage[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
   const [workflowRunsForScada, setWorkflowRunsForScada] = useState<ScadaWorkflowRun[]>([]);
   const [shapeEditorDragState, setShapeEditorDragState] = useState<ShapeEditorDragState | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const shapeEditorSvgRef = useRef<SVGSVGElement | null>(null);
+  const historyStartMs = new Date(historyFrom).getTime();
+  const historyEndMs = new Date(historyTo).getTime();
+  const historyRangeValid = Number.isFinite(historyStartMs) && Number.isFinite(historyEndMs) && historyEndMs > historyStartMs;
+  const sceneDeviceIds = useMemo(() => (
+    Array.from(new Set((draft?.elements || [])
+      .map((element) => element.deviceId)
+      .filter((value): value is string => Boolean(value))))
+  ), [draft?.elements]);
+  const historyDeviceIdentifiers = useMemo(() => {
+    const identifiers = new Set<string>();
+    const fallbackDevices = sceneDeviceIds.length
+      ? storedDevices.filter((device) => sceneDeviceIds.some((id) => device.id === id || device.config?.externalDeviceId === id))
+      : storedDevices.filter((device) => !activeSite?.id || device.siteId === activeSite.id);
+
+    sceneDeviceIds.forEach((id) => identifiers.add(id));
+    fallbackDevices.forEach((device) => {
+      identifiers.add(device.id);
+      if (device.config?.externalDeviceId) identifiers.add(device.config.externalDeviceId);
+    });
+
+    return Array.from(identifiers);
+  }, [activeSite?.id, sceneDeviceIds, storedDevices]);
+  const scadaRenderDevices = useMemo(() => {
+    if (!historyMode) return devices;
+
+    const snapshotById = new Map<string, Device>(storedDevices.map((device): [string, Device] => [
+      device.id,
+      {
+        ...device,
+        metrics: {},
+        status: 'offline' as const,
+        lastSeen: '',
+      },
+    ]));
+
+    historyMessages
+      .filter((message) => getTelemetryTime(message) <= historyCursor)
+      .sort((first, second) => getTelemetryTime(first) - getTelemetryTime(second))
+      .forEach((message) => {
+        const telemetryDeviceId = getTelemetryDeviceId(message);
+        const target = Array.from(snapshotById.values()).find((device) => (
+          device.id === telemetryDeviceId || device.config?.externalDeviceId === telemetryDeviceId
+        ));
+        if (!target) return;
+        const messageTime = getTelemetryTime(message);
+        snapshotById.set(target.id, {
+          ...target,
+          status: message.status || 'online',
+          lastSeen: messageTime ? new Date(messageTime).toISOString() : target.lastSeen,
+          metrics: {
+            ...target.metrics,
+            ...getTelemetryMetrics(message),
+          },
+        });
+      });
+
+    return Array.from(snapshotById.values());
+  }, [devices, historyCursor, historyMessages, historyMode, storedDevices]);
+  const scadaRenderNow = historyMode ? historyCursor : scadaNow;
+  const historyProgress = historyMode && historyRangeValid
+    ? Math.max(0, Math.min(100, ((historyCursor - historyStartMs) / (historyEndMs - historyStartMs)) * 100))
+    : 0;
+  const historyCursorLabel = historyMode && Number.isFinite(historyCursor)
+    ? new Date(historyCursor).toLocaleString()
+    : 'Live';
 
   useEffect(() => {
     const timer = window.setInterval(() => setScadaNow(Date.now()), 5000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    setHistoryPlaying(false);
+  }, [historyFrom, historyTo, activeSite?.id]);
+
+  useEffect(() => {
+    if (!historyMode || !historyPlaying || !historyRangeValid) return;
+
+    const stepMs = Math.max(1000, Math.ceil((historyEndMs - historyStartMs) / SCADA_HISTORY_STEPS));
+    const intervalId = window.setInterval(() => {
+      setHistoryCursor((current) => {
+        const next = Math.min(historyEndMs, current + stepMs);
+        if (next >= historyEndMs) setHistoryPlaying(false);
+        return next;
+      });
+    }, SCADA_HISTORY_TICK_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [historyEndMs, historyMode, historyPlaying, historyRangeValid, historyStartMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -376,6 +527,65 @@ export function ScadaView() {
       window.clearInterval(timer);
     };
   }, []);
+
+  const loadHistoryRange = async () => {
+    setHistoryPlaying(false);
+    setHistoryError('');
+
+    if (!historyRangeValid) {
+      setHistoryError('Please select a valid time range.');
+      return;
+    }
+
+    if (historyDeviceIdentifiers.length === 0) {
+      setHistoryMessages([]);
+      setHistoryCursor(historyStartMs);
+      setHistoryMode(true);
+      setHistoryError('No devices are bound in the current SCADA view.');
+      return;
+    }
+
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('from', toIsoOrEmpty(historyFrom));
+      params.set('to', toIsoOrEmpty(historyTo));
+      params.set('limit', '1000');
+
+      const groups = await Promise.all(historyDeviceIdentifiers.map(async (deviceId) => {
+        const scopedParams = new URLSearchParams(params);
+        scopedParams.set('deviceId', deviceId);
+        const response = await fetch(`/api/telemetry?${scopedParams.toString()}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `Telemetry query failed: ${response.status}`);
+        return Array.isArray(payload.messages) ? payload.messages as ScadaTelemetryMessage[] : [];
+      }));
+
+      setHistoryMessages(mergeTelemetryMessages(groups));
+      setHistoryCursor(historyStartMs);
+      setHistoryMode(true);
+      setHistoryPlaying(false);
+    } catch (error) {
+      setHistoryMessages([]);
+      setHistoryMode(true);
+      setHistoryCursor(historyStartMs);
+      setHistoryError(error instanceof Error ? error.message : 'Failed to load SCADA telemetry history.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const returnToLive = () => {
+    setHistoryMode(false);
+    setHistoryPlaying(false);
+    setHistoryError('');
+  };
+
+  const toggleHistoryPlayback = () => {
+    if (!historyMode || historyMessages.length === 0 || !historyRangeValid) return;
+    if (!historyPlaying && historyCursor >= historyEndMs) setHistoryCursor(historyStartMs);
+    setHistoryPlaying((value) => !value);
+  };
 
   useEffect(() => {
     if (storeScene) {
@@ -992,7 +1202,7 @@ export function ScadaView() {
   };
 
   const getInnerPartLayout = (element: ScadaElement, part: ScadaEditablePart) => {
-    const {device} = getDeviceValue(element, devices, scadaNow);
+    const {device} = getDeviceValue(element, scadaRenderDevices, scadaRenderNow, historyMode);
     if (part === 'icon') return { ...getDefaultIconLayout(element, device), ...(element.iconStyle || {}) };
     if (part === 'value') return { ...getDefaultValueLayout(element), ...(element.valueStyle || {}) };
     if (part === 'meta') return { ...getDefaultMetaLayout(element), ...(element.metaStyle || {}) };
@@ -1066,7 +1276,7 @@ export function ScadaView() {
           const nextX = Math.max(-40, Math.min(width + 40, point.x - element.x - dragState.dx));
           const nextY = Math.max(-30, Math.min(height + 40, point.y - element.y - dragState.dy));
           if (dragState.part === 'icon') {
-            const {device} = getDeviceValue(element, devices, scadaNow);
+            const {device} = getDeviceValue(element, scadaRenderDevices, scadaRenderNow, historyMode);
             return {
               ...element,
               iconStyle: {
@@ -1189,7 +1399,7 @@ export function ScadaView() {
   const renderLine = (element: ScadaElement) => {
     const points = resolveLinePoints(element);
     if (points.length < 2) return null;
-    const state = getElementState(element, devices, scadaNow);
+    const state = getElementState(element, scadaRenderDevices, scadaRenderNow, historyMode);
     const style = stateStyles[state];
     const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
     const active = state === 'normal' || state === 'warning';
@@ -1766,8 +1976,8 @@ export function ScadaView() {
   const renderElement = (element: ScadaElement) => {
     if (isLineElement(element)) return renderLine(element);
 
-    const {device, value} = getDeviceValue(element, devices, scadaNow);
-    const state = getElementState(element, devices, scadaNow);
+    const {device, value} = getDeviceValue(element, scadaRenderDevices, scadaRenderNow, historyMode);
+    const state = getElementState(element, scadaRenderDevices, scadaRenderNow, historyMode);
     const style = stateStyles[state];
     const width = element.width || 150;
     const height = element.height || 76;
@@ -2597,6 +2807,79 @@ export function ScadaView() {
             Save Scene
           </button>
         </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-[#1c2128]">
+        <div className="grid gap-3 lg:grid-cols-[170px_170px_minmax(220px,1fr)_minmax(260px,320px)] lg:items-end">
+          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+            From
+            <input
+              type="datetime-local"
+              value={historyFrom}
+              onChange={(event) => setHistoryFrom(event.target.value)}
+              className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            />
+          </label>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+            To
+            <input
+              type="datetime-local"
+              value={historyTo}
+              onChange={(event) => setHistoryTo(event.target.value)}
+              className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            />
+          </label>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={loadHistoryRange}
+              disabled={historyLoading}
+              className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-2 rounded border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <History className="h-4 w-4 text-orange-500" />
+              {historyLoading ? 'Loading' : 'Load Range'}
+            </button>
+            <button
+              type="button"
+              onClick={toggleHistoryPlayback}
+              disabled={!historyMode || historyMessages.length === 0 || !historyRangeValid}
+              className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-2 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {historyPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              {historyPlaying ? 'Pause' : 'Play'}
+            </button>
+            <button
+              type="button"
+              onClick={returnToLive}
+              disabled={!historyMode}
+              className="inline-flex h-9 w-10 items-center justify-center rounded border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              title="Return to live"
+            >
+              <RotateCcw className="h-4 w-4" />
+            </button>
+          </div>
+          <div>
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
+              <span className={historyMode ? 'text-orange-500' : 'text-emerald-500'}>{historyMode ? 'Historical Playback' : 'Live'}</span>
+              <span className="text-slate-500">{historyCursorLabel}</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+              <div
+                className={cn('h-full rounded-full transition-all', historyMode ? 'bg-orange-500' : 'bg-emerald-500')}
+                style={{ width: `${historyMode ? historyProgress : 100}%` }}
+              />
+            </div>
+            <div className="mt-1 flex justify-between text-[10px] font-mono text-slate-400">
+              <span>{historyMode ? `${historyMessages.length} log messages` : 'Realtime telemetry'}</span>
+              {historyMode && <span>{historyPlaying ? 'Playing' : 'Paused'}</span>}
+            </div>
+          </div>
+        </div>
+        {historyError && (
+          <div className="mt-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+            {historyError}
+          </div>
+        )}
       </div>
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1fr_340px]">
