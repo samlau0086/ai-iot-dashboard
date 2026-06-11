@@ -527,7 +527,8 @@ export function ScadaView() {
   const scadaBindableDevices = useMemo(
     () => devices.filter((device) => {
       if (!activeSite) return true;
-      if (device.id === selectedElement?.deviceId || device.config?.externalDeviceId === selectedElement?.deviceId) return true;
+      const boundDeviceId = selectedElement?.deviceId;
+      if (boundDeviceId && (device.id === boundDeviceId || device.config?.externalDeviceId === boundDeviceId)) return true;
       return device.siteId === activeSite.id;
     }),
     [activeSite, devices, selectedElement?.deviceId]
