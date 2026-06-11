@@ -936,9 +936,9 @@ export function ScadaView() {
     setSelectedEndpointId('');
   };
 
-  const openShapeManager = () => {
-    const selectedElement = draft.elements.find((element) => element.id === selectedElementId);
-    const shapePresetId = selectedElement ? getShapePreset(selectedElement) : '';
+  const openShapeManagerForElement = (element?: ScadaElement | null) => {
+    const targetElement = element || draft.elements.find((item) => item.id === selectedElementId) || null;
+    const shapePresetId = targetElement ? getShapePreset(targetElement) : '';
     const customShape = scadaShapePresets.find((preset) => preset.id === shapePresetId);
     if (customShape) {
       startEditShape(customShape);
@@ -949,6 +949,8 @@ export function ScadaView() {
     }
     setShapeManagerOpen(true);
   };
+
+  const openShapeManager = () => openShapeManagerForElement();
 
   const updateEditingPrimitive = (id: string, patch: Partial<ScadaShapePrimitive>) => {
     setEditingShape((current) => current ? {
@@ -1221,9 +1223,10 @@ export function ScadaView() {
   const handleInnerPartPointerDown = (event: React.PointerEvent, element: ScadaElement, part: ScadaEditablePart) => {
     if (!editMode || (element.type !== 'device' && element.type !== 'metric')) return;
     if (part === 'icon' && element.type !== 'device') return;
+    event.preventDefault();
     event.stopPropagation();
     setSelectedElementId(element.id);
-    if (activeInnerPart?.id !== element.id || activeInnerPart.part !== part) return;
+    setActiveInnerPart({ id: element.id, part });
     const point = toSvgPoint(event.clientX, event.clientY);
     const layout = getInnerPartLayout(element, part);
     setDragState({
@@ -2064,7 +2067,11 @@ export function ScadaView() {
         }}
         onDoubleClick={(event) => {
           event.stopPropagation();
-          if (!editMode && element.deviceId) navigate(`/devices/${device?.id || element.deviceId}`, { state: { from: '/scada' } });
+          if (editMode) {
+            openShapeManagerForElement(element);
+            return;
+          }
+          if (element.deviceId) navigate(`/devices/${device?.id || element.deviceId}`, { state: { from: '/scada' } });
         }}
         className={cn(editMode ? 'cursor-move' : element.deviceId && 'cursor-pointer')}
       >
