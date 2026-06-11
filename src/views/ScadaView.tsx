@@ -532,7 +532,6 @@ export function ScadaView() {
       const siteTags = activeSite.tags || [];
       return (
         device.siteId === activeSite.id
-        || device.tenantId === activeSite.tenantId
         || tags.includes(activeSite.id)
         || tags.includes(activeSite.name)
         || siteTags.some((tag) => tags.includes(tag))
