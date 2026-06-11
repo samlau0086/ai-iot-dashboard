@@ -1074,7 +1074,13 @@ export const useAppStore = create<AppState>()(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ channel }),
           });
-          const payload = await response.json();
+          const text = await response.text();
+          let payload: { ok?: boolean; message?: string } = {};
+          try {
+            payload = text ? JSON.parse(text) : {};
+          } catch {
+            payload = { ok: false, message: text || `Test failed: ${response.status}` };
+          }
           set((state) => ({
             notificationChannels: state.notificationChannels.map((item) => (
               item.id === id

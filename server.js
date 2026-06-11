@@ -1357,23 +1357,27 @@ const sendBarkNotification = async (channel, payload = {}) => {
     ? rawDeviceKey
     : `${serverUrl}/${encodeURIComponent(rawDeviceKey)}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`;
 
-  const response = await fetch(url, {method: 'GET'});
-  const text = await response.text();
-  let parsed = null;
   try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = null;
-  }
+    const response = await fetch(url, {method: 'GET'});
+    const text = await response.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
 
-  const barkOk = response.ok && (!parsed || parsed.code === 200 || parsed.code === 0 || parsed.message === 'success');
-  return {
-    ok: barkOk,
-    message: barkOk
-      ? 'Bark test notification sent.'
-      : `Bark test failed: ${parsed?.message || text || response.status}`,
-    status: response.status,
-  };
+    const barkOk = response.ok && (!parsed || parsed.code === 200 || parsed.code === 0 || parsed.message === 'success');
+    return {
+      ok: barkOk,
+      message: barkOk
+        ? 'Bark test notification sent.'
+        : `Bark test failed: ${parsed?.message || text || response.status}`,
+      status: response.status,
+    };
+  } catch (error) {
+    return {ok: false, message: `Bark test failed: ${error.message || 'Unable to reach Bark server.'}`};
+  }
 };
 
 const testNotificationChannel = async (channel) => {
@@ -1387,12 +1391,16 @@ const testNotificationChannel = async (channel) => {
     const config = normalizeNotificationConfig(channel);
     const url = config.url || channel.target;
     if (!url) return {ok: false, message: 'Webhook URL is required.'};
-    const response = await fetch(url, {
-      method: config.method || 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify({title: 'AI IoT Dashboard', message: 'Notification channel test message.'}),
-    });
-    return {ok: response.ok, message: response.ok ? 'Webhook test sent.' : `Webhook test failed: ${response.status}`};
+    try {
+      const response = await fetch(url, {
+        method: config.method || 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({title: 'AI IoT Dashboard', message: 'Notification channel test message.'}),
+      });
+      return {ok: response.ok, message: response.ok ? 'Webhook test sent.' : `Webhook test failed: ${response.status}`};
+    } catch (error) {
+      return {ok: false, message: `Webhook test failed: ${error.message || 'Unable to reach webhook URL.'}`};
+    }
   }
 
   return {ok: false, message: `${channel.type || 'Unknown'} test connector is not implemented yet.`};
@@ -3639,9 +3647,9 @@ app.post('/api/notification-channels/test', async (req, res) => {
     }
 
     const result = await testNotificationChannel(channel);
-    res.status(result.ok ? 200 : 400).json(result);
+    res.status(200).json(result);
   } catch (error) {
-    res.status(500).json({ok: false, message: error.message});
+    res.status(200).json({ok: false, message: error.message || 'Notification channel test failed.'});
   }
 });
 
