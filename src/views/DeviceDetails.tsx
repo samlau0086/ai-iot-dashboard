@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
-import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play, Plus, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play, Plus, Trash2, X, AlertTriangle } from 'lucide-react';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { DeviceForm } from '../components/DeviceForm';
@@ -295,6 +295,92 @@ export function DeviceDetails() {
       { key: 'io_rate', label: 'I/O Rate', icon: Activity },
       { key: 'cycle_time', label: 'Cycle Time', icon: Timer },
       { key: 'cpu', label: 'CPU Load', icon: Cpu },
+    ],
+    io_module: [
+      { key: 'di_on', label: 'Digital Inputs On', icon: Activity },
+      { key: 'do_on', label: 'Digital Outputs On', icon: Activity },
+      { key: 'ai_value', label: 'Analog Input', icon: Gauge },
+      { key: 'voltage', label: 'Supply Voltage', icon: Zap },
+    ],
+    relay_module: [
+      { key: 'relay_on', label: 'Relays On', icon: Activity },
+      { key: 'switching_count', label: 'Switch Count', icon: Timer },
+      { key: 'coil_voltage', label: 'Coil Voltage', icon: Zap },
+    ],
+    valve_controller: [
+      { key: 'position', label: 'Valve Position', icon: Gauge },
+      { key: 'command_position', label: 'Command Position', icon: Activity },
+      { key: 'pressure', label: 'Pressure', icon: Gauge },
+      { key: 'cycles', label: 'Cycles', icon: Timer },
+    ],
+    vfd: [
+      { key: 'frequency', label: 'Frequency', icon: Activity },
+      { key: 'motor_speed', label: 'Motor Speed', icon: Gauge },
+      { key: 'current', label: 'Current', icon: Activity },
+      { key: 'fault_code', label: 'Fault Code', icon: AlertTriangle },
+    ],
+    hmi: [
+      { key: 'cpu', label: 'CPU Load', icon: Cpu },
+      { key: 'ram', label: 'Memory', icon: HardDrive },
+      { key: 'disk', label: 'Disk', icon: HardDrive },
+      { key: 'uptime', label: 'Uptime', icon: Timer },
+    ],
+    industrial_pc: [
+      { key: 'cpu', label: 'CPU Load', icon: Cpu },
+      { key: 'ram', label: 'Memory', icon: HardDrive },
+      { key: 'disk', label: 'Disk', icon: HardDrive },
+      { key: 'uptime', label: 'Uptime', icon: Timer },
+    ],
+    robot: [
+      { key: 'cycle_time', label: 'Cycle Time', icon: Timer },
+      { key: 'utilization', label: 'Utilization', icon: Activity },
+      { key: 'error_count', label: 'Errors', icon: AlertTriangle },
+      { key: 'axis_load', label: 'Axis Load', icon: Gauge },
+    ],
+    camera: [
+      { key: 'online_streams', label: 'Streams', icon: Activity },
+      { key: 'fps', label: 'FPS', icon: Gauge },
+      { key: 'bitrate', label: 'Bitrate', icon: Activity },
+      { key: 'storage', label: 'Storage', icon: HardDrive },
+    ],
+    ups: [
+      { key: 'battery_soc', label: 'Battery SOC', icon: BatteryCharging },
+      { key: 'voltage', label: 'Voltage', icon: Gauge },
+      { key: 'temperature', label: 'Temperature', icon: Thermometer },
+      { key: 'health', label: 'Health', icon: Activity },
+    ],
+    battery_bms: [
+      { key: 'battery_soc', label: 'Battery SOC', icon: BatteryCharging },
+      { key: 'voltage', label: 'Voltage', icon: Gauge },
+      { key: 'temperature', label: 'Temperature', icon: Thermometer },
+      { key: 'health', label: 'Health', icon: Activity },
+    ],
+    weather_station: [
+      { key: 'temperature', label: 'Temperature', icon: Thermometer },
+      { key: 'humidity', label: 'Humidity', icon: Droplets },
+      { key: 'wind_speed', label: 'Wind Speed', icon: Wind },
+      { key: 'rainfall', label: 'Rainfall', icon: Droplets },
+    ],
+    flow_meter: [
+      { key: 'flow_rate', label: 'Flow Rate', icon: Waves },
+      { key: 'total_flow', label: 'Total Flow', icon: Activity },
+      { key: 'temperature', label: 'Temperature', icon: Thermometer },
+    ],
+    pressure_sensor: [
+      { key: 'pressure', label: 'Pressure', icon: Gauge },
+      { key: 'temperature', label: 'Temperature', icon: Thermometer },
+      { key: 'battery', label: 'Battery', icon: BatteryCharging },
+    ],
+    level_sensor: [
+      { key: 'level', label: 'Level', icon: Gauge },
+      { key: 'volume', label: 'Volume', icon: Activity },
+      { key: 'battery', label: 'Battery', icon: BatteryCharging },
+    ],
+    vibration_sensor: [
+      { key: 'vibration', label: 'Vibration', icon: Activity },
+      { key: 'velocity', label: 'Velocity', icon: Gauge },
+      { key: 'bearing_temp', label: 'Bearing Temp', icon: Thermometer },
+      { key: 'battery', label: 'Battery', icon: BatteryCharging },
     ],
   };
 

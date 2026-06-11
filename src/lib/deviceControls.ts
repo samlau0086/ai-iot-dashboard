@@ -69,6 +69,48 @@ export const deviceControlProfiles: Partial<Record<DeviceType, DeviceControlDefi
     ] },
     { id: 'set_parameter', label: 'Write Register', description: 'Write a named control parameter.', icon: Send, valueType: 'text', parameterKey: 'value', defaultValue: '' },
   ],
+  io_module: [
+    { id: 'set_output', label: 'Set Digital Output', description: 'Switch a selected output channel.', icon: Power, valueType: 'parameter_group', fields: [
+      { key: 'channel', label: 'Channel', valueType: 'text', defaultValue: 'DO1' },
+      { key: 'value', label: 'Output Value', valueType: 'select', defaultValue: 'on', options: [
+        { value: 'on', label: 'On' },
+        { value: 'off', label: 'Off' },
+      ] },
+    ] },
+    { id: 'set_analog_output', label: 'Set Analog Output', description: 'Write an analog output value.', icon: SlidersHorizontal, valueType: 'parameter_group', fields: [
+      { key: 'channel', label: 'Channel', valueType: 'text', defaultValue: 'AO1' },
+      { key: 'value', label: 'Value', valueType: 'number', defaultValue: 0 },
+    ] },
+    { id: 'sync_config', label: 'Sync Config', description: 'Reload module channel mapping.', icon: RefreshCw, valueType: 'none' },
+  ],
+  relay_module: [
+    { id: 'set_relay', label: 'Set Relay', description: 'Switch a relay channel.', icon: Power, valueType: 'parameter_group', fields: [
+      { key: 'channel', label: 'Relay', valueType: 'text', defaultValue: 'R1' },
+      { key: 'value', label: 'State', valueType: 'select', defaultValue: 'on', options: [
+        { value: 'on', label: 'On' },
+        { value: 'off', label: 'Off' },
+      ] },
+    ] },
+    { id: 'pulse_relay', label: 'Pulse Relay', description: 'Pulse a relay for a fixed duration.', icon: Send, valueType: 'parameter_group', fields: [
+      { key: 'channel', label: 'Relay', valueType: 'text', defaultValue: 'R1' },
+      { key: 'duration_ms', label: 'Duration', valueType: 'number', defaultValue: 500, unit: 'ms' },
+    ] },
+  ],
+  valve_controller: [
+    ...commonPowerControls,
+    { id: 'set_position', label: 'Valve Position', description: 'Set valve opening percentage.', icon: SlidersHorizontal, valueType: 'slider', parameterKey: 'position', defaultValue: 50, min: 0, max: 100, step: 1, unit: '%' },
+    { id: 'set_mode', label: 'Valve Mode', description: 'Switch valve operating mode.', icon: Settings2, valueType: 'select', parameterKey: 'mode', defaultValue: 'auto', options: [
+      { value: 'auto', label: 'Auto' },
+      { value: 'manual', label: 'Manual' },
+      { value: 'closed_loop', label: 'Closed Loop' },
+    ] },
+  ],
+  vfd: [
+    ...commonPowerControls,
+    { id: 'set_frequency', label: 'Frequency Setpoint', description: 'Set VFD output frequency.', icon: Gauge, valueType: 'number', parameterKey: 'frequency', defaultValue: 30, min: 0, max: 60, step: 0.1, unit: 'Hz' },
+    { id: 'set_speed', label: 'Speed Reference', description: 'Set motor speed reference.', icon: SlidersHorizontal, valueType: 'slider', parameterKey: 'speed', defaultValue: 50, min: 0, max: 100, step: 1, unit: '%' },
+    { id: 'fault_reset', label: 'Fault Reset', description: 'Reset VFD fault state.', icon: RefreshCw, valueType: 'none' },
+  ],
   gateway: [
     { id: 'restart', label: 'Restart Gateway', description: 'Restart gateway service.', icon: RotateCcw, valueType: 'none' },
     { id: 'sync_config', label: 'Sync Config', description: 'Ask gateway to reload configuration.', icon: RefreshCw, valueType: 'none' },

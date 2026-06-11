@@ -171,6 +171,21 @@ const scadaIconByDeviceType: Record<string, string> = {
   rtu: 'radio',
   lora_gateway: 'satellite',
   plc: 'microchip',
+  io_module: 'microchip',
+  relay_module: 'power',
+  valve_controller: 'droplet',
+  vfd: 'settings',
+  hmi: 'airplay',
+  industrial_pc: 'cpu',
+  robot: 'settings',
+  camera: 'camera',
+  ups: 'battery-charging',
+  battery_bms: 'battery',
+  weather_station: 'rain',
+  flow_meter: 'waves',
+  pressure_sensor: 'gauge',
+  level_sensor: 'gauge-circle',
+  vibration_sensor: 'activity',
   pump_controller: 'droplet',
   sensor: 'activity',
   solar_inverter: 'sun',
@@ -208,9 +223,9 @@ const getDefaultIconLayout = (element: ScadaElement, device?: Device) => {
   const baseY = Math.max(16, height * 0.34 - size / 2);
 
   if (device?.type === 'pump_controller') return { x: width - size - 22, y: baseY, size };
-  if (device?.type === 'temperature_sensor' || device?.type === 'sensor') return { x: baseX, y: 18, size };
-  if (device?.type === 'gateway' || device?.type === 'dtu' || device?.type === 'rtu' || device?.type === 'lora_gateway' || device?.type === 'plc') return { x: baseX, y: baseY + 2, size };
-  if (device?.type === 'energy_meter' || device?.type === 'solar_inverter') return { x: baseX, y: baseY + 4, size };
+  if (device?.type === 'temperature_sensor' || device?.type === 'sensor' || device?.type === 'weather_station' || device?.type === 'flow_meter' || device?.type === 'pressure_sensor' || device?.type === 'level_sensor' || device?.type === 'vibration_sensor') return { x: baseX, y: 18, size };
+  if (device?.type === 'gateway' || device?.type === 'dtu' || device?.type === 'rtu' || device?.type === 'lora_gateway' || device?.type === 'plc' || device?.type === 'io_module' || device?.type === 'relay_module' || device?.type === 'vfd' || device?.type === 'hmi' || device?.type === 'industrial_pc' || device?.type === 'robot' || device?.type === 'camera') return { x: baseX, y: baseY + 2, size };
+  if (device?.type === 'energy_meter' || device?.type === 'solar_inverter' || device?.type === 'ups' || device?.type === 'battery_bms') return { x: baseX, y: baseY + 4, size };
   return { x: baseX, y: baseY, size };
 };
 
@@ -1692,7 +1707,7 @@ export function ScadaView() {
       );
     }
 
-    if (deviceType === 'pump_controller') {
+    if (deviceType === 'pump_controller' || deviceType === 'valve_controller') {
       const radius = Math.min(height * 0.36, width * 0.22);
       return (
         <>
@@ -1704,7 +1719,7 @@ export function ScadaView() {
       );
     }
 
-    if (deviceType === 'temperature_sensor' || deviceType === 'sensor') {
+    if (deviceType === 'temperature_sensor' || deviceType === 'sensor' || deviceType === 'weather_station' || deviceType === 'flow_meter' || deviceType === 'pressure_sensor' || deviceType === 'level_sensor' || deviceType === 'vibration_sensor') {
       const sensorWidth = Math.max(44, Math.min(64, width * 0.34));
       const sensorX = x + width / 2 - sensorWidth / 2;
       return (
@@ -1716,7 +1731,7 @@ export function ScadaView() {
       );
     }
 
-    if (deviceType === 'gateway' || deviceType === 'dtu' || deviceType === 'rtu' || deviceType === 'lora_gateway' || deviceType === 'plc') {
+    if (deviceType === 'gateway' || deviceType === 'dtu' || deviceType === 'rtu' || deviceType === 'lora_gateway' || deviceType === 'plc' || deviceType === 'io_module' || deviceType === 'relay_module' || deviceType === 'vfd' || deviceType === 'hmi' || deviceType === 'industrial_pc' || deviceType === 'robot' || deviceType === 'camera') {
       return (
         <>
           <rect x={x + 12} y={y + 10} width={width - 24} height={height - 20} rx={10} {...commonProps} />
@@ -1729,7 +1744,7 @@ export function ScadaView() {
       );
     }
 
-    if (deviceType === 'energy_meter' || deviceType === 'solar_inverter') {
+    if (deviceType === 'energy_meter' || deviceType === 'solar_inverter' || deviceType === 'ups' || deviceType === 'battery_bms') {
       return (
         <>
           <rect x={x + 14} y={y + 8} width={width - 28} height={height - 16} rx={8} {...commonProps} />
@@ -2823,6 +2838,9 @@ export function ScadaView() {
                           <>
                             <option value="wifi">WiFi</option>
                             <option value="lora">LoRa</option>
+                            <option value="4g">4G</option>
+                            <option value="5g">5G</option>
+                            <option value="satellite">Satellite</option>
                             <option value="custom">Custom</option>
                           </>
                         ) : (

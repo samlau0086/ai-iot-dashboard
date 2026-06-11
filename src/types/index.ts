@@ -9,6 +9,21 @@ export type DeviceType =
   | 'dtu'
   | 'rtu'
   | 'lora_gateway'
+  | 'io_module'
+  | 'relay_module'
+  | 'valve_controller'
+  | 'vfd'
+  | 'hmi'
+  | 'industrial_pc'
+  | 'robot'
+  | 'camera'
+  | 'ups'
+  | 'battery_bms'
+  | 'weather_station'
+  | 'flow_meter'
+  | 'pressure_sensor'
+  | 'level_sensor'
+  | 'vibration_sensor'
   | 'sensor';
 
 export interface DeviceConfig {

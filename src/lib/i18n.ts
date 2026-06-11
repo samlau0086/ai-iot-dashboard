@@ -75,7 +75,22 @@ export const translations = {
         temperature_sensor: 'Temp Sensor',
         solar_inverter: 'Solar Inverter',
         pump_controller: 'Pump Controller',
-        air_compressor: 'Air Compressor'
+        air_compressor: 'Air Compressor',
+        io_module: 'I/O Module',
+        relay_module: 'Relay Module',
+        valve_controller: 'Valve Controller',
+        vfd: 'VFD / Motor Drive',
+        hmi: 'HMI Panel',
+        industrial_pc: 'Industrial PC',
+        robot: 'Industrial Robot',
+        camera: 'Industrial Camera',
+        ups: 'UPS',
+        battery_bms: 'Battery BMS',
+        weather_station: 'Weather Station',
+        flow_meter: 'Flow Meter',
+        pressure_sensor: 'Pressure Sensor',
+        level_sensor: 'Level Sensor',
+        vibration_sensor: 'Vibration Sensor'
       },
       table: {
         name: 'Name',

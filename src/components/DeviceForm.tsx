@@ -19,10 +19,45 @@ const INDUSTRIAL_PROTOCOL_OPTIONS = [
   'CAN',
   'LoRa',
   '4G',
+  '5G',
+  'Satellite',
   'Ethernet',
   'WiFi',
   'Manual / Mock',
 ];
+
+const DEVICE_TYPE_OPTIONS: DeviceType[] = [
+  'gateway',
+  'dtu',
+  'rtu',
+  'lora_gateway',
+  'plc',
+  'io_module',
+  'relay_module',
+  'energy_meter',
+  'temperature_sensor',
+  'pressure_sensor',
+  'level_sensor',
+  'flow_meter',
+  'vibration_sensor',
+  'sensor',
+  'pump_controller',
+  'valve_controller',
+  'air_compressor',
+  'vfd',
+  'solar_inverter',
+  'battery_bms',
+  'ups',
+  'weather_station',
+  'hmi',
+  'industrial_pc',
+  'robot',
+  'camera',
+];
+
+const formatDeviceTypeLabel = (type: DeviceType, labels: Record<string, string>) => (
+  labels[type] || type.split('_').map((part) => part.toUpperCase() === part ? part : part.charAt(0).toUpperCase() + part.slice(1)).join(' ')
+);
 
 const sanitizeSvgIcon = (svg: string) => svg
   .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -151,6 +186,34 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
         return { voltage: 24, signal: 82, packet_loss: 0.2 };
       case 'plc':
         return { io_rate: 128, cycle_time: 12, cpu: 38 };
+      case 'io_module':
+        return { di_on: 8, do_on: 4, ai_value: 12.6, ao_value: 4.2, voltage: 24 };
+      case 'relay_module':
+        return { relay_on: 6, switching_count: 1280, coil_voltage: 24 };
+      case 'valve_controller':
+        return { position: 72, command_position: 75, pressure: 3.8, cycles: 4200 };
+      case 'vfd':
+        return { frequency: 42.5, motor_speed: 1450, current: 18.2, fault_code: 0 };
+      case 'hmi':
+      case 'industrial_pc':
+        return { cpu: 36, ram: 58, disk: 71, uptime: 960 };
+      case 'robot':
+        return { cycle_time: 38, utilization: 82, error_count: 0, axis_load: 64 };
+      case 'camera':
+        return { online_streams: 1, fps: 25, bitrate: 4.8, storage: 62 };
+      case 'ups':
+      case 'battery_bms':
+        return { battery_soc: 92, voltage: 48, temperature: 32, health: 98 };
+      case 'weather_station':
+        return { temperature: 28, humidity: 68, wind_speed: 4.2, rainfall: 0 };
+      case 'flow_meter':
+        return { flow_rate: 128, total_flow: 8420, temperature: 24 };
+      case 'pressure_sensor':
+        return { pressure: 4.6, temperature: 31, battery: 88 };
+      case 'level_sensor':
+        return { level: 76, volume: 1240, battery: 91 };
+      case 'vibration_sensor':
+        return { vibration: 2.4, velocity: 1.1, bearing_temp: 52, battery: 87 };
       default:
         return { value: 1 };
     }
@@ -528,8 +591,8 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
               onChange={handleChange} 
               className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
             >
-              {Object.keys(typesT).map(key => (
-                <option key={key} value={key}>{(typesT as any)[key]}</option>
+              {DEVICE_TYPE_OPTIONS.map(key => (
+                <option key={key} value={key}>{formatDeviceTypeLabel(key, typesT as Record<string, string>)}</option>
               ))}
             </select>
           </div>

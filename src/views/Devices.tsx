@@ -7,6 +7,26 @@ import { DeviceForm } from '../components/DeviceForm';
 import { DeviceConfirmDelete } from '../components/DeviceConfirmDelete';
 import { getDeviceIcon } from '../lib/icons';
 import { Link } from 'react-router-dom';
+import type { Device } from '../types';
+
+const getDeviceKeyMetric = (device: Device) => {
+  const metrics = device.metrics || {};
+  const preferredKeys = ['power', 'pressure', 'flow_rate', 'temperature', 'io_rate', 'di_on', 'relay_on', 'position', 'frequency', 'battery_soc', 'signal', 'cpu', 'value'];
+  const metricKey = preferredKeys.find((key) => metrics[key] !== undefined) || Object.keys(metrics)[0];
+  if (!metricKey) return '-';
+  const units: Record<string, string> = {
+    power: 'W',
+    pressure: 'bar',
+    flow_rate: 'm3/h',
+    temperature: 'deg C',
+    io_rate: '/s',
+    frequency: 'Hz',
+    battery_soc: '%',
+    signal: '%',
+    cpu: '%',
+  };
+  return `${metricKey}: ${metrics[metricKey] || 0}${units[metricKey] ? ` ${units[metricKey]}` : ''}`;
+};
 
 export function Devices() {
   const { language, devices, sites, activeSiteId, setActiveSite } = useAppStore();
@@ -138,7 +158,7 @@ export function Devices() {
       <div className="space-y-3 pb-6 md:hidden">
         {filteredDevices.map((device) => {
           const IconComp = getDeviceIcon(device.icon);
-          const keyMetric =
+          const keyMetric = getDeviceKeyMetric(device) || (
             device.type === 'energy_meter' ? `${device.metrics.power || 0} W` :
             device.type === 'temperature_sensor' ? `${device.metrics.temperature || 0} 掳C` :
             device.type === 'air_compressor' ? `${device.metrics.pressure || 0} bar` :
@@ -149,7 +169,7 @@ export function Devices() {
             device.type === 'plc' ? `I/O: ${device.metrics.io_rate || 0}/s` :
             device.type === 'solar_inverter' ? `${device.metrics.power || 0} W` :
             device.type === 'pump_controller' ? `${device.metrics.pressure || 0} bar` :
-            '-';
+            '-');
 
           return (
             <div key={device.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
@@ -275,6 +295,7 @@ export function Devices() {
                   {device.type === 'plc' && `I/O: ${device.metrics.io_rate || 0}/s`}
                   {device.type === 'solar_inverter' && `${device.metrics.power || 0} W`}
                   {device.type === 'pump_controller' && `${device.metrics.pressure || 0} bar`}
+                  {!['energy_meter', 'temperature_sensor', 'air_compressor', 'gateway', 'dtu', 'rtu', 'lora_gateway', 'plc', 'solar_inverter', 'pump_controller'].includes(device.type) && getDeviceKeyMetric(device)}
                 </td>
                 <td className="p-4 text-slate-500 dark:text-slate-400">
                   {new Date(device.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}

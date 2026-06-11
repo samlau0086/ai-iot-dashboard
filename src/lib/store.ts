@@ -292,7 +292,7 @@ export interface ScadaElement {
   lineAnimation?: 'none' | 'flow' | 'pulse' | 'glow';
   lineAnimationSpeed?: number;
   arrowSize?: number;
-  lineProtocol?: 'ethernet' | 'rs485' | 'rs232' | 'can' | 'modbus' | 'wifi' | 'lora' | 'custom';
+  lineProtocol?: 'ethernet' | 'rs485' | 'rs232' | 'can' | 'modbus' | 'wifi' | 'lora' | '4g' | '5g' | 'satellite' | 'custom';
   imageSrc?: string;
   imageFileName?: string;
   imageOpacity?: number;
