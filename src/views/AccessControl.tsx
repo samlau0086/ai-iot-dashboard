@@ -3,6 +3,7 @@ import { Check, Copy, Edit2, Eye, KeyRound, Plus, QrCode, RefreshCw, Trash2, X }
 import { useAppStore, type AccessCredential, type AccessDefinition } from '../lib/store';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
+import { notifySuccess } from '../lib/toast';
 
 const createAccessDraft = (): AccessDefinition => ({
   id: `access-${Date.now()}`,
@@ -289,6 +290,7 @@ export function AccessControl() {
         body: JSON.stringify({ extraParams }),
       });
       setMessage('Access parameters saved.');
+      notifySuccess('Access parameters saved successfully.');
     } catch {
       setMessage('Extra parameters must be valid JSON.');
     }
@@ -421,6 +423,7 @@ export function AccessControl() {
     setCredentialModal(null);
     setCredentialDraft({});
     setMessage('Credential updated.');
+    notifySuccess('Credential saved successfully.');
   };
 
   const deleteCredential = async (credentialId: string) => {

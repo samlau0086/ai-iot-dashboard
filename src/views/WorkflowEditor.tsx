@@ -11,6 +11,7 @@ import {
 import { cn } from '../lib/utils';
 import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
 import { confirmDelete } from '../lib/confirm';
+import { notifySuccess } from '../lib/toast';
 
 interface WorkflowEditorProps {
   workflowId: string;
@@ -837,6 +838,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     } else {
       updateWorkflow(draft.id, workflowToSave);
     }
+    notifySuccess('Workflow saved successfully.');
     onBack();
   };
 
@@ -882,6 +884,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       nodes: draft.nodes.map((node) => node.id === selectedNodeDraft.id ? selectedNodeDraft : node),
     });
     setNodeSettingsDirty(false);
+    notifySuccess('Workflow node saved successfully.');
   };
 
   const resetNodeSettings = () => {

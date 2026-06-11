@@ -6,6 +6,7 @@ import { IOT_ICONS, getDeviceIcon } from '../lib/icons';
 import { scadaIconPresets } from '../lib/scadaIconPresets';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
+import { notifySuccess } from '../lib/toast';
 import type { Device } from '../types';
 
 const CANVAS_WIDTH = 2200;
@@ -688,6 +689,7 @@ export function ScadaView() {
   const saveScene = () => {
     if (!activeSite) return;
     updateScadaScene(activeSite.id, draft);
+    notifySuccess('SCADA scene saved successfully.');
     setActiveInnerPart(null);
     setEditMode(false);
   };
@@ -956,6 +958,7 @@ export function ScadaView() {
     } else {
       addScadaShapePreset(savedShape);
     }
+    notifySuccess('SCADA shape saved successfully.');
     setEditingShape(null);
     setSelectedPrimitiveId('');
     setSelectedEndpointId('');

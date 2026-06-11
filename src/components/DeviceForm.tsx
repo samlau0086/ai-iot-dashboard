@@ -4,6 +4,7 @@ import { translations } from '../lib/i18n';
 import { Device, DeviceType } from '../types';
 import { IOT_ICONS } from '../lib/icons';
 import { ArrowLeft, Copy, Upload, X } from 'lucide-react';
+import { notifySuccess } from '../lib/toast';
 
 interface DeviceFormProps {
   deviceId?: string; // If provided, it's edit mode
@@ -300,6 +301,7 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
     } else {
       addDevice(newDevice);
     }
+    notifySuccess('Device saved successfully.');
     onClose();
   };
 

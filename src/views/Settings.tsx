@@ -4,6 +4,7 @@ import { useAppStore, type NotificationChannel, type SiteTenant } from '../lib/s
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
+import { notifySuccess } from '../lib/toast';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
@@ -430,6 +431,7 @@ export function Settings() {
           : mqttChannels);
         setMqttStatuses(payload.mqttStatuses || {});
         setMqttObservedTopics(payload.mqttObservedTopics || {});
+        notifySuccess('Data sources saved successfully.');
       }
       setDataSourceMessage(response.ok ? 'Device data source channels saved.' : 'Failed to save device data source channels.');
     } catch (error) {

@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { User as UserIcon, Lock, Mail } from 'lucide-react';
+import { notifySuccess } from '../lib/toast';
 
 export function Profile() {
   const { language, currentUser, updateCurrentUser } = useAppStore();
@@ -32,6 +33,7 @@ export function Profile() {
 
   const handleSave = () => {
     updateCurrentUser(formData);
+    notifySuccess('Profile saved successfully.');
   };
 
   return (

@@ -10,6 +10,7 @@ import { cn } from '../lib/utils';
 import { IOT_ICONS } from '../lib/icons';
 import { deriveAlertsFromDevices, deriveEnergyTrendData } from '../lib/derivedData';
 import { confirmDelete } from '../lib/confirm';
+import { notifySuccess } from '../lib/toast';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
@@ -872,6 +873,7 @@ export function Overview() {
       addOverviewWidgetLibraryItem(widget, selectedSiteId);
     }
 
+    notifySuccess('Widget saved successfully.');
     setShowWidgetBuilder(false);
     resetWidgetBuilder();
   };
