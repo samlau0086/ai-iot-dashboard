@@ -799,9 +799,9 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
                   className="mt-1 rounded border-slate-300 text-orange-600 focus:ring-orange-500 dark:border-slate-700"
                 />
                 <span>
-                  SCADA telemetry timeout marks device offline
+                  Use custom realtime offline timeout
                   <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
-                    Disabled by default. When enabled, SCADA treats this device as offline if no telemetry is received within the configured time window.
+                    Realtime views always mark stale telemetry offline. Enable this to override the default 120-second timeout for this device.
                   </span>
                 </span>
               </label>

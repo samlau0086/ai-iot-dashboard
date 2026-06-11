@@ -64,7 +64,11 @@ const averageMetric = (devices: Device[], metric: string) => {
 
 const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
   const fallbackData = chartProfiles[chartConf.dataSource] || [];
-  if (!devices || devices.length === 0) return fallbackData;
+  const zeroData = fallbackData.length
+    ? fallbackData.map((item) => ({ ...item, A: 0, B: 0, value: 0 }))
+    : [{ name: 'No Data', A: 0, B: 0, value: 0 }];
+  if (!devices) return fallbackData;
+  if (devices.length === 0) return zeroData;
   const boundMetric = chartConf.metricKey;
 
   if (boundMetric) {
@@ -80,6 +84,7 @@ const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
     }
 
     const totalValue = deviceMetricData.reduce((total, item) => total + item.value, 0);
+    if (totalValue <= 0) return zeroData;
     const factor = Math.max(totalValue / 600, 0.2);
     return fallbackData.map((item) => ({
       ...item,
@@ -97,7 +102,9 @@ const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
 
   if (chartConf.dataSource === 'energy') {
     const metric = boundMetric || 'energy';
-    const factor = Math.max(sumMetric(devices, metric) / 600, 0.2);
+    const totalValue = sumMetric(devices, metric);
+    if (totalValue <= 0) return zeroData;
+    const factor = Math.max(totalValue / 600, 0.2);
     return fallbackData.map((item) => ({
       ...item,
       A: Math.round(item.A * factor),
@@ -115,7 +122,7 @@ const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
   if (!metric) return fallbackData;
 
   const averageValue = averageMetric(devices, metric);
-  if (!averageValue) return fallbackData;
+  if (!averageValue) return zeroData;
 
   const fallbackAverage = averageMetric(fallbackData.map((item) => ({ metrics: { [metric]: item.A } } as Device)), metric) || 1;
   const factor = averageValue / fallbackAverage;

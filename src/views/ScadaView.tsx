@@ -8,6 +8,8 @@ import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import type { Device } from '../types';
+import { isDeviceTelemetryFresh } from '../lib/deviceStatus';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 const CANVAS_WIDTH = 2200;
 const CANVAS_HEIGHT = 1400;
@@ -122,11 +124,7 @@ const createBlankScene = (siteId: string, siteName: string): ScadaScene => ({
 });
 
 const isDeviceReadingFresh = (device: Device | undefined, now = Date.now()) => {
-  if (!device?.lastSeen) return false;
-  if (!device.config?.scadaOfflineDetectionEnabled) return true;
-  const timeoutMs = Math.max(5, Number(device.config.scadaOfflineTimeoutSeconds || 120)) * 1000;
-  const lastSeen = new Date(device.lastSeen).getTime();
-  return Number.isFinite(lastSeen) && now - lastSeen <= timeoutMs;
+  return isDeviceTelemetryFresh(device, now);
 };
 
 const getDeviceValue = (element: ScadaElement, devices: Device[], now = Date.now()) => {
@@ -142,8 +140,9 @@ const getDeviceValue = (element: ScadaElement, devices: Device[], now = Date.now
 
 const getElementState = (element: ScadaElement, devices: Device[], now = Date.now()) => {
   const {device, fresh, value} = getDeviceValue(element, devices, now);
-  if (!device || !fresh) return 'noData';
+  if (!device) return 'noData';
   if (device.status === 'offline') return 'critical';
+  if (!fresh) return 'noData';
   if (device.status === 'warning') return 'warning';
   if (Number.isFinite(value) && element.critical !== undefined && value >= element.critical) return 'critical';
   if (Number.isFinite(value) && element.warning !== undefined && value >= element.warning) return 'warning';
@@ -320,7 +319,7 @@ export function ScadaView() {
   const {
     activeSiteId,
     sites,
-    devices,
+    devices: storedDevices,
     workflows,
     scadaScenesBySite,
     scadaShapePresets,
@@ -329,6 +328,7 @@ export function ScadaView() {
     updateScadaShapePreset,
     deleteScadaShapePreset,
   } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const activeSite = sites.find((site) => site.id === activeSiteId) || sites[0];
   const fallbackScene = createBlankScene(activeSite?.id || 'factory-a', activeSite?.name || 'Site');
   const storeScene = scadaScenesBySite[activeSite?.id || 'factory-a'] || fallbackScene;

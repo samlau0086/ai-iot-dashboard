@@ -3,9 +3,11 @@ import { Bell, BrainCircuit, CheckCircle2, Languages, Moon, Search, Sun } from '
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 export function Header() {
-  const { language, setLanguage, theme, toggleTheme, devices, currentUser, sites, activeSiteId, setActiveSite } = useAppStore();
+  const { language, setLanguage, theme, toggleTheme, devices: storedDevices, currentUser, sites, activeSiteId, setActiveSite } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
   const [showNotifications, setShowNotifications] = useState(false);
   const [readNotificationKeys, setReadNotificationKeys] = useState<string[]>([]);

@@ -3,6 +3,7 @@ import { FileText, Download, Calendar, Mail, FileDown } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 type ReportItem = {
   id: string;
@@ -46,7 +47,8 @@ const getCsvSize = (rows: string[][]) => {
 };
 
 export function Reports() {
-  const { language, devices } = useAppStore();
+  const { language, devices: storedDevices } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
   const alerts = deriveAlertsFromDevices(devices);
 

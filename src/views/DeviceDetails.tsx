@@ -8,12 +8,14 @@ import { cn } from '../lib/utils';
 import { DeviceForm } from '../components/DeviceForm';
 import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, sanitizeControlDefinition, type DeviceControlDefinition, type DeviceControlValueType } from '../lib/deviceControls';
 import { confirmDelete } from '../lib/confirm';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { devices, language, updateDevice, currentUser } = useAppStore();
+  const { devices: storedDevices, language, updateDevice, currentUser } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
 
   const device = devices.find(d => d.id === id);

@@ -8,6 +8,7 @@ import { DeviceConfirmDelete } from '../components/DeviceConfirmDelete';
 import { getDeviceIcon } from '../lib/icons';
 import { Link } from 'react-router-dom';
 import type { Device } from '../types';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 const getDeviceKeyMetric = (device: Device) => {
   const metrics = device.metrics || {};
@@ -29,7 +30,8 @@ const getDeviceKeyMetric = (device: Device) => {
 };
 
 export function Devices() {
-  const { language, devices, sites, activeSiteId, setActiveSite } = useAppStore();
+  const { language, devices: storedDevices, sites, activeSiteId, setActiveSite } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
 
   const [activeView, setActiveView] = useState<'list' | 'form'>('list');

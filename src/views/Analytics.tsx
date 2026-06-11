@@ -4,9 +4,11 @@ import { translations } from '../lib/i18n';
 import { Plus } from 'lucide-react';
 import { ChartRenderer } from '../components/ChartRenderer';
 import { confirmDelete } from '../lib/confirm';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 export function Analytics() {
-  const { language, theme, charts, addChart, removeChart, devices } = useAppStore();
+  const { language, theme, charts, addChart, removeChart, devices: storedDevices } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);

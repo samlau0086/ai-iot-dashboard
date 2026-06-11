@@ -11,6 +11,7 @@ import { IOT_ICONS } from '../lib/icons';
 import { deriveAlertsFromDevices, deriveEnergyTrendData } from '../lib/derivedData';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
@@ -392,7 +393,7 @@ export function Overview() {
   const {
     language,
     theme,
-    devices,
+    devices: storedDevices,
     charts,
     overviewWidgets: globalOverviewWidgets,
     overviewWidgetLibrary: globalOverviewWidgetLibrary,
@@ -410,6 +411,7 @@ export function Overview() {
     updateOverviewWidgetLibraryItem,
     removeOverviewWidgetLibraryItem,
   } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
   const [showWidgetBuilder, setShowWidgetBuilder] = useState(false);
   const [activeSnapGuide, setActiveSnapGuide] = useState<SnapGuide>({});

@@ -4,9 +4,11 @@ import { cn } from '../lib/utils';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 export function Alerts() {
-  const { language, devices } = useAppStore();
+  const { language, devices: storedDevices } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
   const alerts = deriveAlertsFromDevices(devices);
 

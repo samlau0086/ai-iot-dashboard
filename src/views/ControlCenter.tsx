@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, History, Play, RefreshCw, SlidersHorizonta
 import { useAppStore } from '../lib/store';
 import { cn } from '../lib/utils';
 import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, isDeviceControllable } from '../lib/deviceControls';
+import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 type ControlCommand = {
   id: string;
@@ -20,7 +21,8 @@ type ControlCommand = {
 };
 
 export function ControlCenter() {
-  const { devices, currentUser, activeSiteId, sites, updateDevice } = useAppStore();
+  const { devices: storedDevices, currentUser, activeSiteId, sites, updateDevice } = useAppStore();
+  const devices = useRuntimeDevices(storedDevices);
   const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || 'All');
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [selectedCommand, setSelectedCommand] = useState('power_on');
