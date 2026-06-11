@@ -1805,7 +1805,10 @@ export function ScadaView() {
           onClick={(event) => {
             event.stopPropagation();
             setSelectedElementId(element.id);
-            if (!editMode && element.deviceId) navigate(`/devices/${element.deviceId}`, { state: { from: '/scada' } });
+          }}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            if (!editMode && element.deviceId) navigate(`/devices/${device?.id || element.deviceId}`, { state: { from: '/scada' } });
           }}
           className={cn(editMode ? 'cursor-move' : element.deviceId && 'cursor-pointer')}
         >
@@ -1848,7 +1851,10 @@ export function ScadaView() {
           event.stopPropagation();
           setSelectedElementId(element.id);
           if (activeInnerPart?.id !== element.id) setActiveInnerPart(null);
-          if (!editMode && element.deviceId) navigate(`/devices/${element.deviceId}`, { state: { from: '/scada' } });
+        }}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          if (!editMode && element.deviceId) navigate(`/devices/${device?.id || element.deviceId}`, { state: { from: '/scada' } });
         }}
         className={cn(editMode ? 'cursor-move' : element.deviceId && 'cursor-pointer')}
       >
