@@ -524,7 +524,7 @@ export function ScadaView() {
   };
 
   const selectedElement = draft?.elements.find((element) => element.id === selectedElementId) || null;
-  const siteDevices = useMemo(
+  const scadaBindableDevices = useMemo(
     () => devices.filter((device) => {
       if (!activeSite) return true;
       if (device.id === selectedElement?.deviceId || device.config?.externalDeviceId === selectedElement?.deviceId) return true;
@@ -2829,7 +2829,8 @@ export function ScadaView() {
                 Device
                 <select value={selectedElement.deviceId || ''} onChange={(event) => updateElement(selectedElement.id, { deviceId: event.target.value, metricKey: '' })} className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
                   <option value="">Unbound</option>
-                  {siteDevices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
+                  {scadaBindableDevices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
+                  {scadaBindableDevices.length === 0 && <option value="" disabled>No devices in this site</option>}
                 </select>
               </label>
               <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
