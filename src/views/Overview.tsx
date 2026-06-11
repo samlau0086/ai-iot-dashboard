@@ -12,7 +12,6 @@ import { deriveAlertsFromDevices, deriveEnergyTrendData } from '../lib/derivedDa
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
-import { deriveRuntimeDevices } from '../lib/deviceStatus';
 import type { Device } from '../types';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
@@ -206,6 +205,8 @@ const getTelemetryMetrics = (message: OverviewTelemetryMessage) => (
     return acc;
   }, {})
 );
+
+const getTelemetryDeviceId = (message: OverviewTelemetryMessage) => String(message.device_id || message.deviceId || message.id || '');
 
 const WIDGET_PRESET_LIBRARY: (OverviewWidget & { category: string; description: string })[] = [
   {
@@ -545,7 +546,7 @@ export function Overview() {
         });
       });
 
-    return deriveRuntimeDevices(Array.from(snapshotById.values()), historyCursor);
+    return Array.from(snapshotById.values());
   }, [historyCursor, historyMessages, historyMode, liveDevices, storedDevices]);
   const historyProgress = historyMode && historyRangeValid
     ? Math.max(0, Math.min(100, ((historyCursor - historyStartMs) / (historyEndMs - historyStartMs)) * 100))
@@ -787,6 +788,55 @@ export function Overview() {
 
     const targetIds = new Set(targetDevices.map((device) => device.id));
     return deriveAlertsFromDevices(devices).filter((alert) => targetIds.has(alert.deviceId));
+  };
+
+  const getHistoryTrendData = (targetDevices: Device[], metricKey: string) => {
+    const fallbackData = deriveEnergyTrendData(targetDevices, metricKey).map((point) => ({
+      time: point.time,
+      value: point.value,
+      baseline: point.baseline,
+    }));
+    if (!historyMode || !historyRangeValid) return fallbackData;
+
+    const targetIds = new Set<string>();
+    targetDevices.forEach((device) => {
+      targetIds.add(device.id);
+      if (device.config?.externalDeviceId) targetIds.add(device.config.externalDeviceId);
+    });
+
+    const visibleMessages = historyMessages
+      .map((message) => ({ message, time: getTelemetryTime(message), metrics: getTelemetryMetrics(message) }))
+      .filter(({ message, time, metrics }) => (
+        time >= historyStartMs
+        && time <= historyCursor
+        && targetIds.has(getTelemetryDeviceId(message))
+        && Number.isFinite(Number(metrics[metricKey]))
+      ))
+      .sort((first, second) => first.time - second.time);
+
+    if (visibleMessages.length === 0) {
+      return [
+        { time: new Date(historyStartMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), value: 0, baseline: 0 },
+        { time: new Date(Math.min(historyCursor, historyEndMs)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), value: 0, baseline: 0 },
+      ];
+    }
+
+    const bucketCount = 12;
+    const bucketSize = Math.max(1, (historyEndMs - historyStartMs) / bucketCount);
+    const buckets = new Map<number, number>();
+    visibleMessages.forEach(({ time, metrics }) => {
+      const bucket = Math.max(0, Math.min(bucketCount - 1, Math.floor((time - historyStartMs) / bucketSize)));
+      buckets.set(bucket, (buckets.get(bucket) || 0) + Number(metrics[metricKey] || 0));
+    });
+
+    return Array.from(buckets.entries()).map(([bucket, value]) => {
+      const bucketTime = historyStartMs + bucket * bucketSize;
+      return {
+        time: new Date(bucketTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        value: Number(value.toFixed(3)),
+        baseline: 0,
+      };
+    });
   };
 
   const getStatsForDevices = (targetDevices: any[]): Record<OverviewKpiKey, { name: string; value: string; icon: any }> => {
@@ -1242,7 +1292,7 @@ export function Overview() {
 
   const renderTrend = (widget: OverviewWidget) => {
     const targetDevices = getWidgetDevices(widget);
-    const widgetTrendData = deriveEnergyTrendData(targetDevices, 'power');
+    const widgetTrendData = getHistoryTrendData(targetDevices, 'power');
 
     return (
     <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
@@ -1321,6 +1371,18 @@ export function Overview() {
   const renderAnalyticChart = (widgetConfig: OverviewWidget) => {
     const chartConf = charts.find(c => c.id === widgetConfig.chartId);
     if (!chartConf) return <div className="p-4 text-xs text-slate-500 border rounded-lg h-full overflow-hidden">Chart not found</div>;
+    const chartDevices = getWidgetDevices(widgetConfig);
+    const metricBySource: Record<string, string> = {
+      energy: 'energy',
+      solar: 'energy_today',
+      coldStorage: 'temperature',
+      waterPump: 'pressure',
+      airCompressor: 'pressure',
+    };
+    const chartMetric = chartConf.metricKey || metricBySource[chartConf.dataSource];
+    const chartHistoryData = historyMode && chartConf.type === 'line' && chartMetric
+      ? getHistoryTrendData(chartDevices, chartMetric).map((point) => ({ name: point.time, A: point.value, value: point.value }))
+      : undefined;
 
     return (
       <div className="h-full w-full overflow-hidden rounded-lg bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col group relative">
@@ -1341,7 +1403,7 @@ export function Overview() {
           </h3>
         </div>
         <div className="p-4 flex-1 min-h-0">
-          <ChartRenderer chartConf={chartConf} theme={theme} devices={getWidgetDevices(widgetConfig)} />
+          <ChartRenderer chartConf={chartConf} theme={theme} devices={chartDevices} dataOverride={chartHistoryData} />
         </div>
       </div>
     );
@@ -1359,10 +1421,7 @@ export function Overview() {
     const displayValue = displayMode === 'number' || displayMode === 'bar' || displayMode === 'donut' ? value : averageValue;
     const ruleState = getWidgetRuleState(displayValue, widget);
     const ruleColor = getWidgetRuleColor(widget, ruleState);
-    const trendData = deriveEnergyTrendData(targetDevices, metricKey).map((point) => ({
-      time: point.time,
-      value: point.value,
-    }));
+    const trendData = getHistoryTrendData(targetDevices, metricKey);
     const deviceMetricData = targetDevices
       .map((device) => ({
         name: device.name,

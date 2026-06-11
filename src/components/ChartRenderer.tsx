@@ -133,7 +133,7 @@ const getDeviceDrivenData = (chartConf: ChartConfig, devices?: Device[]) => {
   }));
 };
 
-export function ChartRenderer({ chartConf, theme, devices }: { chartConf: ChartConfig, theme: string, devices?: Device[] }) {
+export function ChartRenderer({ chartConf, theme, devices, dataOverride }: { chartConf: ChartConfig, theme: string, devices?: Device[], dataOverride?: any[] }) {
   const isDark = theme === 'dark';
   const cartesianGridStroke = isDark ? '#334155' : '#e2e8f0';
   const tooltipBg = isDark ? '#0f1115' : '#ffffff';
@@ -141,7 +141,7 @@ export function ChartRenderer({ chartConf, theme, devices }: { chartConf: ChartC
   const tooltipColor = isDark ? '#cbd5e1' : '#334155';
   const cursorFill = isDark ? '#334155' : '#f8fafc';
 
-  const data = getDeviceDrivenData(chartConf, devices);
+  const data = dataOverride || getDeviceDrivenData(chartConf, devices);
   
   if (chartConf.type === 'pie') {
     return (
