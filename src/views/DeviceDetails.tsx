@@ -2,13 +2,41 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
-import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play, Plus, Trash2, X, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play, Plus, Trash2, X, AlertTriangle, Database, RefreshCw } from 'lucide-react';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { DeviceForm } from '../components/DeviceForm';
 import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, sanitizeControlDefinition, type DeviceControlDefinition, type DeviceControlValueType } from '../lib/deviceControls';
 import { confirmDelete } from '../lib/confirm';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+
+type DeviceMetricLog = {
+  device_id?: string;
+  deviceId?: string;
+  id?: string;
+  source?: string;
+  topic?: string;
+  mqtt_topic?: string;
+  received_at?: string;
+  timestamp?: string;
+  metrics?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+const getMetricLogTime = (message: DeviceMetricLog) => String(message.received_at || message.timestamp || '');
+const getMetricLogKey = (message: DeviceMetricLog, index: number) => [
+  message.device_id || message.deviceId || message.id || 'device',
+  message.source || 'source',
+  message.topic || message.mqtt_topic || 'topic',
+  getMetricLogTime(message) || index,
+].join(':');
+
+const formatMetricLogValue = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return '-';
+  const numericValue = Number(value);
+  if (Number.isFinite(numericValue)) return numericValue.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return String(value);
+};
 
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
@@ -18,6 +46,7 @@ export function DeviceDetails() {
   const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
 
+  const storedDevice = storedDevices.find(d => d.id === id);
   const device = devices.find(d => d.id === id);
   const [isEditing, setIsEditing] = useState(false);
 
@@ -29,6 +58,11 @@ export function DeviceDetails() {
   const [controlDraft, setControlDraft] = useState<DeviceControlDefinition | null>(null);
   const [controlOptionsDraft, setControlOptionsDraft] = useState('');
   const [controlFieldsDraft, setControlFieldsDraft] = useState('');
+  const [metricLogs, setMetricLogs] = useState<DeviceMetricLog[]>([]);
+  const [metricLogsLoading, setMetricLogsLoading] = useState(false);
+  const [metricLogsError, setMetricLogsError] = useState('');
+  const [metricLogMetric, setMetricLogMetric] = useState('');
+  const [metricLogLimit, setMetricLogLimit] = useState(50);
   const controlDefinitions = getDeviceControlDefinitions(device);
   const canControl = currentUser?.role !== 'Demo' && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
 
@@ -42,6 +76,54 @@ export function DeviceDetails() {
       ])),
     });
   }, [device?.id]);
+
+  const queryMetricLogs = async () => {
+    const targetDevice = storedDevice || device;
+    if (!targetDevice) return;
+
+    setMetricLogsLoading(true);
+    setMetricLogsError('');
+
+    try {
+      const deviceIds = Array.from(new Set([
+        targetDevice.config?.externalDeviceId,
+        targetDevice.id,
+      ].filter(Boolean)));
+      const responses = await Promise.all(deviceIds.map(async (deviceIdValue) => {
+        const params = new URLSearchParams();
+        params.set('deviceId', String(deviceIdValue));
+        if (metricLogMetric) params.set('metric', metricLogMetric);
+        params.set('limit', String(metricLogLimit));
+        const response = await fetch(`/api/telemetry?${params.toString()}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `Telemetry query failed: ${response.status}`);
+        return Array.isArray(payload.messages) ? payload.messages as DeviceMetricLog[] : [];
+      }));
+
+      const byKey = new Map<string, DeviceMetricLog>();
+      responses.flat().forEach((message, index) => {
+        byKey.set(getMetricLogKey(message, index), message);
+      });
+      setMetricLogs(Array.from(byKey.values()).sort((first, second) => (
+        new Date(getMetricLogTime(second)).getTime() - new Date(getMetricLogTime(first)).getTime()
+      )));
+    } catch (error) {
+      setMetricLogs([]);
+      setMetricLogsError(error instanceof Error ? error.message : 'Failed to load device metric logs.');
+    } finally {
+      setMetricLogsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    queryMetricLogs();
+  }, [storedDevice?.id, storedDevice?.config?.externalDeviceId, metricLogMetric, metricLogLimit]);
+
+  const metricLogOptions = Array.from(new Set([
+    ...Object.keys(storedDevice?.metrics || {}),
+    ...Object.keys(device?.metrics || {}),
+    ...metricLogs.flatMap((message) => Object.keys(message.metrics || {})),
+  ])).sort();
 
   if (!device) {
     return (
@@ -579,6 +661,127 @@ export function DeviceDetails() {
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white uppercase tracking-wider text-[11px] font-mono">
+                  <Database className="h-4 w-4" /> Metrics Logs
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Historical telemetry for this device. Use it to verify widget and chart data.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={queryMetricLogs}
+                disabled={metricLogsLoading}
+                className="inline-flex h-8 items-center gap-1.5 rounded border border-slate-300 px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <RefreshCw className={cn('h-3.5 w-3.5', metricLogsLoading && 'animate-spin')} />
+                Refresh
+              </button>
+            </div>
+
+            <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="space-y-1 text-xs font-medium uppercase tracking-wider text-slate-500">
+                Metric
+                <select
+                  value={metricLogMetric}
+                  onChange={(event) => setMetricLogMetric(event.target.value)}
+                  className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                >
+                  <option value="">All metrics</option>
+                  {metricLogOptions.map((metric) => (
+                    <option key={metric} value={metric}>{metric}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-xs font-medium uppercase tracking-wider text-slate-500">
+                Limit
+                <select
+                  value={metricLogLimit}
+                  onChange={(event) => setMetricLogLimit(Number(event.target.value))}
+                  className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                >
+                  {[20, 50, 100, 200].map((limit) => (
+                    <option key={limit} value={limit}>{limit} rows</option>
+                  ))}
+                </select>
+              </label>
+              <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-900">
+                <p className="font-mono uppercase tracking-wider text-slate-500">Current</p>
+                <p className="mt-1 truncate font-mono text-sm text-slate-900 dark:text-slate-200">
+                  {metricLogMetric
+                    ? `${formatMetricLogValue(device.metrics?.[metricLogMetric])} ${metricUnit(metricLogMetric)}`
+                    : `${Object.keys(device.metrics || {}).length} live metrics`}
+                </p>
+              </div>
+            </div>
+
+            {metricLogsError && (
+              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+                {metricLogsError}
+              </div>
+            )}
+
+            <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+              <div className="max-h-80 overflow-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-left text-xs dark:divide-slate-800">
+                  <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 dark:bg-slate-900">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Received</th>
+                      <th className="px-3 py-2 font-semibold">Source</th>
+                      <th className="px-3 py-2 font-semibold">Metric Value</th>
+                      <th className="px-3 py-2 font-semibold">Metrics</th>
+                      <th className="px-3 py-2 font-semibold">Topic</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white font-mono dark:divide-slate-800/70 dark:bg-[#1c2128]">
+                    {metricLogs.map((message, index) => {
+                      const metrics = message.metrics || {};
+                      const metricEntries = Object.entries(metrics);
+                      const selectedValue = metricLogMetric ? metrics[metricLogMetric] : undefined;
+                      const preview = metricEntries.slice(0, 4).map(([key, value]) => `${key}: ${formatMetricLogValue(value)}`).join(' | ');
+
+                      return (
+                        <tr key={getMetricLogKey(message, index)} className="hover:bg-slate-50 dark:hover:bg-slate-900/60">
+                          <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">
+                            {getMetricLogTime(message) ? new Date(getMetricLogTime(message)).toLocaleString() : '-'}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2 text-slate-500">{String(message.source || '-')}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-slate-900 dark:text-white">
+                            {metricLogMetric ? `${formatMetricLogValue(selectedValue)} ${metricUnit(metricLogMetric)}` : '-'}
+                          </td>
+                          <td className="max-w-sm px-3 py-2 text-slate-500">
+                            <span title={JSON.stringify(metrics)}>{preview || '-'}</span>
+                            {metricEntries.length > 4 && <span className="ml-1 text-slate-400">+{metricEntries.length - 4}</span>}
+                          </td>
+                          <td className="max-w-[14rem] truncate px-3 py-2 text-slate-500" title={String(message.topic || message.mqtt_topic || '')}>
+                            {String(message.topic || message.mqtt_topic || '-')}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!metricLogsLoading && metricLogs.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-8 text-center text-sm text-slate-500">
+                          No metric logs found for this device.
+                        </td>
+                      </tr>
+                    )}
+                    {metricLogsLoading && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-8 text-center text-sm text-slate-500">
+                          Loading metric logs...
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
           <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
