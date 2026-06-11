@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal } from 'lucide-react';
+import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal, Play, Pause, History, RotateCcw } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { useAppStore } from '../lib/store';
 import type { OverviewKpiKey, OverviewWidget } from '../lib/store';
@@ -12,6 +12,8 @@ import { deriveAlertsFromDevices, deriveEnergyTrendData } from '../lib/derivedDa
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { deriveRuntimeDevices } from '../lib/deviceStatus';
+import type { Device } from '../types';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
@@ -27,6 +29,16 @@ type SnapGuide = {
 
 type WidgetDisplayMode = NonNullable<OverviewWidget['displayMode']>;
 type WidgetRuleState = 'normal' | 'warning' | 'critical' | 'noData';
+type OverviewTelemetryMessage = {
+  device_id?: string;
+  deviceId?: string;
+  id?: string;
+  status?: Device['status'];
+  timestamp?: string;
+  received_at?: string;
+  metrics?: Record<string, unknown>;
+  [key: string]: unknown;
+};
 
 const KPI_WIDGETS: { id: string; key: OverviewKpiKey; x: number }[] = [
   { id: 'kpi-total-devices', key: 'totalDevices', x: 0 },
@@ -157,6 +169,33 @@ const DEFAULT_WIDGET_COLORS: Record<WidgetRuleState, string> = {
   critical: '#ef4444',
   noData: '#94a3b8',
 };
+const HISTORY_PLAYBACK_TICK_MS = 1000;
+const HISTORY_PLAYBACK_STEPS = 120;
+
+const toDateTimeLocal = (date: Date) => {
+  const timezoneOffset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16);
+};
+
+const toIsoOrEmpty = (value: string) => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
+};
+
+const getTelemetryTime = (message: OverviewTelemetryMessage) => {
+  const rawTime = String(message.received_at || message.timestamp || '');
+  const time = new Date(rawTime).getTime();
+  return Number.isFinite(time) ? time : 0;
+};
+
+const getTelemetryMetrics = (message: OverviewTelemetryMessage) => (
+  Object.entries(message.metrics || {}).reduce<Record<string, number>>((acc, [key, value]) => {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) acc[key] = numericValue;
+    return acc;
+  }, {})
+);
 
 const WIDGET_PRESET_LIBRARY: (OverviewWidget & { category: string; description: string })[] = [
   {
@@ -411,11 +450,19 @@ export function Overview() {
     updateOverviewWidgetLibraryItem,
     removeOverviewWidgetLibraryItem,
   } = useAppStore();
-  const devices = useRuntimeDevices(storedDevices);
+  const liveDevices = useRuntimeDevices(storedDevices);
   const t = translations[language];
   const [showWidgetBuilder, setShowWidgetBuilder] = useState(false);
   const [activeSnapGuide, setActiveSnapGuide] = useState<SnapGuide>({});
   const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || 'factory-a');
+  const [historyFrom, setHistoryFrom] = useState(() => toDateTimeLocal(new Date(Date.now() - 60 * 60 * 1000)));
+  const [historyTo, setHistoryTo] = useState(() => toDateTimeLocal(new Date()));
+  const [historyMode, setHistoryMode] = useState(false);
+  const [historyPlaying, setHistoryPlaying] = useState(false);
+  const [historyCursor, setHistoryCursor] = useState(() => new Date(historyFrom).getTime());
+  const [historyMessages, setHistoryMessages] = useState<OverviewTelemetryMessage[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
   const [configWidgetId, setConfigWidgetId] = useState<string | null>(null);
   const [editingLibraryWidgetId, setEditingLibraryWidgetId] = useState<string | null>(null);
   const [draggingLibraryWidgetId, setDraggingLibraryWidgetId] = useState<string | null>(null);
@@ -445,6 +492,111 @@ export function Overview() {
   const overviewLayout = activeOverviewDashboard.layout || [];
   const overviewWidgets = activeOverviewDashboard.widgets || [];
   const overviewWidgetLibrary = activeOverviewDashboard.widgetLibrary || [];
+  const historyStartMs = new Date(historyFrom).getTime();
+  const historyEndMs = new Date(historyTo).getTime();
+  const historyRangeValid = Number.isFinite(historyStartMs) && Number.isFinite(historyEndMs) && historyEndMs > historyStartMs;
+  const devices = useMemo(() => {
+    if (!historyMode) return liveDevices;
+
+    const snapshotById = new Map<string, Device>(storedDevices.map((device): [string, Device] => [
+      device.id,
+      {
+        ...device,
+        metrics: {},
+        status: 'offline' as const,
+        lastSeen: '',
+      },
+    ]));
+
+    [...historyMessages]
+      .filter((message) => getTelemetryTime(message) <= historyCursor)
+      .sort((first, second) => getTelemetryTime(first) - getTelemetryTime(second))
+      .forEach((message) => {
+        const telemetryDeviceId = String(message.device_id || message.deviceId || message.id || '');
+        if (!telemetryDeviceId) return;
+        const target = Array.from(snapshotById.values()).find((device) => (
+          device.id === telemetryDeviceId || device.config?.externalDeviceId === telemetryDeviceId
+        ));
+        if (!target) return;
+        const metrics = getTelemetryMetrics(message);
+        const messageTime = getTelemetryTime(message);
+        snapshotById.set(target.id, {
+          ...target,
+          status: message.status || 'online',
+          lastSeen: messageTime ? new Date(messageTime).toISOString() : target.lastSeen,
+          metrics: {
+            ...target.metrics,
+            ...metrics,
+          },
+        });
+      });
+
+    return deriveRuntimeDevices(Array.from(snapshotById.values()), historyCursor);
+  }, [historyCursor, historyMessages, historyMode, liveDevices, storedDevices]);
+  const historyProgress = historyMode && historyRangeValid
+    ? Math.max(0, Math.min(100, ((historyCursor - historyStartMs) / (historyEndMs - historyStartMs)) * 100))
+    : 0;
+  const historyCursorLabel = historyMode && Number.isFinite(historyCursor)
+    ? new Date(historyCursor).toLocaleString()
+    : 'Live';
+
+  const loadHistoryRange = async () => {
+    setHistoryPlaying(false);
+    setHistoryError('');
+
+    if (!historyRangeValid) {
+      setHistoryError('Please select a valid time range.');
+      return;
+    }
+
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('from', toIsoOrEmpty(historyFrom));
+      params.set('to', toIsoOrEmpty(historyTo));
+      params.set('limit', '1000');
+      const response = await fetch(`/api/telemetry?${params.toString()}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `Telemetry query failed: ${response.status}`);
+      const messages = Array.isArray(payload.messages) ? payload.messages as OverviewTelemetryMessage[] : [];
+      setHistoryMessages(messages);
+      setHistoryCursor(historyStartMs);
+      setHistoryMode(true);
+      setHistoryPlaying(false);
+    } catch (error) {
+      setHistoryMessages([]);
+      setHistoryMode(true);
+      setHistoryCursor(historyStartMs);
+      setHistoryError(error instanceof Error ? error.message : 'Failed to load historical telemetry.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const returnToLive = () => {
+    setHistoryMode(false);
+    setHistoryPlaying(false);
+    setHistoryError('');
+  };
+
+  useEffect(() => {
+    setHistoryPlaying(false);
+  }, [historyFrom, historyTo]);
+
+  useEffect(() => {
+    if (!historyMode || !historyPlaying || !historyRangeValid) return;
+
+    const stepMs = Math.max(1000, Math.ceil((historyEndMs - historyStartMs) / HISTORY_PLAYBACK_STEPS));
+    const intervalId = window.setInterval(() => {
+      setHistoryCursor((current) => {
+        const next = Math.min(historyEndMs, current + stepMs);
+        if (next >= historyEndMs) setHistoryPlaying(false);
+        return next;
+      });
+    }, HISTORY_PLAYBACK_TICK_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [historyEndMs, historyMode, historyPlaying, historyRangeValid, historyStartMs]);
 
   const updateSnapGuide = (nextGuide: SnapGuide) => {
     setActiveSnapGuide((currentGuide) => (
@@ -1371,6 +1523,94 @@ export function Overview() {
             Add Widget
           </button>
         </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+          <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[220px_220px_auto_auto] xl:items-end">
+            <label className="space-y-1 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              From
+              <input
+                type="datetime-local"
+                value={historyFrom}
+                onChange={(event) => setHistoryFrom(event.target.value)}
+                className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </label>
+            <label className="space-y-1 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              To
+              <input
+                type="datetime-local"
+                value={historyTo}
+                onChange={(event) => setHistoryTo(event.target.value)}
+                className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={loadHistoryRange}
+              disabled={historyLoading}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <History className="h-4 w-4 text-orange-500" />
+              {historyLoading ? 'Loading...' : 'Load Range'}
+            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setHistoryPlaying((value) => !value)}
+                disabled={!historyMode || !historyRangeValid}
+                className={cn(
+                  "inline-flex h-9 flex-1 items-center justify-center gap-2 rounded px-3 text-sm font-semibold shadow-sm transition-colors",
+                  historyPlaying
+                    ? "bg-amber-600 text-white hover:bg-amber-500"
+                    : "bg-orange-600 text-white hover:bg-orange-500",
+                  (!historyMode || !historyRangeValid) && "cursor-not-allowed opacity-50"
+                )}
+              >
+                {historyPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                {historyPlaying ? 'Pause' : 'Play'}
+              </button>
+              <button
+                type="button"
+                onClick={returnToLive}
+                disabled={!historyMode}
+                className="inline-flex h-9 items-center justify-center rounded border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="min-w-0 xl:w-[360px]">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className={cn(
+                "inline-flex items-center rounded-full px-2 py-0.5 font-semibold uppercase tracking-wider",
+                historyMode
+                  ? "bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-300"
+                  : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+              )}>
+                {historyMode ? 'Historical Playback' : 'Live'}
+              </span>
+              <span className="truncate font-mono text-slate-500 dark:text-slate-400">{historyCursorLabel}</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+              <div
+                className={cn("h-full rounded-full transition-all", historyMode ? "bg-orange-500" : "bg-emerald-500")}
+                style={{ width: historyMode ? `${historyProgress}%` : '100%' }}
+              />
+            </div>
+            <div className="mt-1 flex justify-between text-[10px] font-mono text-slate-400">
+              <span>{historyMode ? `${historyMessages.length} messages` : 'Realtime telemetry'}</span>
+              {historyMode && <span>{historyPlaying ? 'Playing' : 'Paused'}</span>}
+            </div>
+          </div>
+        </div>
+        {historyError && (
+          <div className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+            {historyError}
+          </div>
+        )}
       </div>
 
       {showWidgetBuilder && (
