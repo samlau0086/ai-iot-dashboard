@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal, Play, Pause, History, RotateCcw } from 'lucide-react';
+import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal, Play, Pause, History, RotateCcw, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { useAppStore } from '../lib/store';
 import type { OverviewKpiKey, OverviewWidget } from '../lib/store';
@@ -176,6 +176,16 @@ const toDateTimeLocal = (date: Date) => {
   const timezoneOffset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16);
 };
+
+const getLocalDateKey = (date: Date) => toDateTimeLocal(date).slice(0, 10);
+
+const getDatePart = (value: string) => value?.slice(0, 10) || getLocalDateKey(new Date());
+
+const getTimePart = (value: string) => value?.slice(11, 16) || '00:00';
+
+const setDatePart = (value: string, datePart: string) => `${datePart}T${getTimePart(value)}`;
+
+const setTimePart = (value: string, timePart: string) => `${getDatePart(value)}T${timePart || '00:00'}`;
 
 const toIsoOrEmpty = (value: string) => {
   if (!value) return '';
@@ -463,6 +473,10 @@ export function Overview() {
   const [historyMessages, setHistoryMessages] = useState<OverviewTelemetryMessage[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
+  const [activeDatePicker, setActiveDatePicker] = useState<'from' | 'to' | null>(null);
+  const [datePickerMonth, setDatePickerMonth] = useState(() => new Date());
+  const [telemetryDataDays, setTelemetryDataDays] = useState<Array<{ day: string; count: number }>>([]);
+  const [telemetryDataDaysError, setTelemetryDataDaysError] = useState('');
   const [configWidgetId, setConfigWidgetId] = useState<string | null>(null);
   const [editingLibraryWidgetId, setEditingLibraryWidgetId] = useState<string | null>(null);
   const [draggingLibraryWidgetId, setDraggingLibraryWidgetId] = useState<string | null>(null);
@@ -539,6 +553,66 @@ export function Overview() {
   const historyCursorLabel = historyMode && Number.isFinite(historyCursor)
     ? new Date(historyCursor).toLocaleString()
     : 'Live';
+  const telemetryDataDaySet = useMemo(() => new Set(telemetryDataDays.map((item) => item.day)), [telemetryDataDays]);
+  const telemetryDataCountByDay = useMemo(
+    () => Object.fromEntries(telemetryDataDays.map((item) => [item.day, item.count])) as Record<string, number>,
+    [telemetryDataDays]
+  );
+
+  const openDatePicker = (kind: 'from' | 'to') => {
+    const sourceValue = kind === 'from' ? historyFrom : historyTo;
+    const sourceDate = new Date(sourceValue || Date.now());
+    setDatePickerMonth(Number.isNaN(sourceDate.getTime()) ? new Date() : sourceDate);
+    setActiveDatePicker((current) => current === kind ? null : kind);
+  };
+
+  const updateHistoryDate = (kind: 'from' | 'to', dateKey: string) => {
+    if (kind === 'from') {
+      setHistoryFrom((current) => setDatePart(current, dateKey));
+    } else {
+      setHistoryTo((current) => setDatePart(current, dateKey));
+    }
+    setActiveDatePicker(null);
+  };
+
+  const updateHistoryTime = (kind: 'from' | 'to', timeValue: string) => {
+    if (kind === 'from') {
+      setHistoryFrom((current) => setTimePart(current, timeValue));
+    } else {
+      setHistoryTo((current) => setTimePart(current, timeValue));
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadTelemetryDataDays = async () => {
+      try {
+        const start = new Date(datePickerMonth.getFullYear(), datePickerMonth.getMonth(), 1);
+        start.setDate(start.getDate() - 7);
+        const end = new Date(datePickerMonth.getFullYear(), datePickerMonth.getMonth() + 1, 7, 23, 59, 59);
+        const params = new URLSearchParams();
+        params.set('from', start.toISOString());
+        params.set('to', end.toISOString());
+        const response = await fetch(`/api/telemetry/days?${params.toString()}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `Telemetry days query failed: ${response.status}`);
+        if (!cancelled) {
+          setTelemetryDataDays(Array.isArray(payload.days) ? payload.days : []);
+          setTelemetryDataDaysError('');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTelemetryDataDays([]);
+          setTelemetryDataDaysError(error instanceof Error ? error.message : 'Failed to load telemetry days.');
+        }
+      }
+    };
+
+    loadTelemetryDataDays();
+    return () => {
+      cancelled = true;
+    };
+  }, [datePickerMonth]);
 
   const loadHistoryRange = async () => {
     setHistoryPlaying(false);
@@ -1451,6 +1525,102 @@ export function Overview() {
     return null;
   };
 
+  const renderHistoryDateTimePicker = (kind: 'from' | 'to', label: string, value: string) => {
+    const selectedDateKey = getDatePart(value);
+    const monthLabel = datePickerMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    const monthStart = new Date(datePickerMonth.getFullYear(), datePickerMonth.getMonth(), 1);
+    const gridStart = new Date(monthStart);
+    gridStart.setDate(monthStart.getDate() - monthStart.getDay());
+    const days = Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(gridStart);
+      date.setDate(gridStart.getDate() + index);
+      return date;
+    });
+
+    return (
+      <div className="relative space-y-1 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+        {label}
+        <div className="mt-1 grid grid-cols-[minmax(0,1fr)_84px] gap-2">
+          <button
+            type="button"
+            onClick={() => openDatePicker(kind)}
+            className="inline-flex h-9 min-w-0 items-center justify-between gap-2 rounded border border-slate-300 bg-white px-3 text-left text-sm normal-case tracking-normal text-slate-900 outline-none hover:border-orange-400 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          >
+            <span className="truncate">{selectedDateKey}</span>
+            <Calendar className="h-4 w-4 shrink-0 text-slate-400" />
+          </button>
+          <input
+            type="time"
+            value={getTimePart(value)}
+            onChange={(event) => updateHistoryTime(kind, event.target.value)}
+            className="h-9 rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          />
+        </div>
+        {activeDatePicker === kind && (
+          <div className="absolute left-0 top-full z-[80] mt-2 w-[316px] rounded-lg border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-950">
+            <div className="mb-3 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setDatePickerMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <div className="text-sm font-semibold normal-case tracking-normal text-slate-900 dark:text-white">{monthLabel}</div>
+              <button
+                type="button"
+                onClick={() => setDatePickerMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold uppercase text-slate-400">
+              {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((weekday) => <div key={weekday}>{weekday}</div>)}
+            </div>
+            <div className="mt-1 grid grid-cols-7 gap-1">
+              {days.map((date) => {
+                const dateKey = getLocalDateKey(date);
+                const inMonth = date.getMonth() === datePickerMonth.getMonth();
+                const selected = dateKey === selectedDateKey;
+                const hasData = telemetryDataDaySet.has(dateKey);
+                const count = telemetryDataCountByDay[dateKey] || 0;
+
+                return (
+                  <button
+                    key={dateKey}
+                    type="button"
+                    title={hasData ? `${count} telemetry messages` : 'No telemetry messages'}
+                    onClick={() => updateHistoryDate(kind, dateKey)}
+                    className={cn(
+                      "relative flex h-9 items-center justify-center rounded text-sm font-medium normal-case tracking-normal transition-colors",
+                      inMonth ? "text-slate-700 dark:text-slate-200" : "text-slate-300 dark:text-slate-700",
+                      selected
+                        ? "bg-orange-600 text-white hover:bg-orange-500"
+                        : "hover:bg-slate-100 dark:hover:bg-slate-900"
+                    )}
+                  >
+                    {date.getDate()}
+                    {hasData && (
+                      <span className={cn(
+                        "absolute bottom-1.5 h-1.5 w-1.5 rounded-full",
+                        selected ? "bg-white" : "bg-orange-500"
+                      )} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 text-[10px] normal-case tracking-normal text-slate-500 dark:border-slate-800">
+              <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-orange-500" /> telemetry data</span>
+              {telemetryDataDaysError ? <span className="text-red-500">{telemetryDataDaysError}</span> : <span>{telemetryDataDays.length} active days</span>}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -1528,24 +1698,8 @@ export function Overview() {
       <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
           <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[220px_220px_auto_auto] xl:items-end">
-            <label className="space-y-1 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              From
-              <input
-                type="datetime-local"
-                value={historyFrom}
-                onChange={(event) => setHistoryFrom(event.target.value)}
-                className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-              />
-            </label>
-            <label className="space-y-1 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              To
-              <input
-                type="datetime-local"
-                value={historyTo}
-                onChange={(event) => setHistoryTo(event.target.value)}
-                className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-              />
-            </label>
+            {renderHistoryDateTimePicker('from', 'From', historyFrom)}
+            {renderHistoryDateTimePicker('to', 'To', historyTo)}
             <button
               type="button"
               onClick={loadHistoryRange}
