@@ -291,6 +291,7 @@ export interface ScadaElement {
   lineWidth?: number;
   lineAnimation?: 'none' | 'flow' | 'pulse' | 'glow';
   lineAnimationSpeed?: number;
+  arrowSize?: number;
   lineProtocol?: 'ethernet' | 'rs485' | 'rs232' | 'can' | 'modbus' | 'wifi' | 'lora' | 'custom';
   imageSrc?: string;
   imageFileName?: string;

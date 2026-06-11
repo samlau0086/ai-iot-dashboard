@@ -1185,8 +1185,9 @@ export function ScadaView() {
     const endPoint = points[points.length - 1];
     const beforeEndPoint = points[points.length - 2] || points[0];
     const angle = Math.atan2(endPoint.y - beforeEndPoint.y, endPoint.x - beforeEndPoint.x);
-    const arrowLength = Math.max(8, lineWidth * 1.8);
-    const arrowHalfWidth = Math.max(4, lineWidth * 0.85);
+    const arrowSize = Math.max(6, element.arrowSize || Math.max(12, lineWidth * 2.6));
+    const arrowLength = arrowSize;
+    const arrowHalfWidth = arrowSize * 0.48;
     const arrowBase = {
       x: endPoint.x - Math.cos(angle) * arrowLength,
       y: endPoint.y - Math.sin(angle) * arrowLength,
@@ -2797,6 +2798,19 @@ export function ScadaView() {
                       className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                     />
                   </label>
+                  {(selectedElement.type === 'power' || selectedElement.type === 'pipe') && (
+                    <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+                      Arrow Size
+                      <input
+                        type="number"
+                        min={6}
+                        max={80}
+                        value={Math.round(selectedElement.arrowSize || Math.max(12, (selectedElement.lineWidth || 8) * 2.6))}
+                        onChange={(event) => updateElement(selectedElement.id, { arrowSize: Math.max(6, Math.min(80, Number(event.target.value) || 20)) })}
+                        className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-2 text-sm normal-case tracking-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                      />
+                    </label>
+                  )}
                   {(selectedElement.type === 'signal' || selectedElement.type === 'wireless') && (
                     <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
                       Protocol
