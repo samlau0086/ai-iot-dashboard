@@ -208,6 +208,38 @@ const getTelemetryMetrics = (message: OverviewTelemetryMessage) => (
 
 const getTelemetryDeviceId = (message: OverviewTelemetryMessage) => String(message.device_id || message.deviceId || message.id || '');
 
+const getTelemetryMessageKey = (message: OverviewTelemetryMessage, index: number) => [
+  getTelemetryDeviceId(message),
+  String(message.received_at || message.timestamp || ''),
+  String(message.topic || message.mqtt_topic || message.source || ''),
+  String(message.id || index),
+].join('|');
+
+const mergeTelemetryMessages = (groups: OverviewTelemetryMessage[][]) => {
+  const seen = new Set<string>();
+  return groups
+    .flat()
+    .filter((message, index) => {
+      const key = getTelemetryMessageKey(message, index);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((first, second) => getTelemetryTime(first) - getTelemetryTime(second));
+};
+
+const mergeTelemetryDayRows = (groups: Array<Array<{ day: string; count: number }>>) => {
+  const byDay = new Map<string, number>();
+  groups.flat().forEach((item) => {
+    if (!item.day) return;
+    byDay.set(item.day, (byDay.get(item.day) || 0) + Number(item.count || 0));
+  });
+
+  return Array.from(byDay.entries())
+    .map(([day, count]) => ({ day, count }))
+    .sort((first, second) => first.day.localeCompare(second.day));
+};
+
 const WIDGET_PRESET_LIBRARY: (OverviewWidget & { category: string; description: string })[] = [
   {
     id: 'preset-power-demand',
@@ -559,6 +591,24 @@ export function Overview() {
     () => Object.fromEntries(telemetryDataDays.map((item) => [item.day, item.count])) as Record<string, number>,
     [telemetryDataDays]
   );
+  const historyScopeDevices = useMemo(() => {
+    if (selectedSiteId === 'All') return storedDevices;
+
+    const selectedSite = sites.find((site) => site.id === selectedSiteId) || null;
+    const siteTags = new Set(selectedSite?.tags || []);
+    return storedDevices.filter((device) => (
+      device.siteId === selectedSiteId ||
+      (!device.siteId && Boolean(device.tags?.some((tag) => siteTags.has(tag))))
+    ));
+  }, [selectedSiteId, sites, storedDevices]);
+  const historyDeviceIdentifiers = useMemo(() => (
+    Array.from(new Set(
+      historyScopeDevices
+        .flatMap((device) => [device.id, device.config?.externalDeviceId])
+        .filter((value): value is string => Boolean(value))
+        .map((value) => String(value))
+    ))
+  ), [historyScopeDevices]);
 
   const openDatePicker = (kind: 'from' | 'to') => {
     const sourceValue = kind === 'from' ? historyFrom : historyTo;
@@ -594,11 +644,25 @@ export function Overview() {
         const params = new URLSearchParams();
         params.set('from', start.toISOString());
         params.set('to', end.toISOString());
-        const response = await fetch(`/api/telemetry/days?${params.toString()}`);
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || `Telemetry days query failed: ${response.status}`);
+        if (historyDeviceIdentifiers.length === 0) {
+          if (!cancelled) {
+            setTelemetryDataDays([]);
+            setTelemetryDataDaysError('');
+          }
+          return;
+        }
+
+        const dayGroups = await Promise.all(historyDeviceIdentifiers.map(async (deviceId) => {
+          const scopedParams = new URLSearchParams(params);
+          scopedParams.set('deviceId', deviceId);
+          const response = await fetch(`/api/telemetry/days?${scopedParams.toString()}`);
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || `Telemetry days query failed: ${response.status}`);
+          return Array.isArray(payload.days) ? payload.days as Array<{ day: string; count: number }> : [];
+        }));
+
         if (!cancelled) {
-          setTelemetryDataDays(Array.isArray(payload.days) ? payload.days : []);
+          setTelemetryDataDays(mergeTelemetryDayRows(dayGroups));
           setTelemetryDataDaysError('');
         }
       } catch (error) {
@@ -613,7 +677,7 @@ export function Overview() {
     return () => {
       cancelled = true;
     };
-  }, [datePickerMonth]);
+  }, [datePickerMonth, historyDeviceIdentifiers]);
 
   const loadHistoryRange = async () => {
     setHistoryPlaying(false);
@@ -626,15 +690,29 @@ export function Overview() {
 
     setHistoryLoading(true);
     try {
+      if (historyDeviceIdentifiers.length === 0) {
+        setHistoryMessages([]);
+        setHistoryCursor(historyStartMs);
+        setHistoryMode(true);
+        setHistoryPlaying(false);
+        setHistoryError('No devices are assigned to the selected site.');
+        return;
+      }
+
       const params = new URLSearchParams();
       params.set('from', toIsoOrEmpty(historyFrom));
       params.set('to', toIsoOrEmpty(historyTo));
       params.set('limit', '1000');
-      const response = await fetch(`/api/telemetry?${params.toString()}`);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || `Telemetry query failed: ${response.status}`);
-      const messages = Array.isArray(payload.messages) ? payload.messages as OverviewTelemetryMessage[] : [];
-      setHistoryMessages(messages);
+      const messageGroups = await Promise.all(historyDeviceIdentifiers.map(async (deviceId) => {
+        const scopedParams = new URLSearchParams(params);
+        scopedParams.set('deviceId', deviceId);
+        const response = await fetch(`/api/telemetry?${scopedParams.toString()}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `Telemetry query failed: ${response.status}`);
+        return Array.isArray(payload.messages) ? payload.messages as OverviewTelemetryMessage[] : [];
+      }));
+
+      setHistoryMessages(mergeTelemetryMessages(messageGroups));
       setHistoryCursor(historyStartMs);
       setHistoryMode(true);
       setHistoryPlaying(false);
@@ -746,7 +824,7 @@ export function Overview() {
     const siteTags = new Set(selectedSite?.tags || []);
     return devices.filter((device) => (
       device.siteId === selectedSiteId ||
-      Boolean(device.tags?.some((tag) => siteTags.has(tag)))
+      (!device.siteId && Boolean(device.tags?.some((tag) => siteTags.has(tag))))
     ));
   }, [devices, selectedSite, selectedSiteId]);
 
@@ -1814,7 +1892,7 @@ export function Overview() {
               />
             </div>
             <div className="mt-1 flex justify-between text-[10px] font-mono text-slate-400">
-              <span>{historyMode ? `${historyMessages.length} messages` : 'Realtime telemetry'}</span>
+              <span>{historyMode ? `${historyMessages.length} site messages` : 'Realtime telemetry'}</span>
               {historyMode && <span>{historyPlaying ? 'Playing' : 'Paused'}</span>}
             </div>
           </div>
