@@ -72,6 +72,7 @@ type DragState =
   | { type: 'element'; id: string; dx: number; dy: number }
   | { type: 'endpoint'; id: string; endpoint: LineEndpoint; lockedAnchor?: ScadaAnchor | null }
   | { type: 'innerPart'; id: string; part: ScadaEditablePart; dx: number; dy: number }
+  | { type: 'innerPartResize'; id: string; part: ScadaEditablePart; startX: number; startY: number; startSize: number }
   | { type: 'resize'; id: string; startX: number; startY: number; startWidth: number; startHeight: number };
 type ShapeEditorDragState =
   | { type: 'move'; id: string; dx: number; dy: number }
@@ -286,6 +287,8 @@ const getDefaultIconLayout = (element: ScadaElement, device?: Device) => {
   if (device?.type === 'energy_meter' || device?.type === 'solar_inverter' || device?.type === 'ups' || device?.type === 'battery_bms') return { x: baseX, y: baseY + 4, size };
   return { x: baseX, y: baseY, size };
 };
+const getInnerPartMinSize = (part: ScadaEditablePart) => part === 'icon' ? 12 : part === 'value' ? 10 : 8;
+const getInnerPartMaxSize = (part: ScadaEditablePart) => part === 'icon' ? 180 : part === 'value' ? 96 : part === 'label' ? 72 : 54;
 
 const isLineElement = (element: ScadaElement) => ['pipe', 'power', 'wireless', 'signal'].includes(element.type);
 const isResizableElement = (element: ScadaElement) => !isLineElement(element);
@@ -1238,6 +1241,19 @@ export function ScadaView() {
     });
   };
 
+  const handleInnerPartResizePointerDown = (event: React.PointerEvent, element: ScadaElement, part: ScadaEditablePart) => {
+    if (!editMode || (element.type !== 'device' && element.type !== 'metric')) return;
+    if (part === 'icon' && element.type !== 'device') return;
+    event.preventDefault();
+    event.stopPropagation();
+    const point = toSvgPoint(event.clientX, event.clientY);
+    const layout = getInnerPartLayout(element, part);
+    const startSize = part === 'icon' ? Number(layout.size || 32) : Number(layout.fontSize || 13);
+    setSelectedElementId(element.id);
+    setActiveInnerPart({ id: element.id, part });
+    setDragState({ type: 'innerPartResize', id: element.id, part, startX: point.x, startY: point.y, startSize });
+  };
+
   const handleResizePointerDown = (event: React.PointerEvent, element: ScadaElement) => {
     if (!editMode || !isResizableElement(element)) return;
     event.stopPropagation();
@@ -1274,10 +1290,8 @@ export function ScadaView() {
         ...current,
         elements: current.elements.map((element) => {
           if (element.id !== dragState.id || (element.type !== 'device' && element.type !== 'metric')) return element;
-          const width = element.width || 150;
-          const height = element.height || 76;
-          const nextX = Math.max(-40, Math.min(width + 40, point.x - element.x - dragState.dx));
-          const nextY = Math.max(-30, Math.min(height + 40, point.y - element.y - dragState.dy));
+          const nextX = Math.max(-element.x, Math.min(CANVAS_WIDTH - element.x, point.x - element.x - dragState.dx));
+          const nextY = Math.max(-element.y, Math.min(CANVAS_HEIGHT - element.y, point.y - element.y - dragState.dy));
           if (dragState.part === 'icon') {
             const {device} = getDeviceValue(element, scadaRenderDevices, scadaRenderNow, historyMode);
             return {
@@ -1319,6 +1333,53 @@ export function ScadaView() {
               ...(element.labelStyle || {}),
               x: nextX,
               y: nextY,
+            },
+          };
+        }),
+      }));
+      return;
+    }
+
+    if (dragState.type === 'innerPartResize') {
+      setDraft((current) => ({
+        ...current,
+        elements: current.elements.map((element) => {
+          if (element.id !== dragState.id || (element.type !== 'device' && element.type !== 'metric')) return element;
+          const layout = getInnerPartLayout(element, dragState.part);
+          const delta = Math.max(point.x - dragState.startX, point.y - dragState.startY);
+          const nextSize = Math.round(clamp(dragState.startSize + delta, getInnerPartMinSize(dragState.part), getInnerPartMaxSize(dragState.part)));
+          if (dragState.part === 'icon') {
+            return {
+              ...element,
+              iconStyle: {
+                ...layout,
+                size: nextSize,
+              },
+            };
+          }
+          if (dragState.part === 'value') {
+            return {
+              ...element,
+              valueStyle: {
+                ...layout,
+                fontSize: nextSize,
+              },
+            };
+          }
+          if (dragState.part === 'meta') {
+            return {
+              ...element,
+              metaStyle: {
+                ...layout,
+                fontSize: nextSize,
+              },
+            };
+          }
+          return {
+            ...element,
+            labelStyle: {
+              ...layout,
+              fontSize: nextSize,
             },
           };
         }),
@@ -1485,6 +1546,12 @@ export function ScadaView() {
     const fontSize = layout.fontSize || 13;
     const active = activeInnerPart?.id === element.id && activeInnerPart.part === part;
     const canEdit = editMode && (element.type === 'device' || element.type === 'metric');
+    const textX = element.x + (layout.x || 0);
+    const textY = element.y + (layout.y || 0);
+    const selectionWidth = Math.max(56, text.length * fontSize * 0.62);
+    const selectionHeight = fontSize + 8;
+    const selectionX = textX - 4;
+    const selectionY = textY - fontSize - 3;
     return (
       <g
         className={cn(canEdit && (active ? 'cursor-move' : 'cursor-pointer'))}
@@ -1494,8 +1561,8 @@ export function ScadaView() {
         style={{ userSelect: 'none' }}
       >
         <text
-          x={element.x + (layout.x || 0)}
-          y={element.y + (layout.y || 0)}
+          x={textX}
+          y={textY}
           fill={options.fill}
           fontSize={fontSize}
           fontWeight={options.fontWeight}
@@ -1505,16 +1572,30 @@ export function ScadaView() {
           {text}
         </text>
         {canEdit && active && (
-          <rect
-            x={element.x + (layout.x || 0) - 4}
-            y={element.y + (layout.y || 0) - fontSize - 3}
-            width={Math.max(56, text.length * fontSize * 0.62)}
-            height={fontSize + 8}
-            rx={4}
-            fill="none"
-            stroke="#fb923c"
-            strokeDasharray="4 3"
-          />
+          <>
+            <rect
+              x={selectionX}
+              y={selectionY}
+              width={selectionWidth}
+              height={selectionHeight}
+              rx={4}
+              fill="none"
+              stroke="#fb923c"
+              strokeDasharray="4 3"
+            />
+            <rect
+              x={selectionX + selectionWidth - 5}
+              y={selectionY + selectionHeight - 5}
+              width={10}
+              height={10}
+              rx={2}
+              fill="#fb923c"
+              stroke="#0f172a"
+              strokeWidth={1.5}
+              className="cursor-nwse-resize"
+              onPointerDown={(event) => handleInnerPartResizePointerDown(event, element, part)}
+            />
+          </>
         )}
       </g>
     );
@@ -1894,7 +1975,21 @@ export function ScadaView() {
           ? <image href={svgHref} x={iconX} y={iconY} width={iconSize} height={iconSize} preserveAspectRatio="xMidYMid meet" />
           : <Icon x={iconX} y={iconY} width={iconSize} height={iconSize} color={style.text} strokeWidth={2.2} />}
         {editMode && iconActive && (
-          <rect x={iconX - 4} y={iconY - 4} width={iconSize + 8} height={iconSize + 8} rx={4} fill="none" stroke="#fb923c" strokeDasharray="4 3" />
+          <>
+            <rect x={iconX - 4} y={iconY - 4} width={iconSize + 8} height={iconSize + 8} rx={4} fill="none" stroke="#fb923c" strokeDasharray="4 3" />
+            <rect
+              x={iconX + iconSize}
+              y={iconY + iconSize}
+              width={10}
+              height={10}
+              rx={2}
+              fill="#fb923c"
+              stroke="#0f172a"
+              strokeWidth={1.5}
+              className="cursor-nwse-resize"
+              onPointerDown={(event) => handleInnerPartResizePointerDown(event, element, 'icon')}
+            />
+          </>
         )}
       </g>
     );
@@ -3220,7 +3315,7 @@ export function ScadaView() {
                   <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
                     <div>
                       <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Inner Layout</div>
-                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Double-click text, value, metric info, or icon on the canvas, then drag it. Values are relative to the element box.</p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Click text, value, metric info, or icon to select it. Drag to move, or drag the orange corner handle to resize.</p>
                     </div>
                     {renderTextLayoutControls('Title', 'label', labelLayout, 'labelStyle', 8, 48)}
                     {renderTextLayoutControls('Reading', 'value', valueLayout, 'valueStyle', 10, 72)}
