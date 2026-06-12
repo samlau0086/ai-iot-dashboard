@@ -100,6 +100,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [ ] 设备对比
 - [ ] 数据导出
 - [x] Device Metrics Mapping：raw telemetry fields 可映射到标准 metrics，并配置显示名、单位、精度和 Primary 标记
+- [x] Device Data Quality：统一判定 Live / Stale / Offline / Never Reported，并在设备列表、详情、总览和 SCADA 中避免把过期数据当实时数据展示
 - [ ] SQL-like Query / Metric Builder
 
 ### V4: Control Center
@@ -496,6 +497,17 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 - 后续 MQTT / HTTP 上报会保留原始字段，同时自动生成映射后的标准字段。
 - Overview widgets、Analytics charts、SCADA 和 Reports 可直接绑定标准 metric，例如 `power`、`energy`、`temperature`。
 - 设备详情页的 Live Metrics 会优先使用 mapping 中的显示名称、单位和精度。
+
+### Device Data Quality
+
+系统会统一区分设备状态和数据新鲜度：
+
+- `Live`：设备最近一次 telemetry 仍在 freshness timeout 内，实时看板可使用当前值。
+- `Stale`：设备未开启自动离线判定，但最近一次 telemetry 已超过 freshness timeout；总览、SCADA 和设备列表不再把最后一次值当作实时值展示。
+- `Offline`：设备自身上报 offline，或设备开启了 offline detection 且超过配置时间未上报。
+- `Never Reported`：设备还没有任何有效 telemetry。
+
+设备详情页提供 **Data Quality** 面板，可查看最近上报年龄、freshness timeout、offline rule、metric logs 数量、未映射字段和非数字字段。设备列表会显示 `No Live Data`，避免过期读数被误认为当前实时数据。
 - 历史回放会基于设备 mapping 将原始 telemetry logs 转换为标准 metric 后再展示。
 
 ### Gateway HTTP Push

@@ -9,6 +9,7 @@ import { DeviceForm } from '../components/DeviceForm';
 import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, sanitizeControlDefinition, type DeviceControlDefinition, type DeviceControlValueType } from '../lib/deviceControls';
 import { confirmDelete } from '../lib/confirm';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
 import {
   STANDARD_METRIC_OPTIONS,
   applyMetricMappingsToMetrics,
@@ -47,6 +48,18 @@ const formatMetricLogValue = (value: unknown) => {
   const numericValue = Number(value);
   if (Number.isFinite(numericValue)) return numericValue.toLocaleString(undefined, { maximumFractionDigits: 4 });
   return String(value);
+};
+
+const formatAverageInterval = (messages: DeviceMetricLog[]) => {
+  const times = messages
+    .map((message) => new Date(getMetricLogTime(message)).getTime())
+    .filter((time) => Number.isFinite(time))
+    .sort((first, second) => first - second);
+  if (times.length < 2) return '-';
+  const intervals = times.slice(1).map((time, index) => time - times[index]).filter((interval) => interval > 0);
+  if (intervals.length === 0) return '-';
+  const averageMs = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
+  return formatDeviceAge(averageMs).replace(' ago', '');
 };
 
 export function DeviceDetails() {
@@ -147,6 +160,15 @@ export function DeviceDetails() {
     ...metricMappingsDraft.map((mapping) => mapping.rawKey),
   ])).sort();
   const discoveredMetricKeys = rawMetricOptions.length ? rawMetricOptions : metricLogOptions;
+  const mappedRawKeys = new Set(metricMappingsDraft.map((mapping) => mapping.rawKey));
+  const unmappedMetricKeys = rawMetricOptions.filter((key) => !mappedRawKeys.has(key));
+  const invalidMetricKeys = Array.from(new Set(
+    metricLogs.flatMap((message) => (
+      Object.entries(message.metrics || {})
+        .filter(([, value]) => value !== null && value !== undefined && value !== '' && !Number.isFinite(Number(value)))
+        .map(([key]) => key)
+    ))
+  )).sort();
 
   if (!device) {
     return (
@@ -165,6 +187,14 @@ export function DeviceDetails() {
   }
 
   const IconComp = getDeviceIcon(device.icon);
+  const dataQuality = getDeviceDataQuality(storedDevice || device);
+  const qualityClassName = dataQuality.state === 'online'
+    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+    : dataQuality.state === 'warning'
+      ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
+      : dataQuality.state === 'stale'
+        ? 'bg-orange-100 text-orange-700 dark:bg-orange-500/10 dark:text-orange-300'
+        : 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400';
 
   const updateControl = (key: string, value: any) => {
     setControlValues(prev => ({ ...prev, [key]: value }));
@@ -612,11 +642,9 @@ export function DeviceDetails() {
                 {device.name}
                 <span className={cn(
                   "px-2 py-0.5 rounded text-[10px] font-medium tracking-wide uppercase",
-                  device.status === 'online' ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" : 
-                  device.status === 'warning' ? "bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400" : 
-                  "bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400"
+                  qualityClassName
                 )}>
-                  {device.status}
+                  {dataQuality.label}
                 </span>
               </h1>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-1">ID: {device.id}</p>
@@ -696,6 +724,58 @@ export function DeviceDetails() {
             ) : (
               <p className="text-xs text-slate-500">No configuration properties set.</p>
             )}
+          </div>
+
+          <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white mb-4 uppercase tracking-wider text-[11px] font-mono">
+              <AlertTriangle className="h-4 w-4" /> Data Quality
+            </h3>
+            <div className="space-y-3 font-mono text-xs">
+              <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Realtime State</span>
+                <span className={cn('rounded px-2 py-0.5 text-[10px] font-semibold uppercase', qualityClassName)}>{dataQuality.label}</span>
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Age</span>
+                <span className="text-slate-900 dark:text-slate-300">{formatDeviceAge(dataQuality.ageMs)}</span>
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Freshness Timeout</span>
+                <span className="text-slate-900 dark:text-slate-300">{dataQuality.timeoutSeconds}s</span>
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Offline Rule</span>
+                <span className="text-slate-900 dark:text-slate-300">{dataQuality.isOfflineDetectionEnabled ? 'Enabled' : 'Disabled'}</span>
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Log Samples</span>
+                <span className="text-slate-900 dark:text-slate-300">{metricLogs.length} / avg {formatAverageInterval(metricLogs)}</span>
+              </div>
+              <div className="pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500">Unmapped Fields</span>
+                  <span className={cn('text-right', unmappedMetricKeys.length ? 'text-orange-600 dark:text-orange-300' : 'text-slate-900 dark:text-slate-300')}>{unmappedMetricKeys.length}</span>
+                </div>
+                {unmappedMetricKeys.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {unmappedMetricKeys.slice(0, 8).map((key) => <span key={key} className="rounded bg-orange-50 px-1.5 py-0.5 text-[10px] text-orange-700 dark:bg-orange-500/10 dark:text-orange-300">{key}</span>)}
+                    {unmappedMetricKeys.length > 8 && <span className="text-[10px] text-slate-400">+{unmappedMetricKeys.length - 8}</span>}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500">Invalid Values</span>
+                  <span className={cn('text-right', invalidMetricKeys.length ? 'text-red-600 dark:text-red-300' : 'text-slate-900 dark:text-slate-300')}>{invalidMetricKeys.length}</span>
+                </div>
+                {invalidMetricKeys.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {invalidMetricKeys.slice(0, 8).map((key) => <span key={key} className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700 dark:bg-red-500/10 dark:text-red-300">{key}</span>)}
+                  </div>
+                )}
+              </div>
+              <p className="pt-2 text-[11px] leading-relaxed text-slate-500">{dataQuality.description}</p>
+            </div>
           </div>
         </div>
 

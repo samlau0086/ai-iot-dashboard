@@ -14,6 +14,7 @@ import { notifySuccess } from '../lib/toast';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import type { Device } from '../types';
 import { applyMetricMappingsToMetrics } from '../lib/metricMappings';
+import { getDeviceDataQuality } from '../lib/deviceStatus';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
@@ -566,7 +567,6 @@ export function Overview() {
           device.id === telemetryDeviceId || device.config?.externalDeviceId === telemetryDeviceId
         ));
         if (!target) return;
-        const metrics = getTelemetryMetrics(message);
         const messageTime = getTelemetryTime(message);
         snapshotById.set(target.id, {
           ...target,
@@ -574,7 +574,7 @@ export function Overview() {
           lastSeen: messageTime ? new Date(messageTime).toISOString() : target.lastSeen,
           metrics: {
             ...target.metrics,
-            ...metrics,
+            ...applyMetricMappingsToMetrics(target, getTelemetryMetrics(message)),
           },
         });
       });
@@ -928,10 +928,16 @@ export function Overview() {
 
   const getStatsForDevices = (targetDevices: any[]): Record<OverviewKpiKey, { name: string; value: string; icon: any }> => {
     const targetAlerts = getAlertsForDevices(targetDevices);
+    const liveDeviceCount = targetDevices.filter((device) => (
+      getDeviceDataQuality(
+        historyMode ? device : storedDevices.find((item) => item.id === device.id) || device,
+        historyMode ? historyCursor : Date.now()
+      ).state === 'online'
+    )).length;
 
     return {
       totalDevices: { name: t.overview.totalDevices, value: targetDevices.length.toString(), icon: Server },
-      onlineDevices: { name: t.overview.onlineDevices, value: targetDevices.filter(d => d.status === 'online').length.toString(), icon: Activity },
+      onlineDevices: { name: t.overview.onlineDevices, value: liveDeviceCount.toString(), icon: Activity },
       energyToday: { name: t.overview.energyToday, value: `${sumMetric(targetDevices, 'energy').toFixed(1)} kWh`, icon: Zap },
       activeAlerts: { name: t.overview.activeAlerts, value: targetAlerts.filter(a => a.status === 'active').length.toString(), icon: AlertTriangle },
       solarGeneration: { name: 'PV Generation Today', value: `${(sumMetric(targetDevices, 'energy_today') / 1000).toFixed(2)} MWh`, icon: Sun },

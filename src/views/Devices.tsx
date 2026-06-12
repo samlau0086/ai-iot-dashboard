@@ -9,6 +9,7 @@ import { getDeviceIcon } from '../lib/icons';
 import { Link } from 'react-router-dom';
 import type { Device } from '../types';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
 
 const getDeviceKeyMetric = (device: Device) => {
   const metrics = device.metrics || {};
@@ -28,6 +29,20 @@ const getDeviceKeyMetric = (device: Device) => {
   };
   return `${metricKey}: ${metrics[metricKey] || 0}${units[metricKey] ? ` ${units[metricKey]}` : ''}`;
 };
+
+const qualityTone = (state: string) => (
+  state === 'online' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' :
+  state === 'warning' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300' :
+  state === 'stale' ? 'bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-300' :
+  'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300'
+);
+
+const qualityDot = (state: string) => (
+  state === 'online' ? 'bg-emerald-500' :
+  state === 'warning' ? 'bg-amber-500' :
+  state === 'stale' ? 'bg-orange-500' :
+  'bg-red-500'
+);
 
 export function Devices() {
   const { language, devices: storedDevices, sites, activeSiteId, setActiveSite } = useAppStore();
@@ -172,6 +187,7 @@ export function Devices() {
             device.type === 'solar_inverter' ? `${device.metrics.power || 0} W` :
             device.type === 'pump_controller' ? `${device.metrics.pressure || 0} bar` :
             '-');
+          const quality = getDeviceDataQuality(storedDevices.find((item) => item.id === device.id) || device);
 
           return (
             <div key={device.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
@@ -187,17 +203,13 @@ export function Devices() {
                 </Link>
                 <span className={cn(
                   'mt-1 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize',
-                  device.status === 'online' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' :
-                  device.status === 'warning' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300' :
-                  'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300'
+                  qualityTone(quality.state)
                 )}>
                   <span className={cn(
                     'h-1.5 w-1.5 rounded-full',
-                    device.status === 'online' ? 'bg-emerald-500' :
-                    device.status === 'warning' ? 'bg-amber-500' :
-                    'bg-red-500'
+                    qualityDot(quality.state)
                   )} />
-                  {device.status}
+                  {quality.label}
                 </span>
               </div>
 
@@ -210,13 +222,13 @@ export function Devices() {
                 </div>
                 <div className="rounded-md bg-slate-50 p-3 dark:bg-slate-900/40">
                   <p className="text-[10px] uppercase text-slate-500 dark:text-slate-400">{t.devices.table.metric}</p>
-                  <p className="mt-1 truncate font-mono font-semibold text-slate-900 dark:text-white">{keyMetric}</p>
+                  <p className="mt-1 truncate font-mono font-semibold text-slate-900 dark:text-white">{quality.hasLiveData ? keyMetric : 'No Live Data'}</p>
                 </div>
               </div>
 
               <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-3 dark:border-slate-800">
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {t.devices.table.lastSeen}: {new Date(device.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}
+                  {t.devices.table.lastSeen}: {formatDeviceAge(quality.ageMs)}
                 </p>
                 <div className="flex items-center gap-2">
                   <button
@@ -257,6 +269,7 @@ export function Devices() {
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800/50 font-mono">
             {filteredDevices.map((device) => {
               const IconComp = getDeviceIcon(device.icon);
+              const quality = getDeviceDataQuality(storedDevices.find((item) => item.id === device.id) || device);
               return (
               <tr key={device.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
                 <td className="p-4">
@@ -279,14 +292,15 @@ export function Devices() {
                   <span className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 text-[11px]">
                     <span className={cn(
                       "w-1.5 h-1.5 rounded-full",
-                      device.status === 'online' ? "bg-emerald-500" : 
-                      device.status === 'warning' ? "bg-amber-500" : 
-                      "bg-red-500"
+                      qualityDot(quality.state)
                     )}></span>
-                    {device.status.charAt(0).toUpperCase() + device.status.slice(1)}
+                    {quality.label}
                   </span>
                 </td>
                 <td className="p-4 text-right text-slate-700 dark:text-slate-300">
+                  {!quality.hasLiveData && <span className="text-slate-400">No Live Data</span>}
+                  {quality.hasLiveData && (
+                    <>
                   {device.type === 'energy_meter' && `${device.metrics.power || 0} W`}
                   {device.type === 'temperature_sensor' && `${device.metrics.temperature || 0} °C`}
                   {device.type === 'air_compressor' && `${device.metrics.pressure || 0} bar`}
@@ -298,9 +312,11 @@ export function Devices() {
                   {device.type === 'solar_inverter' && `${device.metrics.power || 0} W`}
                   {device.type === 'pump_controller' && `${device.metrics.pressure || 0} bar`}
                   {!['energy_meter', 'temperature_sensor', 'air_compressor', 'gateway', 'dtu', 'rtu', 'lora_gateway', 'plc', 'solar_inverter', 'pump_controller'].includes(device.type) && getDeviceKeyMetric(device)}
+                    </>
+                  )}
                 </td>
                 <td className="p-4 text-slate-500 dark:text-slate-400">
-                  {new Date(device.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}
+                  {formatDeviceAge(quality.ageMs)}
                 </td>
                 <td className="p-4 text-center relative">
                   <button 
