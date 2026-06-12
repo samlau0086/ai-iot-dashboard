@@ -55,7 +55,7 @@ const formatJsonValue = (value: unknown) => {
 
 const isJsonContainer = (value: unknown) => Boolean(value && typeof value === 'object');
 const isReferenceSafeKey = (key: string) => /^[A-Za-z0-9_$\u4e00-\u9fa5-]+$/.test(key);
-const buildReferencePath = (baseReference: '$.input' | '$.output', path: Array<string | number>) => {
+const buildReferencePath = (baseReference: string, path: Array<string | number>) => {
   if (path.some((segment) => typeof segment === 'string' && !isReferenceSafeKey(segment))) return '';
   return path.length ? `${baseReference}.${path.join('.')}` : baseReference;
 };
@@ -71,7 +71,7 @@ function JsonTreeNode({
   label: string;
   value: unknown;
   path: Array<string | number>;
-  baseReference: '$.input' | '$.output';
+  baseReference: string;
   depth?: number;
   onCopy: (reference: string) => void;
 }) {
@@ -154,16 +154,22 @@ function JsonTreeNode({
 function JsonInspector({
   value,
   baseReference,
+  onReferenceSelect,
   failed,
 }: {
   value: unknown;
-  baseReference: '$.input' | '$.output';
+  baseReference: string;
+  onReferenceSelect?: (reference: string) => void;
   failed?: boolean;
 }) {
   const [view, setView] = useState<'tree' | 'text'>('tree');
   const [copied, setCopied] = useState('');
 
   const copyReference = async (reference: string) => {
+    if (onReferenceSelect) {
+      onReferenceSelect(reference);
+      return;
+    }
     try {
       await navigator.clipboard.writeText(reference);
       setCopied(reference);
@@ -206,6 +212,62 @@ function JsonInspector({
     </div>
   );
 }
+
+const getPathValue = (target: unknown, pathExpression = '') => {
+  if (!pathExpression) return target;
+  return String(pathExpression)
+    .split('.')
+    .filter(Boolean)
+    .reduce<unknown>((current, key) => {
+      if (current == null) return undefined;
+      if (Array.isArray(current) && /^\d+$/.test(key)) return current[Number(key)];
+      return typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined;
+    }, target);
+};
+
+const workflowReferenceTokenRegex = /\$\.(?:([A-Za-z0-9_$\u4e00-\u9fa5-]+)\.)?(input|output)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?/g;
+
+const resolveEditorReference = (
+  reference: string,
+  currentStep: WorkflowRunStep | null,
+  run?: WorkflowRunLog | null,
+) => {
+  const match = String(reference || '').trim().match(/^\$\.(?:([A-Za-z0-9_$\u4e00-\u9fa5-]+)\.)?(input|output)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?$/);
+  if (!match) return undefined;
+  const [, nodeName, section, pathExpression] = match;
+  const sourceStep = nodeName
+    ? (run?.steps || []).find((step) => step.nodeName === nodeName || step.nodeId === nodeName)
+    : currentStep;
+  if (!sourceStep) return undefined;
+  return getPathValue(section === 'input' ? sourceStep.input : sourceStep.output, pathExpression || '');
+};
+
+const previewEditorExpression = (
+  expression: unknown,
+  currentStep: WorkflowRunStep | null,
+  run?: WorkflowRunLog | null,
+) => {
+  if (typeof expression !== 'string' || !expression.includes('$.')) return null;
+  const whole = resolveEditorReference(expression, currentStep, run);
+  if (whole !== undefined) return whole;
+  return expression.replace(workflowReferenceTokenRegex, (match) => {
+    const value = resolveEditorReference(match, currentStep, run);
+    if (value === undefined || value === null) return match;
+    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+  });
+};
+
+const getUnresolvedEditorReferences = (
+  expression: unknown,
+  currentStep: WorkflowRunStep | null,
+  run?: WorkflowRunLog | null,
+) => {
+  if (typeof expression !== 'string' || !expression.includes('$.')) return [];
+  const matches = Array.from(expression.matchAll(workflowReferenceTokenRegex)).map((match) => match[0]);
+  return matches.filter((reference, index, items) => (
+    items.indexOf(reference) === index && resolveEditorReference(reference, currentStep, run) === undefined
+  ));
+};
 
 const getActionIcon = (type: string) => {
   switch (type) {
@@ -509,6 +571,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const [nodeTestLoading, setNodeTestLoading] = useState(false);
   const [nodeTestError, setNodeTestError] = useState('');
   const [nodeTestStep, setNodeTestStep] = useState<WorkflowRunStep | null>(null);
+  const [variablePicker, setVariablePicker] = useState<{ nodeId: string; key: string } | null>(null);
 
   const triggerNodes = draft.nodes.filter(n => n.type === 'trigger');
   const otherNodes = draft.nodes.filter(n => n.type !== 'trigger');
@@ -698,6 +761,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     setNodeSettingsDirty(false);
     setNodeTestError('');
     setNodeTestStep(null);
+    setVariablePicker(null);
   }, [selectedNodeId]);
 
   const formatJson = (value: unknown) => {
@@ -900,6 +964,18 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       n.id === nodeId ? { ...n, config: { ...n.config, ...patch } } : n
     );
     setDraft({ ...draft, nodes: newNodes });
+  };
+
+  const insertReferenceIntoConfig = (nodeId: string, key: string, reference: string) => {
+    const targetNode = selectedNodeDraft?.id === nodeId
+      ? selectedNodeDraft
+      : draft.nodes.find((node) => node.id === nodeId);
+    const currentValue = targetNode?.config?.[key];
+    const nextValue = currentValue == null || currentValue === ''
+      ? reference
+      : `${String(currentValue)}${String(currentValue).endsWith(' ') ? '' : ' '}${reference}`;
+    updateNodeConfig(nodeId, { [key]: nextValue });
+    setVariablePicker(null);
   };
 
   const updateNodeDraft = (nodeId: string, patch: Partial<WorkflowNode>) => {
@@ -1557,6 +1633,74 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               const displayedStep = nodeTestStep || selectedNodeLastLog?.step || null;
               const displayedRunId = nodeTestStep ? 'Node test result' : selectedNodeLastLog?.run.id;
               const displayedStartedAt = nodeTestStep?.startedAt || selectedNodeLastLog?.run.startedAt || selectedNodeLastLog?.run.finishedAt;
+              const referenceRun = selectedNodeLastLog?.run || null;
+              const variableSources = [
+                { label: 'Current Input', baseReference: '$.input', value: displayedStep?.input },
+                { label: 'Current Output', baseReference: '$.output', value: displayedStep?.output },
+                ...(referenceRun?.steps || []).flatMap((step) => {
+                  const safeName = slugifyNodeName(step.nodeName || step.nodeId || '');
+                  if (!safeName) return [];
+                  return [
+                    { label: `${safeName} input`, baseReference: `$.${safeName}.input`, value: step.input },
+                    { label: `${safeName} output`, baseReference: `$.${safeName}.output`, value: step.output },
+                  ];
+                }),
+              ].filter((source) => source.value !== undefined);
+              const renderExpressionPreview = (value: unknown) => {
+                const preview = previewEditorExpression(value, displayedStep, referenceRun);
+                const unresolved = getUnresolvedEditorReferences(value, displayedStep, referenceRun);
+                if (preview === null && unresolved.length === 0) return null;
+                return (
+                  <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-800 dark:bg-slate-900/60">
+                    <div className="mb-1 font-semibold text-slate-500 dark:text-slate-400">Preview</div>
+                    {preview !== null && (
+                      <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-slate-700 dark:text-slate-200">{formatJsonValue(preview)}</pre>
+                    )}
+                    {unresolved.length > 0 && (
+                      <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+                        Unresolved: {unresolved.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                );
+              };
+              const renderVariablePicker = (key: string) => {
+                if (variablePicker?.nodeId !== node.id || variablePicker.key !== key) return null;
+                return (
+                  <div className="mt-2 rounded-lg border border-orange-200 bg-orange-50/60 p-2 dark:border-orange-500/30 dark:bg-orange-500/10">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-orange-700 dark:text-orange-300">Select a variable</div>
+                      <button
+                        type="button"
+                        onClick={() => setVariablePicker(null)}
+                        className="rounded p-1 text-orange-600 hover:bg-orange-100 dark:text-orange-300 dark:hover:bg-orange-500/20"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    {variableSources.length === 0 ? (
+                      <div className="rounded-md border border-dashed border-orange-200 bg-white/70 p-3 text-xs text-slate-500 dark:border-orange-500/30 dark:bg-slate-950/30 dark:text-slate-400">
+                        Run Test Node or refresh logs to load available input/output variables.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {variableSources.map((source) => (
+                          <div key={`${key}-${source.baseReference}`}>
+                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{source.label}</div>
+                            <div className="max-h-72 overflow-auto rounded-md">
+                              <JsonInspector
+                                value={source.value}
+                                baseReference={source.baseReference}
+                                onReferenceSelect={(reference) => insertReferenceIntoConfig(node.id, key, reference)}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              };
               
               return (
                 <div key={node.id} className="space-y-6">
@@ -1677,13 +1821,25 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
                           {deviceSource === 'expression' ? (
                             <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Device ID Expression</label>
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Device ID Expression</label>
+                                <button
+                                  type="button"
+                                  onClick={() => setVariablePicker((current) => current?.nodeId === node.id && current.key === 'deviceExpression' ? null : { nodeId: node.id, key: 'deviceExpression' })}
+                                  className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                                >
+                                  <Braces className="h-3 w-3" />
+                                  Insert Variable
+                                </button>
+                              </div>
                               <input
                                 value={node.config.deviceExpression || ''}
                                 onChange={(event) => updateNodeConfig(node.id, { deviceExpression: event.target.value })}
                                 placeholder="$.access_trigger.output.params.deviceId"
                                 className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
                               />
+                              {renderVariablePicker('deviceExpression')}
+                              {renderExpressionPreview(node.config.deviceExpression || '')}
                             </div>
                           ) : (
                             <div className="space-y-3">
@@ -1709,13 +1865,25 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
                           {deviceSource === 'expression' && (
                             <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Control Action ID</label>
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Control Action ID</label>
+                                <button
+                                  type="button"
+                                  onClick={() => setVariablePicker((current) => current?.nodeId === node.id && current.key === 'controlId' ? null : { nodeId: node.id, key: 'controlId' })}
+                                  className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                                >
+                                  <Braces className="h-3 w-3" />
+                                  Insert Variable
+                                </button>
+                              </div>
                               <input
                                 value={node.config.controlId || ''}
                                 onChange={(event) => updateNodeConfig(node.id, { controlId: event.target.value })}
                                 placeholder="power_on, set_mode, set_pressure..."
                                 className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
                               />
+                              {renderVariablePicker('controlId')}
+                              {renderExpressionPreview(node.config.controlId || '')}
                             </div>
                           )}
 
@@ -1971,9 +2139,19 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       if (multilineConfigKeys.has(key)) {
                         return (
                           <div key={key}>
-                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 capitalize">
-                              {key.replace('_', ' ')}
-                            </label>
+                            <div className="mb-1 flex items-center justify-between gap-2">
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 capitalize">
+                                {key.replace('_', ' ')}
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => setVariablePicker((current) => current?.nodeId === node.id && current.key === key ? null : { nodeId: node.id, key })}
+                                className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                              >
+                                <Braces className="h-3 w-3" />
+                                Insert Variable
+                              </button>
+                            </div>
                             <textarea
                               value={String(value ?? '')}
                               rows={key === 'code' ? 8 : 5}
@@ -1985,15 +2163,29 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                                 Available variables: input, event, context, config. Return the node output.
                               </p>
                             )}
+                            {renderVariablePicker(key)}
+                            {renderExpressionPreview(value)}
                           </div>
                         );
                       }
                       
                       return (
                         <div key={key}>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 capitalize">
-                            {key === 'expectedContent' ? 'Match Content' : key.replace('_', ' ')}
-                          </label>
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 capitalize">
+                              {key === 'expectedContent' ? 'Match Content' : key.replace('_', ' ')}
+                            </label>
+                            {typeof value !== 'number' && !(node.type === 'trigger' && node.config.type === 'webhook' && key === 'endpoint') && (
+                              <button
+                                type="button"
+                                onClick={() => setVariablePicker((current) => current?.nodeId === node.id && current.key === key ? null : { nodeId: node.id, key })}
+                                className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                              >
+                                <Braces className="h-3 w-3" />
+                                Insert Variable
+                              </button>
+                            )}
+                          </div>
                           <input 
                             type={typeof value === 'number' ? 'number' : 'text'}
                             value={value as string | number}
@@ -2016,6 +2208,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                           {node.type === 'trigger' && node.config.type === 'webhook' && key === 'endpoint' && (
                             <p className="mt-1 text-[10px] text-slate-500">Click to copy your unique webhook URL</p>
                           )}
+                          {typeof value !== 'number' && renderVariablePicker(key)}
+                          {renderExpressionPreview(value)}
                         </div>
                       );
                     })}

@@ -129,7 +129,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Trigger cooldown / dedupe configuration.
 - [x] Node-level test run API and editor action.
 - [x] Node execution policy: timeout, retry attempts, retry interval, fixed/exponential backoff, stop/continue on failure.
-- [ ] Expression builder with preview, validation, and helper functions.
+- [x] Expression builder with variable picker, preview, and unresolved reference hints.
+- [ ] Expression helper functions such as now(), formatDate(), toNumber(), contains(), round().
 - [ ] Workflow import / export JSON.
 - [ ] Workflow template library / marketplace.
 - [ ] Sub-workflow invocation.
