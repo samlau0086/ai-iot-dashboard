@@ -6,7 +6,7 @@ import {
   MessageCircle, Mail, Ticket, Power, Globe,
   FileText, BrainCircuit, Activity, AlertTriangle,
   Clock, Zap, PowerOff, ArrowRight, Radio, Wifi, Bell, KeyRound, ListTree, RefreshCw, X,
-  Download, Upload, Package
+  Download, Upload, Package, Copy
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { WorkflowEditor } from './WorkflowEditor';
@@ -28,9 +28,12 @@ type WorkflowRunStep = {
   status?: string;
   input?: unknown;
   output?: unknown;
+  error?: unknown;
   startedAt?: string;
   finishedAt?: string;
 };
+
+type WorkflowLogStatusFilter = 'all' | 'success' | 'failed' | 'running';
 
 type WorkflowRunLog = {
   id: string;
@@ -52,8 +55,11 @@ export function Workflows() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [logsWorkflowId, setLogsWorkflowId] = useState<string | null>(null);
   const [workflowLogs, setWorkflowLogs] = useState<WorkflowRunLog[]>([]);
+  const [workflowRunMetrics, setWorkflowRunMetrics] = useState<WorkflowRunLog[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
+  const [logsStatusFilter, setLogsStatusFilter] = useState<WorkflowLogStatusFilter>('all');
   const [logsLoading, setLogsLoading] = useState(false);
+  const [metricsLoading, setMetricsLoading] = useState(false);
   const [logsError, setLogsError] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -61,12 +67,90 @@ export function Workflows() {
   const [importError, setImportError] = useState('');
 
   const activeLogsWorkflow = workflows.find((workflow) => workflow.id === logsWorkflowId) || null;
+  const filteredWorkflowLogs = useMemo(
+    () => logsStatusFilter === 'all' ? workflowLogs : workflowLogs.filter((run) => run.status === logsStatusFilter),
+    [workflowLogs, logsStatusFilter]
+  );
   const selectedRun = useMemo(
-    () => workflowLogs.find((run) => run.id === selectedRunId) || workflowLogs[0] || null,
-    [workflowLogs, selectedRunId]
+    () => filteredWorkflowLogs.find((run) => run.id === selectedRunId) || filteredWorkflowLogs[0] || null,
+    [filteredWorkflowLogs, selectedRunId]
   );
 
-  const loadWorkflowLogs = async (workflowId: string) => {
+  const getRunDurationMs = (run: WorkflowRunLog) => {
+    const started = new Date(run.startedAt).getTime();
+    const finished = new Date(run.finishedAt).getTime();
+    if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return 0;
+    return finished - started;
+  };
+
+  const getStepDurationMs = (step: WorkflowRunStep) => {
+    const started = new Date(step.startedAt || '').getTime();
+    const finished = new Date(step.finishedAt || '').getTime();
+    if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return 0;
+    return finished - started;
+  };
+
+  const formatDuration = (durationMs: number) => {
+    if (!durationMs) return '0ms';
+    if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+    const seconds = durationMs / 1000;
+    if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.round(seconds % 60);
+    return `${minutes}m ${remainingSeconds}s`;
+  };
+
+  const buildRunSummary = (runs: WorkflowRunLog[]) => {
+    const total = runs.length;
+    const success = runs.filter((run) => run.status === 'success').length;
+    const failed = runs.filter((run) => run.status === 'failed').length;
+    const running = runs.filter((run) => run.status === 'running').length;
+    const avgDuration = total
+      ? runs.reduce((sum, run) => sum + getRunDurationMs(run), 0) / total
+      : 0;
+    const lastRun = [...runs].sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())[0] || null;
+    return {
+      total,
+      success,
+      failed,
+      running,
+      successRate: total ? Math.round((success / total) * 100) : 0,
+      avgDuration,
+      lastRun,
+    };
+  };
+
+  const globalRunSummary = useMemo(() => buildRunSummary(workflowRunMetrics), [workflowRunMetrics]);
+  const runsByWorkflow = useMemo(() => {
+    const map = new Map<string, WorkflowRunLog[]>();
+    workflowRunMetrics.forEach((run) => {
+      const current = map.get(run.workflowId) || [];
+      current.push(run);
+      map.set(run.workflowId, current);
+    });
+    return map;
+  }, [workflowRunMetrics]);
+  const activeLogsSummary = useMemo(() => buildRunSummary(workflowLogs), [workflowLogs]);
+
+  const loadWorkflowRunMetrics = async () => {
+    setMetricsLoading(true);
+    try {
+      const response = await fetch('/api/workflow-runs?limit=200');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Failed to load workflow metrics.');
+      setWorkflowRunMetrics(Array.isArray(payload.runs) ? payload.runs : []);
+    } catch {
+      setWorkflowRunMetrics([]);
+    } finally {
+      setMetricsLoading(false);
+    }
+  };
+
+  const loadWorkflowLogs = async (
+    workflowId: string,
+    preferredRunId = selectedRunId,
+    preferredFilter: WorkflowLogStatusFilter = logsStatusFilter
+  ) => {
     setLogsLoading(true);
     setLogsError('');
     try {
@@ -75,7 +159,13 @@ export function Workflows() {
       if (!response.ok) throw new Error(payload.error || 'Failed to load workflow logs.');
       const runs = Array.isArray(payload.runs) ? payload.runs : [];
       setWorkflowLogs(runs);
-      setSelectedRunId((current) => runs.some((run: WorkflowRunLog) => run.id === current) ? current : runs[0]?.id || '');
+      const visibleRuns = preferredFilter === 'all' ? runs : runs.filter((run: WorkflowRunLog) => run.status === preferredFilter);
+      setSelectedRunId((current) => {
+        if (preferredRunId && runs.some((run: WorkflowRunLog) => run.id === preferredRunId)) return preferredRunId;
+        if (visibleRuns.some((run: WorkflowRunLog) => run.id === current)) return current;
+        return visibleRuns[0]?.id || '';
+      });
+      loadWorkflowRunMetrics();
     } catch (error) {
       setWorkflowLogs([]);
       setSelectedRunId('');
@@ -86,21 +176,29 @@ export function Workflows() {
   };
 
   useEffect(() => {
-    if (!logsWorkflowId) return;
-    loadWorkflowLogs(logsWorkflowId);
-  }, [logsWorkflowId]);
+    loadWorkflowRunMetrics();
+  }, []);
 
-  const openLogs = (workflowId: string) => {
+  useEffect(() => {
+    if (!selectedRun && filteredWorkflowLogs.length > 0) {
+      setSelectedRunId(filteredWorkflowLogs[0].id);
+    }
+  }, [filteredWorkflowLogs, selectedRun]);
+
+  const openLogs = (workflowId: string, runId = '', filter: WorkflowLogStatusFilter = 'all') => {
     setLogsWorkflowId(workflowId);
+    setLogsStatusFilter(filter);
     setWorkflowLogs([]);
-    setSelectedRunId('');
+    setSelectedRunId(runId);
     setLogsError('');
+    loadWorkflowLogs(workflowId, runId, filter);
   };
 
   const closeLogs = () => {
     setLogsWorkflowId(null);
     setWorkflowLogs([]);
     setSelectedRunId('');
+    setLogsStatusFilter('all');
     setLogsError('');
   };
 
@@ -119,6 +217,7 @@ export function Workflows() {
       if (!response.ok) throw new Error(payload.error || 'Failed to clear workflow logs.');
       setWorkflowLogs([]);
       setSelectedRunId('');
+      loadWorkflowRunMetrics();
     } catch (error) {
       setLogsError(error instanceof Error ? error.message : 'Failed to clear workflow logs.');
     } finally {
@@ -132,6 +231,23 @@ export function Workflows() {
       return JSON.stringify(value ?? null, null, 2);
     } catch {
       return String(value);
+    }
+  };
+
+  const findLatestRunByStatus = (runs: WorkflowRunLog[], status: WorkflowLogStatusFilter) => {
+    const visibleRuns = status === 'all' ? runs : runs.filter((run) => run.status === status);
+    return [...visibleRuns].sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())[0] || null;
+  };
+
+  const globalLatestFailedRun = useMemo(() => findLatestRunByStatus(workflowRunMetrics, 'failed'), [workflowRunMetrics]);
+  const globalLastRun = globalRunSummary.lastRun;
+
+  const copyJson = async (label: string, value: unknown) => {
+    try {
+      await navigator.clipboard.writeText(formatJson(value));
+      notifySuccess(`${label} copied.`);
+    } catch {
+      notifySuccess(`${label} ready to copy.`);
     }
   };
 
@@ -402,6 +518,42 @@ export function Workflows() {
         </div>
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {[
+          { label: 'Total Runs', value: String(globalRunSummary.total), detail: metricsLoading ? 'Refreshing...' : 'Recent 200 logs', onClick: undefined },
+          { label: 'Success Rate', value: `${globalRunSummary.successRate}%`, detail: `${globalRunSummary.success} successful`, onClick: undefined },
+          {
+            label: 'Failed Runs',
+            value: String(globalRunSummary.failed),
+            detail: globalLatestFailedRun ? 'Click to inspect latest failure' : `${globalRunSummary.running} running`,
+            onClick: globalLatestFailedRun ? () => openLogs(globalLatestFailedRun.workflowId, globalLatestFailedRun.id, 'failed') : undefined,
+          },
+          { label: 'Avg Duration', value: formatDuration(globalRunSummary.avgDuration), detail: 'Across loaded runs', onClick: undefined },
+          {
+            label: 'Last Run',
+            value: globalLastRun ? globalLastRun.status : 'None',
+            detail: globalLastRun ? new Date(globalLastRun.startedAt).toLocaleString() : 'No execution yet',
+            onClick: globalLastRun ? () => openLogs(globalLastRun.workflowId, globalLastRun.id, 'all') : undefined,
+          },
+        ].map((metric) => (
+          <button
+            key={metric.label}
+            type="button"
+            onClick={metric.onClick}
+            disabled={!metric.onClick}
+            className={cn(
+              "rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors dark:border-slate-800 dark:bg-[#1c2128]",
+              metric.onClick && "hover:border-orange-300 hover:bg-orange-50/40 dark:hover:border-orange-500/40 dark:hover:bg-orange-500/10",
+              !metric.onClick && "cursor-default"
+            )}
+          >
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{metric.label}</div>
+            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{metric.value}</div>
+            <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{metric.detail}</div>
+          </button>
+        ))}
+      </div>
+
       {workflows.length === 0 ? (
         <div className="text-center bg-white dark:bg-[#1c2128] rounded-xl border border-slate-200 dark:border-slate-800 border-dashed p-12">
           <GitMerge className="mx-auto h-12 w-12 text-slate-400" />
@@ -419,7 +571,11 @@ export function Workflows() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6">
-          {workflows.map((workflow) => (
+          {workflows.map((workflow) => {
+            const workflowRuns = runsByWorkflow.get(workflow.id) || [];
+            const workflowSummary = buildRunSummary(workflowRuns);
+            const workflowLatestFailed = findLatestRunByStatus(workflowRuns, 'failed');
+            return (
             <div key={workflow.id} className="bg-white dark:bg-[#1c2128] rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col group relative overflow-visible">
               
               <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800/50 bg-slate-50/50 dark:bg-slate-900/20">
@@ -438,6 +594,42 @@ export function Workflows() {
                       <span>Published v{workflow.publishedVersion || 0}</span>
                       <span>{workflow.versionHistory?.length || 0} versions</span>
                       {workflow.publishedAt && <span>{new Date(workflow.publishedAt).toLocaleString()}</span>}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-medium">
+                      <span className={cn("rounded-full border px-2 py-0.5 uppercase", statusClassName(workflowSummary.lastRun?.status))}>
+                        {workflowSummary.lastRun ? workflowSummary.lastRun.status : 'no runs'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openLogs(workflow.id)}
+                        className="text-slate-500 underline-offset-2 hover:text-orange-600 hover:underline dark:text-slate-400 dark:hover:text-orange-300"
+                      >
+                        {workflowSummary.total} runs
+                      </button>
+                      <span className="text-slate-500 dark:text-slate-400">{workflowSummary.successRate}% success</span>
+                      <button
+                        type="button"
+                        disabled={!workflowLatestFailed}
+                        onClick={() => workflowLatestFailed && openLogs(workflow.id, workflowLatestFailed.id, 'failed')}
+                        className={cn(
+                          "underline-offset-2",
+                          workflowLatestFailed
+                            ? "text-slate-500 hover:text-red-600 hover:underline dark:text-slate-400 dark:hover:text-red-300"
+                            : "cursor-default text-slate-500 dark:text-slate-400"
+                        )}
+                      >
+                        {workflowSummary.failed} failures
+                      </button>
+                      <span className="text-slate-500 dark:text-slate-400">avg {formatDuration(workflowSummary.avgDuration)}</span>
+                      {workflowSummary.lastRun && (
+                        <button
+                          type="button"
+                          onClick={() => openLogs(workflow.id, workflowSummary.lastRun?.id || '', 'all')}
+                          className="text-slate-500 underline-offset-2 hover:text-orange-600 hover:underline dark:text-slate-400 dark:hover:text-orange-300"
+                        >
+                          last {new Date(workflowSummary.lastRun.startedAt).toLocaleString()}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -528,7 +720,8 @@ export function Workflows() {
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -730,6 +923,27 @@ export function Workflows() {
                     {logsError}
                   </div>
                 )}
+                <div className="mb-3 flex flex-wrap gap-1">
+                  {(['all', 'success', 'failed', 'running'] as WorkflowLogStatusFilter[]).map((status) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => {
+                        setLogsStatusFilter(status);
+                        const nextRun = findLatestRunByStatus(workflowLogs, status);
+                        setSelectedRunId(nextRun?.id || '');
+                      }}
+                      className={cn(
+                        "rounded-md border px-2 py-1 text-[10px] font-semibold uppercase transition-colors",
+                        logsStatusFilter === status
+                          ? "border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-500/40 dark:bg-orange-500/10 dark:text-orange-300"
+                          : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800"
+                      )}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
                 {logsLoading && workflowLogs.length === 0 ? (
                   <div className="rounded-md border border-slate-200 bg-white p-4 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
                     Loading workflow logs...
@@ -738,9 +952,13 @@ export function Workflows() {
                   <div className="rounded-md border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                     No logs yet. Trigger this workflow once to record a run.
                   </div>
+                ) : filteredWorkflowLogs.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                    No {logsStatusFilter} runs in the loaded logs.
+                  </div>
                 ) : (
                   <div className="space-y-2">
-                    {workflowLogs.map((run) => (
+                    {filteredWorkflowLogs.map((run) => (
                       <button
                         key={run.id}
                         type="button"
@@ -775,7 +993,26 @@ export function Workflows() {
               <main className="min-h-0 overflow-y-auto p-5">
                 {selectedRun ? (
                   <div className="space-y-5">
-                    <div className="grid gap-3 sm:grid-cols-5">
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                        <span className="block text-xs text-slate-500 dark:text-slate-400">Loaded Runs</span>
+                        <span className="mt-2 block text-xl font-bold text-slate-900 dark:text-white">{activeLogsSummary.total}</span>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                        <span className="block text-xs text-slate-500 dark:text-slate-400">Success Rate</span>
+                        <span className="mt-2 block text-xl font-bold text-slate-900 dark:text-white">{activeLogsSummary.successRate}%</span>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                        <span className="block text-xs text-slate-500 dark:text-slate-400">Failures</span>
+                        <span className="mt-2 block text-xl font-bold text-slate-900 dark:text-white">{activeLogsSummary.failed}</span>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                        <span className="block text-xs text-slate-500 dark:text-slate-400">Avg Duration</span>
+                        <span className="mt-2 block text-xl font-bold text-slate-900 dark:text-white">{formatDuration(activeLogsSummary.avgDuration)}</span>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Status</span>
                         <span className={cn("mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold uppercase", statusClassName(selectedRun.status))}>
@@ -798,13 +1035,28 @@ export function Workflows() {
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Finished</span>
                         <span className="mt-2 block text-sm font-semibold text-slate-900 dark:text-white">{new Date(selectedRun.finishedAt).toLocaleString()}</span>
                       </div>
+                      <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                        <span className="block text-xs text-slate-500 dark:text-slate-400">Duration</span>
+                        <span className="mt-2 block text-sm font-semibold text-slate-900 dark:text-white">{formatDuration(getRunDurationMs(selectedRun))}</span>
+                      </div>
                     </div>
 
                     <section>
                       <h4 className="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Execution Flow</h4>
                       <div className="space-y-3">
-                        {(selectedRun.steps || []).map((step, index) => (
-                          <div key={`${step.nodeId || step.nodeName || 'step'}-${index}`} className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900/60">
+                        {(selectedRun.steps || []).map((step, index) => {
+                          const stepFailed = step.status === 'failed';
+                          const stepError = step.error ?? (stepFailed ? step.output : undefined);
+                          return (
+                          <div
+                            key={`${step.nodeId || step.nodeName || 'step'}-${index}`}
+                            className={cn(
+                              "rounded-lg border bg-white p-4 dark:bg-slate-900/60",
+                              stepFailed
+                                ? "border-red-300 shadow-sm shadow-red-500/10 dark:border-red-500/40"
+                                : "border-slate-200 dark:border-slate-800"
+                            )}
+                          >
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                               <div className="flex items-start gap-3">
                                 <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-300">
@@ -823,26 +1075,60 @@ export function Workflows() {
                                   </p>
                                 </div>
                               </div>
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                <span className="rounded-md border border-slate-200 px-2 py-1 dark:border-slate-700">
+                                  {formatDuration(getStepDurationMs(step))}
+                                </span>
+                                {stepFailed && (
+                                  <button
+                                    type="button"
+                                    onClick={() => copyJson('Error', stepError)}
+                                    className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-red-600 hover:bg-red-50 dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/10"
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                    Copy Error
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             <div className="mt-3 grid gap-3 lg:grid-cols-2">
                               <div>
-                                <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Input</div>
+                                <div className="mb-1 flex items-center justify-between gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                                  <span>Input</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyJson('Input', step.input)}
+                                    className="inline-flex items-center gap-1 rounded text-[10px] text-slate-500 hover:text-orange-600 dark:text-slate-400 dark:hover:text-orange-300"
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                    Copy
+                                  </button>
+                                </div>
                                 <pre className="max-h-56 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-200">{formatJson(step.input)}</pre>
                               </div>
                               <div>
-                                <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-                                  {step.status === 'failed' ? 'Error / Output' : 'Output'}
+                                <div className="mb-1 flex items-center justify-between gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                                  <span>{stepFailed ? 'Error / Output' : 'Output'}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyJson(stepFailed ? 'Error / Output' : 'Output', stepFailed ? stepError : step.output)}
+                                    className="inline-flex items-center gap-1 rounded text-[10px] text-slate-500 hover:text-orange-600 dark:text-slate-400 dark:hover:text-orange-300"
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                    Copy
+                                  </button>
                                 </div>
                                 <pre className={cn(
                                   "max-h-56 overflow-auto rounded-md p-3 text-xs",
-                                  step.status === 'failed'
+                                  stepFailed
                                     ? "bg-red-950/80 text-red-100"
                                     : "bg-slate-950 text-slate-200"
-                                )}>{formatJson(step.output)}</pre>
+                                )}>{formatJson(stepFailed ? stepError : step.output)}</pre>
                               </div>
                             </div>
                           </div>
-                        ))}
+                        );
+                        })}
                         {(!selectedRun.steps || selectedRun.steps.length === 0) && (
                           <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
                             This run has no recorded steps.
@@ -852,7 +1138,17 @@ export function Workflows() {
                     </section>
 
                     <section>
-                      <h4 className="mb-2 text-sm font-semibold text-slate-900 dark:text-white">Trigger Event</h4>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold text-slate-900 dark:text-white">Trigger Event</h4>
+                        <button
+                          type="button"
+                          onClick={() => copyJson('Trigger Event', selectedRun.event)}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 hover:text-orange-600 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-orange-300"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          Copy Event
+                        </button>
+                      </div>
                       <pre className="max-h-80 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-200">{formatJson(selectedRun.event)}</pre>
                     </section>
                   </div>

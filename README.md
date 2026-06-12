@@ -142,7 +142,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Node search and keyboard shortcuts.
 - [ ] Canvas mini map, grouping, comments, and collapse/expand.
 - [ ] Redis/BullMQ production execution queue for multi-instance deployments.
-- [ ] Workflow run metrics: success rate, average duration, failure count, current running jobs.
+- [x] Workflow run metrics: total runs, success rate, failure count, average duration, last run, and per-workflow summaries.
+- [x] Workflow run detail diagnostics: click metrics into logs, status filters, node duration, failed-node highlight, and copy input/output/error.
 
 目标：建设工业版 Zapier / n8n，用规则自动响应设备和运营事件。
 
@@ -356,6 +357,8 @@ Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。
 工作流支持 **Run Workflow** 子工作流调用节点。父流程可以选择一个已发布工作流，或用表达式指定 `workflowId`，并通过 Payload JSON / Payload Expression 传入参数；子流程输出会写入父节点 output，可继续通过 `$.run_workflow.output.status`、`$.run_workflow.output.result`、`$.run_workflow.output.steps` 等引用。系统会记录父流程与子流程各自的 Logs，并内置递归检测与最大调用深度，避免工作流互相调用造成死循环。Dry Run 会以无外部副作用模式执行子流程。
 
 `Schedule` Trigger 支持可视化 Cron 编辑。可以选择 Every N minutes / hours、Daily、Weekly、Monthly 或 Custom cron，编辑器会自动生成 `crontab` 并显示未来 5 次运行时间；Validate 会检查 cron 字段是否合法，并在计划过于频繁时给出 warning。
+
+Workflows 列表支持运行指标总览，会基于最近 workflow run logs 计算 Total Runs、Success Rate、Failed Runs、Avg Duration 和 Last Run；每个 workflow 卡片会显示最近运行状态、失败数、成功率和平均耗时，Logs 窗口也会显示当前 workflow 的运行摘要。点击 Failed Runs / Last Run 可直接打开对应 workflow 的 Logs 并定位到运行记录；Logs 支持 All / Success / Failed / Running 筛选，节点详情会显示执行耗时、失败节点高亮，并可复制 Trigger Event、Input、Output 或 Error。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 
