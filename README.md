@@ -139,7 +139,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [ ] Workflow template marketplace.
 - [ ] Sub-workflow invocation.
 - [ ] Advanced cron editor.
-- [ ] Node search and keyboard shortcuts.
+- [x] Node search and keyboard shortcuts.
 - [ ] Canvas mini map, grouping, comments, and collapse/expand.
 - [ ] Redis/BullMQ production execution queue for multi-instance deployments.
 - [ ] Workflow run metrics: success rate, average duration, failure count, current running jobs.
@@ -348,6 +348,8 @@ Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。
 工作流编辑页支持 **Versions**。每次 **Publish Version** 都需要填写发布说明，并保存 published snapshot 到版本历史。版本历史可查看发布人、发布时间、节点摘要、发布说明，也可以比较当前 Draft 与历史版本的新增、删除和修改节点；选择 **Restore to Draft** 会把历史版本恢复到当前草稿，用户仍需再点击 Save Draft 或 Publish Version 才会固化。
 
 工作流编辑页支持 **Validate** 发布前校验。校验结果分为 Error、Warning、Info：Error 会阻止发布，例如缺少 Trigger、设备控制未绑定设备或控制项、Webhook URL 非法、Access Trigger 未绑定 Access；Warning 会在发布前提示确认，例如通知消息为空、Trigger 未配置 cooldown、静态设备绑定未找到；Info 用于提示外部副作用节点等结构信息。点击带节点信息的校验项可以定位到对应节点。
+
+工作流编辑页支持 **Search Nodes** 与快捷键操作。可以按节点名称、节点类型、设备 ID、Access ID、配置内容或变量引用快速定位节点；`Ctrl/Cmd + K` 打开搜索，`Ctrl/Cmd + S` 保存草稿，`Ctrl/Cmd + Enter` 打开 Dry Run，`Esc` 关闭当前弹层。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 

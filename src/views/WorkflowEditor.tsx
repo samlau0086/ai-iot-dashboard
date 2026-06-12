@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAppStore, Workflow, WorkflowEdge, WorkflowNode, type AccessDefinition, type WorkflowVersionSnapshot } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
@@ -7,7 +7,7 @@ import {
   Activity, Clock, Zap, PowerOff, ArrowDown, X, AlertTriangle, Settings,
   GitBranch, GitCommit, Settings2, Timer, ChevronDown, Radio, Wifi, Bell,
   Code2, Shuffle, Ruler, Database, Repeat2, Ban, Braces, Route, KeyRound, ListTree, RefreshCw, ChevronRight, Copy,
-  History, RotateCcw
+  History, RotateCcw, Search
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
@@ -584,6 +584,9 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const [validationIssues, setValidationIssues] = useState<WorkflowValidationIssue[]>([]);
   const [validationLoading, setValidationLoading] = useState(false);
   const [validationSource, setValidationSource] = useState<'manual' | 'publish'>('manual');
+  const [showNodeSearch, setShowNodeSearch] = useState(false);
+  const [nodeSearchQuery, setNodeSearchQuery] = useState('');
+  const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
   const [workflowLogs, setWorkflowLogs] = useState<WorkflowRunLog[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
   const [logsLoading, setLogsLoading] = useState(false);
@@ -597,6 +600,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const [nodeTestError, setNodeTestError] = useState('');
   const [nodeTestStep, setNodeTestStep] = useState<WorkflowRunStep | null>(null);
   const [variablePicker, setVariablePicker] = useState<{ nodeId: string; key: string } | null>(null);
+  const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const highlightTimerRef = useRef<number | null>(null);
 
   const triggerNodes = draft.nodes.filter(n => n.type === 'trigger');
   const otherNodes = draft.nodes.filter(n => n.type !== 'trigger');
@@ -1140,6 +1145,42 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     return (t.workflows.actionTypes as any)[type] || (t.workflows.conditionTypes as any)[type] || (t.workflows.triggerTypes as any)[type] || type;
   };
 
+  const getNodeSearchText = (node: WorkflowNode) => {
+    const config = node.config || {};
+    const device = devices.find((item) => [config.device, config.target, config.deviceExpression].includes(item.id));
+    const access = accesses.find((item) => item.id === config.accessId);
+    return [
+      node.id,
+      node.name,
+      node.type,
+      config.type,
+      getActionLabel(config.type),
+      device?.id,
+      device?.name,
+      access?.id,
+      access?.name,
+      JSON.stringify(config),
+    ].filter(Boolean).join(' ').toLowerCase();
+  };
+
+  const nodeSearchResults = useMemo(() => {
+    const query = nodeSearchQuery.trim().toLowerCase();
+    const nodes = draft.nodes.map((node, index) => ({ node, index, searchText: getNodeSearchText(node) }));
+    if (!query) return nodes.slice(0, 12);
+    return nodes.filter((item) => item.searchText.includes(query)).slice(0, 24);
+  }, [draft.nodes, nodeSearchQuery, devices, accesses, language]);
+
+  const focusNode = (nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    setShowNodeSearch(false);
+    setHighlightedNodeId(nodeId);
+    window.requestAnimationFrame(() => {
+      nodeRefs.current[nodeId]?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    });
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => setHighlightedNodeId(null), 1800);
+  };
+
   const updateNodeConfig = (nodeId: string, patch: Record<string, any>) => {
     if (selectedNodeDraft?.id === nodeId) {
       setSelectedNodeDraft({
@@ -1343,6 +1384,43 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     }
   };
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isModifier = event.ctrlKey || event.metaKey;
+      if (isModifier && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setShowNodeSearch(true);
+        setNodeSearchQuery('');
+        return;
+      }
+      if (isModifier && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        handleSave();
+        return;
+      }
+      if (isModifier && event.key === 'Enter') {
+        event.preventDefault();
+        openDryRun();
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (showNodeSearch) setShowNodeSearch(false);
+        else if (showSelector.show) setShowSelector({ show: false, insertIndex: 0 });
+        else if (showDryRun) setShowDryRun(false);
+        else if (showValidationModal) setShowValidationModal(false);
+        else if (showPublishModal) setShowPublishModal(false);
+        else if (showVersionHistory) setShowVersionHistory(false);
+        else if (showLogs) setShowLogs(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showNodeSearch, showSelector.show, showDryRun, showValidationModal, showPublishModal, showVersionHistory, showLogs, draft, selectedNodeDraft]);
+
+  useEffect(() => () => {
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+  }, []);
+
   const buildWorkflowControlPatch = (deviceId: string, controlId?: string) => {
     const device = devices.find((item) => item.id === deviceId);
     const controls = getDeviceControlDefinitions(device);
@@ -1449,6 +1527,9 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     return (
       <div 
         key={node.id}
+        ref={(element) => {
+          nodeRefs.current[node.id] = element;
+        }}
         onClick={() => setSelectedNodeId(node.id)}
         className={cn(
           "w-80 shrink-0 rounded-xl border-2 p-4 flex items-center justify-between cursor-pointer transition-all bg-white dark:bg-[#1c2128] shadow-sm hover:shadow-md",
@@ -1456,6 +1537,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
           isTrigger && !isSelected && "border-orange-200 dark:border-orange-900/50",
           isCondition && !isSelected && !isLogic && "border-indigo-200 dark:border-indigo-900/50",
           isLogic && !isSelected && "border-purple-300 dark:border-purple-800",
+          highlightedNodeId === node.id && "ring-4 ring-orange-400/60 shadow-lg shadow-orange-500/20 animate-pulse",
         )}
       >
         <div className="flex items-center gap-4 min-w-0">
@@ -1796,6 +1878,17 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </div>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto justify-end shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setShowNodeSearch(true);
+                setNodeSearchQuery('');
+              }}
+              className="px-3 py-1.5 rounded-md border text-sm font-medium flex items-center gap-2 transition-colors bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+            >
+              <Search className="h-4 w-4" />
+              Search Nodes
+            </button>
             <button
               type="button"
               onClick={openDryRun}
@@ -2742,6 +2835,87 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {showNodeSearch && (
+        <div className="absolute inset-0 z-50 flex items-start justify-center bg-slate-950/60 p-4 pt-20 backdrop-blur-sm">
+          <div className="w-full max-w-3xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+              <Search className="h-5 w-5 text-orange-500" />
+              <input
+                autoFocus
+                value={nodeSearchQuery}
+                onChange={(event) => setNodeSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && nodeSearchResults[0]) {
+                    event.preventDefault();
+                    focusNode(nodeSearchResults[0].node.id);
+                  }
+                }}
+                placeholder="Search nodes, devices, access entries, variables..."
+                className="min-w-0 flex-1 border-none bg-transparent p-0 text-sm text-slate-900 placeholder:text-slate-400 focus:ring-0 dark:text-white"
+              />
+              <button
+                type="button"
+                onClick={() => setShowNodeSearch(false)}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[60vh] overflow-y-auto p-2">
+              {nodeSearchResults.length === 0 ? (
+                <div className="p-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                  No matching nodes.
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {nodeSearchResults.map(({ node, index }) => {
+                    const device = devices.find((item) => [node.config?.device, node.config?.target, node.config?.deviceExpression].includes(item.id));
+                    const access = accesses.find((item) => item.id === node.config?.accessId);
+                    const configPreview = Object.entries(node.config || {})
+                      .filter(([key]) => !['type', 'groupId', 'executionPolicy'].includes(key))
+                      .slice(0, 4)
+                      .map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`)
+                      .join(', ');
+                    return (
+                      <button
+                        key={node.id}
+                        type="button"
+                        onClick={() => focusNode(node.id)}
+                        className="flex w-full items-start gap-3 rounded-lg border border-transparent p-3 text-left transition-colors hover:border-orange-200 hover:bg-orange-50 dark:hover:border-orange-500/30 dark:hover:bg-orange-500/10"
+                      >
+                        <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800">
+                          {getActionIcon(node.config?.type)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-slate-900 dark:text-white">{node.name || getActionLabel(node.config?.type)}</span>
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                              {node.type}
+                            </span>
+                            <span className="text-[10px] text-slate-400">#{index + 1}</span>
+                          </div>
+                          <div className="mt-1 truncate text-xs text-orange-600 dark:text-orange-400">
+                            {getActionLabel(node.config?.type)}
+                            {device && ` / ${device.name}`}
+                            {access && ` / ${access.name}`}
+                          </div>
+                          {configPreview && (
+                            <div className="mt-1 truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                              {configPreview}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
