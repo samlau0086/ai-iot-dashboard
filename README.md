@@ -131,8 +131,9 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Node execution policy: timeout, retry attempts, retry interval, fixed/exponential backoff, stop/continue on failure.
 - [x] Expression builder with variable picker, preview, and unresolved reference hints.
 - [ ] Expression helper functions such as now(), formatDate(), toNumber(), contains(), round().
-- [ ] Workflow import / export JSON.
-- [ ] Workflow template library / marketplace.
+- [x] Workflow import / export JSON.
+- [x] Workflow template library / preset workflows.
+- [ ] Workflow template marketplace.
 - [ ] Sub-workflow invocation.
 - [ ] Advanced cron editor.
 - [ ] Node search and keyboard shortcuts.
@@ -336,6 +337,8 @@ GET /api/telemetry?deviceId=AIR-COMP-001&metric=pressure&source=mqtt&from=2026-0
 ### 配置自动化工作流
 
 进入 **Workflows** 页面，点击 **Create Workflow** 创建流程。工作流由触发器、IF / ELIF / ELSE 条件分支和动作组成，可用于自动响应设备离线、指标超限、告警产生、计划任务、MQTT 消息或 AI 异常检测。一个工作流可以配置多个 Trigger，任意一个 Trigger 被触发后都会进入后续条件分支；IF / ELIF / ELSE 会按顺序匹配，系统只执行第一个匹配分支下的 actions。
+
+Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。模板会创建为未启用草稿，导入时会重新生成 workflow、node、edge ID，并为 Webhook Trigger 重新生成当前域名下的 endpoint，避免复用旧环境的地址或误触发已启用流程。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 

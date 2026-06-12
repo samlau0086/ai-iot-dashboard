@@ -1,16 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useAppStore, type WorkflowNode } from '../lib/store';
+import { useAppStore, type Workflow, type WorkflowNode } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
   GitMerge, GitBranch, GitCommit, Settings2, Timer, Plus, Play, Square, Trash2, Edit2, 
   MessageCircle, Mail, Ticket, Power, Globe,
   FileText, BrainCircuit, Activity, AlertTriangle,
-  Clock, Zap, PowerOff, ArrowRight, Radio, Wifi, Bell, KeyRound, ListTree, RefreshCw, X
+  Clock, Zap, PowerOff, ArrowRight, Radio, Wifi, Bell, KeyRound, ListTree, RefreshCw, X,
+  Download, Upload, Package
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { WorkflowEditor } from './WorkflowEditor';
 import { confirmDelete } from '../lib/confirm';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
+import { notifySuccess } from '../lib/toast';
+import {
+  WORKFLOW_TEMPLATES,
+  createWorkflowFromTemplate,
+  exportWorkflowToJson,
+  importWorkflowFromJson,
+  type WorkflowTemplate,
+} from '../lib/workflowPortability';
 
 type WorkflowRunStep = {
   nodeId?: string;
@@ -38,7 +47,7 @@ type WorkflowRunLog = {
 };
 
 export function Workflows() {
-  const { language, workflows, updateWorkflow, deleteWorkflow } = useAppStore();
+  const { language, workflows, addWorkflow, updateWorkflow, deleteWorkflow } = useAppStore();
   const t = translations[language];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [logsWorkflowId, setLogsWorkflowId] = useState<string | null>(null);
@@ -46,6 +55,10 @@ export function Workflows() {
   const [selectedRunId, setSelectedRunId] = useState('');
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState('');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importError, setImportError] = useState('');
 
   const activeLogsWorkflow = workflows.find((workflow) => workflow.id === logsWorkflowId) || null;
   const selectedRun = useMemo(
@@ -135,6 +148,48 @@ export function Workflows() {
       default:
         return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300';
     }
+  };
+
+  const downloadWorkflow = (workflow: Workflow) => {
+    const json = exportWorkflowToJson(workflow);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${workflow.name.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase() || 'workflow'}_workflow.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    notifySuccess('Workflow exported successfully.');
+  };
+
+  const handleImportWorkflow = () => {
+    try {
+      const workflow = importWorkflowFromJson(importText, window.location.origin);
+      addWorkflow(workflow);
+      setShowImportModal(false);
+      setImportText('');
+      setImportError('');
+      notifySuccess('Workflow imported as disabled draft.');
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Failed to import workflow.');
+    }
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportText(await file.text());
+    setImportError('');
+    event.target.value = '';
+  };
+
+  const createFromTemplate = (template: WorkflowTemplate) => {
+    const workflow = createWorkflowFromTemplate(template, window.location.origin);
+    addWorkflow(workflow);
+    setShowTemplateModal(false);
+    notifySuccess('Workflow template added as draft.');
   };
 
   if (editingId) {
@@ -318,7 +373,23 @@ export function Workflows() {
             {t.workflows.desc}
           </p>
         </div>
-        <div className="mt-4 sm:mt-0">
+        <div className="mt-4 flex flex-wrap items-center gap-2 sm:mt-0">
+          <button
+            onClick={() => setShowTemplateModal(true)}
+            type="button"
+            className="inline-flex items-center gap-x-2 rounded-md border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <Package className="-ml-0.5 h-5 w-5 text-orange-500" aria-hidden="true" />
+            Template Library
+          </button>
+          <button
+            onClick={() => setShowImportModal(true)}
+            type="button"
+            className="inline-flex items-center gap-x-2 rounded-md border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <Upload className="-ml-0.5 h-5 w-5 text-slate-500" aria-hidden="true" />
+            Import JSON
+          </button>
           <button
             onClick={() => setEditingId('new')}
             type="button"
@@ -369,6 +440,13 @@ export function Workflows() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => downloadWorkflow(workflow)}
+                    className="p-1.5 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                    title="Export workflow"
+                  >
+                    <Download className="h-4 w-4" />
+                  </button>
                   <button 
                     onClick={() => updateWorkflow(workflow.id, { enabled: !workflow.enabled })}
                     className={cn(
@@ -449,6 +527,155 @@ export function Workflows() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-3xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div>
+                <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
+                  <Upload className="h-4 w-4 text-orange-500" />
+                  Import Workflow JSON
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Imported workflows are saved as disabled drafts with regenerated IDs and webhook endpoints.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImportModal(false);
+                  setImportText('');
+                  setImportError('');
+                }}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  JSON File
+                </span>
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={handleImportFile}
+                  className="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:file:bg-slate-800 dark:file:text-slate-200"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Paste Export JSON
+                </span>
+                <textarea
+                  value={importText}
+                  onChange={(event) => {
+                    setImportText(event.target.value);
+                    setImportError('');
+                  }}
+                  placeholder='{"kind":"ai-iot-dashboard.workflow","version":1,...}'
+                  className="h-72 w-full rounded-lg border border-slate-200 bg-slate-950 p-3 font-mono text-xs text-slate-100 outline-none focus:border-orange-500 dark:border-slate-700"
+                />
+              </label>
+
+              {importError && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+                  {importError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImportModal(false);
+                  setImportText('');
+                  setImportError('');
+                }}
+                className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleImportWorkflow}
+                disabled={!importText.trim()}
+                className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Upload className="h-4 w-4" />
+                Import as Draft
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTemplateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div>
+                <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
+                  <Package className="h-4 w-4 text-orange-500" />
+                  Workflow Template Library
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Start from a preset workflow, then bind real devices, channels, credentials, and actions before enabling it.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTemplateModal(false)}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid gap-4 overflow-y-auto p-5 md:grid-cols-2">
+              {WORKFLOW_TEMPLATES.map((template) => (
+                <div
+                  key={template.id}
+                  className="flex min-h-[180px] flex-col rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/40"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-900 dark:text-white">{template.name}</h4>
+                      <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{template.description}</p>
+                    </div>
+                    <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
+                      {template.workflow.nodes.length} nodes
+                    </span>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {template.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-full bg-orange-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-700 dark:bg-orange-500/10 dark:text-orange-300"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => createFromTemplate(template)}
+                    className="mt-auto inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Use Template
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
