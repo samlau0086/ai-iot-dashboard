@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Cable, Cpu, Droplets, Gauge, History, Image as ImageIcon, Move, Network, Pause, Play, RotateCcw, Save, Trash2, Wifi, Zap } from 'lucide-react';
+import { Activity, Cable, Cpu, Droplets, Gauge, History, Image as ImageIcon, Move, Network, Pause, Play, RotateCcw, Save, Wifi, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore, type ScadaElement, type ScadaElementType, type ScadaScene, type ScadaShapePreset, type ScadaShapePrimitive, type ScadaShapePrimitiveType, type ScadaShapeEndpoint } from '../lib/store';
 import { IOT_ICONS, getDeviceIcon } from '../lib/icons';
@@ -1513,6 +1513,8 @@ export function ScadaView() {
       animationActive && lineAnimation === 'pulse' && 'scada-line-pulse',
       animationActive && lineAnimation === 'glow' && 'scada-line-glow',
     );
+    const deleteButtonX = Math.min(CANVAS_WIDTH - 30, Math.max(6, endPoint.x + 16));
+    const deleteButtonY = Math.min(CANVAS_HEIGHT - 30, Math.max(6, endPoint.y - 34));
 
     return (
       <g key={element.id} onClick={(event) => { event.stopPropagation(); setSelectedElementId(element.id); }} className={cn(editMode && 'cursor-pointer')}>
@@ -1550,8 +1552,27 @@ export function ScadaView() {
                 </g>
               );
             })}
+            {renderElementDeleteButton(element, deleteButtonX, deleteButtonY)}
           </>
         )}
+      </g>
+    );
+  };
+
+  const renderElementDeleteButton = (element: ScadaElement, x: number, y: number) => {
+    if (!editMode || selectedElementId !== element.id) return null;
+
+    return (
+      <g
+        className="cursor-pointer"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          void removeElement(element.id);
+        }}
+      >
+        <rect x={x} y={y} width={28} height={28} rx={7} fill="rgba(15,23,42,0.92)" stroke="#ef4444" strokeWidth={1.5} />
+        <path d={`M ${x + 9} ${y + 11} L ${x + 19} ${y + 21} M ${x + 19} ${y + 11} L ${x + 9} ${y + 21}`} stroke="#f87171" strokeWidth={2} strokeLinecap="round" />
       </g>
     );
   };
@@ -2104,6 +2125,8 @@ export function ScadaView() {
     const valueLayout = { ...getDefaultValueLayout(element), ...(element.valueStyle || {}) };
     const metaLayout = { ...getDefaultMetaLayout(element), ...(element.metaStyle || {}) };
     const metaText = device ? `${device.name} / ${element.metricKey || '-'}` : 'Unbound';
+    const deleteButtonX = Math.min(CANVAS_WIDTH - 30, Math.max(6, element.x + width + 8));
+    const deleteButtonY = Math.min(CANVAS_HEIGHT - 30, Math.max(6, element.y - 34));
     const resizeHandle = editMode && isSelected && isResizableElement(element) ? (
       <g
         className="cursor-nwse-resize"
@@ -2121,6 +2144,7 @@ export function ScadaView() {
           <text x={element.x} y={element.y} fill="#e5e7eb" fontSize="24" fontWeight="700">{element.label}</text>
           {isSelected && <rect x={element.x - 8} y={element.y - 30} width={width} height={height} fill="none" stroke="#fb923c" strokeDasharray="5 5" />}
           {resizeHandle}
+          {renderElementDeleteButton(element, deleteButtonX, deleteButtonY)}
         </g>
       );
     }
@@ -2167,6 +2191,7 @@ export function ScadaView() {
             className={state === 'critical' ? 'scada-alarm-pulse' : undefined}
           />
           {resizeHandle}
+          {renderElementDeleteButton(element, deleteButtonX, deleteButtonY)}
         </g>
       );
     }
@@ -2199,6 +2224,7 @@ export function ScadaView() {
         {renderEditableText(element, 'value', formatMetricValue(value, element.unit), valueLayout, { fill: style.text, fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' })}
         {renderEditableText(element, 'meta', metaText, metaLayout, { fill: '#94a3b8' })}
         {resizeHandle}
+        {renderElementDeleteButton(element, deleteButtonX, deleteButtonY)}
       </g>
     );
   };
@@ -3060,9 +3086,6 @@ export function ScadaView() {
             <div className="mt-5 space-y-4 border-t border-slate-200 pt-4 dark:border-slate-800">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Element Settings</h3>
-                <button type="button" onClick={() => removeElement(selectedElement.id)} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
-                  <Trash2 className="h-4 w-4" />
-                </button>
               </div>
               <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
                 Label
