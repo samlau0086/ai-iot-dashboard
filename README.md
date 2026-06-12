@@ -138,7 +138,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Workflow template library / preset workflows.
 - [ ] Workflow template marketplace.
 - [x] Sub-workflow invocation with Run Workflow node, payload mapping, dry-run support, logs, and recursion protection.
-- [ ] Advanced cron editor.
+- [x] Advanced cron editor for Schedule Trigger with visual modes, generated cron, next-run preview, and validation.
 - [x] Node search and keyboard shortcuts.
 - [ ] Canvas mini map, grouping, comments, and collapse/expand.
 - [ ] Redis/BullMQ production execution queue for multi-instance deployments.
@@ -354,6 +354,8 @@ Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。
 工作流表达式支持函数 helper，可在通知消息、Webhook body、设备控制表达式、IF / CASE 条件、Set 节点等配置字段中使用。当前支持 `now()`、`formatDate(value, format)`、`toNumber(value)`、`round(value, decimals)`、`contains(value, keyword)`、`default(value, fallback)`、`upper(value)`、`lower(value)`；变量选择器中提供 **Function Helpers** 插入入口，预览区会显示解析结果、未解析变量和函数参数错误。
 
 工作流支持 **Run Workflow** 子工作流调用节点。父流程可以选择一个已发布工作流，或用表达式指定 `workflowId`，并通过 Payload JSON / Payload Expression 传入参数；子流程输出会写入父节点 output，可继续通过 `$.run_workflow.output.status`、`$.run_workflow.output.result`、`$.run_workflow.output.steps` 等引用。系统会记录父流程与子流程各自的 Logs，并内置递归检测与最大调用深度，避免工作流互相调用造成死循环。Dry Run 会以无外部副作用模式执行子流程。
+
+`Schedule` Trigger 支持可视化 Cron 编辑。可以选择 Every N minutes / hours、Daily、Weekly、Monthly 或 Custom cron，编辑器会自动生成 `crontab` 并显示未来 5 次运行时间；Validate 会检查 cron 字段是否合法，并在计划过于频繁时给出 warning。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 

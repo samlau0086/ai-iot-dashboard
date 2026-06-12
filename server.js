@@ -982,7 +982,55 @@ const cronFieldMatches = (field, value) => {
     const interval = Number(part.slice(2));
     return Number.isFinite(interval) && interval > 0 && value % interval === 0;
   }
+  if (part.includes('-')) {
+    const [start, end] = part.split('-').map(Number);
+    return Number.isInteger(start) && Number.isInteger(end) && start <= value && value <= end;
+  }
   return Number(part) === value;
+};
+
+const validateCronField = (field, min, max) => {
+  const part = String(field || '').trim();
+  if (!part) return false;
+  if (part === '*') return true;
+  if (part.includes(',')) return part.split(',').every((item) => validateCronField(item, min, max));
+  if (part.startsWith('*/')) {
+    const interval = Number(part.slice(2));
+    return Number.isInteger(interval) && interval >= 1 && interval <= Math.max(1, max - min + 1);
+  }
+  if (part.includes('-')) {
+    const [start, end] = part.split('-').map(Number);
+    return Number.isInteger(start) && Number.isInteger(end) && start >= min && end <= max && start <= end;
+  }
+  const value = Number(part);
+  return Number.isInteger(value) && value >= min && value <= max;
+};
+
+const validateCronExpression = (expression) => {
+  const parts = String(expression || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 5) return {valid: false, reason: 'Cron expression must have exactly 5 fields.'};
+  const ranges = [
+    [0, 59],
+    [0, 23],
+    [1, 31],
+    [1, 12],
+    [0, 7],
+  ];
+  const invalidIndex = parts.findIndex((part, index) => !validateCronField(part, ranges[index][0], ranges[index][1]));
+  if (invalidIndex >= 0) return {valid: false, reason: `Cron field ${invalidIndex + 1} is invalid.`};
+  return {valid: true, parts};
+};
+
+const estimateCronMatchesPerDay = (expression) => {
+  const validation = validateCronExpression(expression);
+  if (!validation.valid) return 0;
+  const base = new Date('2026-01-05T00:00:00.000Z');
+  let matches = 0;
+  for (let minute = 0; minute < 24 * 60; minute += 1) {
+    const date = new Date(base.getTime() + minute * 60000);
+    if (cronMatchesNow(expression, date)) matches += 1;
+  }
+  return matches;
 };
 
 const cronMatchesNow = (expression, date = new Date()) => {
@@ -993,7 +1041,7 @@ const cronMatchesNow = (expression, date = new Date()) => {
     && cronFieldMatches(hour, date.getHours())
     && cronFieldMatches(dayOfMonth, date.getDate())
     && cronFieldMatches(month, date.getMonth() + 1)
-    && cronFieldMatches(dayOfWeek, date.getDay());
+    && (cronFieldMatches(dayOfWeek, date.getDay()) || (date.getDay() === 0 && cronFieldMatches(dayOfWeek, 7)));
 };
 
 const parseConditionExpression = (expression) => {
@@ -3099,6 +3147,17 @@ const validateWorkflowDraft = async (workflow) => {
       }
       if (configType === 'webhook' && !config.endpoint) {
         issues.push(createWorkflowValidationIssue('error', 'webhook.endpoint_missing', 'Webhook trigger endpoint is missing.', node));
+      }
+      if (configType === 'schedule') {
+        const cronValidation = validateCronExpression(config.crontab || '* * * * *');
+        if (!cronValidation.valid) {
+          issues.push(createWorkflowValidationIssue('error', 'schedule.cron_invalid', cronValidation.reason, node));
+        } else {
+          const matchesPerDay = estimateCronMatchesPerDay(config.crontab || '* * * * *');
+          if (matchesPerDay > 288) {
+            issues.push(createWorkflowValidationIssue('warning', 'schedule.too_frequent', 'Schedule runs more than 288 times per day. Consider increasing the interval.', node));
+          }
+        }
       }
       if (['access', 'nfc_access'].includes(configType)) {
         if (!config.accessId) {

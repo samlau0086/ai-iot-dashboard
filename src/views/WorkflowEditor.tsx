@@ -297,6 +297,108 @@ const parseWorkflowFunctionCall = (expression: string) => {
   return { name: match[1], args: splitWorkflowFunctionArgs(match[2]) };
 };
 
+const weekDayOptions = [
+  { value: 1, label: 'Mon' },
+  { value: 2, label: 'Tue' },
+  { value: 3, label: 'Wed' },
+  { value: 4, label: 'Thu' },
+  { value: 5, label: 'Fri' },
+  { value: 6, label: 'Sat' },
+  { value: 0, label: 'Sun' },
+];
+
+const padTimePart = (value: number) => String(value).padStart(2, '0');
+
+const parseScheduleTime = (value = '08:00') => {
+  const [rawHour, rawMinute] = String(value || '08:00').split(':');
+  const hour = Math.max(0, Math.min(Number(rawHour) || 0, 23));
+  const minute = Math.max(0, Math.min(Number(rawMinute) || 0, 59));
+  return { hour, minute };
+};
+
+const buildCronFromScheduleConfig = (config: Record<string, any>) => {
+  const mode = config.scheduleMode || 'custom';
+  const everyValue = Math.max(1, Math.min(Number(config.everyValue || 1) || 1, 999));
+  const { hour, minute } = parseScheduleTime(config.time || '08:00');
+  if (mode === 'every') {
+    return config.everyUnit === 'hours'
+      ? `${minute} */${everyValue} * * *`
+      : `*/${Math.min(everyValue, 59)} * * * *`;
+  }
+  if (mode === 'daily') return `${minute} ${hour} * * *`;
+  if (mode === 'weekly') {
+    const weekdays = Array.isArray(config.weekdays) && config.weekdays.length > 0 ? config.weekdays : [1];
+    return `${minute} ${hour} * * ${weekdays.join(',')}`;
+  }
+  if (mode === 'monthly') {
+    const monthDay = Math.max(1, Math.min(Number(config.monthDay || 1) || 1, 31));
+    return `${minute} ${hour} ${monthDay} * *`;
+  }
+  return String(config.crontab || '0 * * * *');
+};
+
+const cronFieldMatchesEditor = (field: string, value: number) => {
+  const part = String(field || '*').trim();
+  if (part === '*') return true;
+  if (part.includes(',')) return part.split(',').some((item) => cronFieldMatchesEditor(item, value));
+  if (part.startsWith('*/')) {
+    const interval = Number(part.slice(2));
+    return Number.isInteger(interval) && interval > 0 && value % interval === 0;
+  }
+  if (part.includes('-')) {
+    const [start, end] = part.split('-').map(Number);
+    return Number.isInteger(start) && Number.isInteger(end) && start <= value && value <= end;
+  }
+  return Number(part) === value;
+};
+
+const validateCronExpressionEditor = (expression: string) => {
+  const parts = String(expression || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 5) return false;
+  const ranges: Array<[number, number]> = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+  const fieldIsValid = (field: string, min: number, max: number): boolean => {
+    const part = String(field || '').trim();
+    if (!part) return false;
+    if (part === '*') return true;
+    if (part.includes(',')) return part.split(',').every((item) => fieldIsValid(item, min, max));
+    if (part.startsWith('*/')) {
+      const interval = Number(part.slice(2));
+      return Number.isInteger(interval) && interval >= 1 && interval <= Math.max(1, max - min + 1);
+    }
+    if (part.includes('-')) {
+      const [start, end] = part.split('-').map(Number);
+      return Number.isInteger(start) && Number.isInteger(end) && start >= min && end <= max && start <= end;
+    }
+    const value = Number(part);
+    return Number.isInteger(value) && value >= min && value <= max;
+  };
+  return parts.every((part, index) => fieldIsValid(part, ranges[index][0], ranges[index][1]));
+};
+
+const cronMatchesDateEditor = (expression: string, date: Date) => {
+  if (!validateCronExpressionEditor(expression)) return false;
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = String(expression).trim().split(/\s+/);
+  return cronFieldMatchesEditor(minute, date.getMinutes())
+    && cronFieldMatchesEditor(hour, date.getHours())
+    && cronFieldMatchesEditor(dayOfMonth, date.getDate())
+    && cronFieldMatchesEditor(month, date.getMonth() + 1)
+    && (cronFieldMatchesEditor(dayOfWeek, date.getDay()) || (date.getDay() === 0 && cronFieldMatchesEditor(dayOfWeek, 7)));
+};
+
+const getNextCronRuns = (expression: string, count = 5) => {
+  if (!validateCronExpressionEditor(expression)) return [];
+  const runs: Date[] = [];
+  const cursor = new Date();
+  cursor.setSeconds(0, 0);
+  cursor.setMinutes(cursor.getMinutes() + 1);
+  const maxMinutes = 366 * 24 * 60;
+  for (let index = 0; index < maxMinutes && runs.length < count; index += 1) {
+    if (cronMatchesDateEditor(expression, cursor)) runs.push(new Date(cursor));
+    cursor.setMinutes(cursor.getMinutes() + 1);
+  }
+  return runs;
+};
+
 const resolveEditorReference = (
   reference: string,
   currentStep: WorkflowRunStep | null,
@@ -485,7 +587,7 @@ const defaultConfigs: Record<string, any> = {
   threshold: { device: '', metric: 'temperature', condition: '>', value: 10, duration: '5m', cooldown: '60s', dedupeKey: '$.input.event.deviceId' },
   offline: { device: '', duration: '10m', cooldown: '10m', dedupeKey: '$.input.event.deviceId' },
   alert: { device: '', severity: 'critical', cooldown: '5m', dedupeKey: '$.input.event.deviceId' },
-  schedule: { device: '', crontab: '0 * * * *', cooldown: '0s', dedupeKey: '' },
+  schedule: { device: '', scheduleMode: 'every', everyValue: 1, everyUnit: 'hours', time: '08:00', weekdays: [1], monthDay: 1, crontab: '0 */1 * * *', cooldown: '0s', dedupeKey: '' },
   ai: { device: '', anomalyType: 'all', cooldown: '5m', dedupeKey: '$.input.event.deviceId' },
   webhook: { device: '', endpoint: '/api/v1/webhook/', cooldown: '0s', dedupeKey: '' },
   access: { accessId: '', cooldown: '0s', dedupeKey: '$.input.event.credentialId' },
@@ -2370,6 +2472,160 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
                   <div className="space-y-4">
                     <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Configuration</label>
+                    {node.config.type === 'schedule' ? (() => {
+                      const scheduleMode = node.config.scheduleMode || 'custom';
+                      const currentCron = scheduleMode === 'custom' ? node.config.crontab || '0 * * * *' : buildCronFromScheduleConfig(node.config);
+                      const nextRuns = getNextCronRuns(currentCron, 5);
+                      const updateScheduleConfig = (patch: Record<string, any>) => {
+                        const nextConfig = { ...node.config, ...patch };
+                        const nextCron = nextConfig.scheduleMode === 'custom'
+                          ? nextConfig.crontab || node.config.crontab || '0 * * * *'
+                          : buildCronFromScheduleConfig(nextConfig);
+                        updateNodeConfig(node.id, { ...patch, crontab: nextCron });
+                      };
+                      const toggleWeekday = (day: number) => {
+                        const current = Array.isArray(node.config.weekdays) ? node.config.weekdays : [1];
+                        const next = current.includes(day)
+                          ? current.filter((item: number) => item !== day)
+                          : [...current, day].sort((a, b) => a - b);
+                        updateScheduleConfig({ weekdays: next.length > 0 ? next : [day] });
+                      };
+
+                      return (
+                        <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Schedule Mode</label>
+                            <select
+                              value={scheduleMode}
+                              onChange={(event) => updateScheduleConfig({ scheduleMode: event.target.value })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            >
+                              <option value="every">Every N minutes / hours</option>
+                              <option value="daily">Daily at time</option>
+                              <option value="weekly">Weekly on weekdays</option>
+                              <option value="monthly">Monthly on day</option>
+                              <option value="custom">Custom cron</option>
+                            </select>
+                          </div>
+
+                          {scheduleMode === 'every' && (
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Every</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={node.config.everyUnit === 'hours' ? 23 : 59}
+                                  value={node.config.everyValue || 1}
+                                  onChange={(event) => updateScheduleConfig({ everyValue: Number(event.target.value) })}
+                                  className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Unit</label>
+                                <select
+                                  value={node.config.everyUnit || 'hours'}
+                                  onChange={(event) => updateScheduleConfig({ everyUnit: event.target.value })}
+                                  className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                                >
+                                  <option value="minutes">Minutes</option>
+                                  <option value="hours">Hours</option>
+                                </select>
+                              </div>
+                            </div>
+                          )}
+
+                          {(['daily', 'weekly', 'monthly'].includes(scheduleMode) || (scheduleMode === 'every' && node.config.everyUnit === 'hours')) && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                                {scheduleMode === 'every' ? 'Run Minute' : 'Run Time'}
+                              </label>
+                              <input
+                                type="time"
+                                value={node.config.time || '08:00'}
+                                onChange={(event) => updateScheduleConfig({ time: event.target.value })}
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                            </div>
+                          )}
+
+                          {scheduleMode === 'weekly' && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Weekdays</label>
+                              <div className="flex flex-wrap gap-2">
+                                {weekDayOptions.map((day) => {
+                                  const selected = (Array.isArray(node.config.weekdays) ? node.config.weekdays : [1]).includes(day.value);
+                                  return (
+                                    <button
+                                      key={day.value}
+                                      type="button"
+                                      onClick={() => toggleWeekday(day.value)}
+                                      className={cn(
+                                        "rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors",
+                                        selected
+                                          ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-300"
+                                          : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
+                                      )}
+                                    >
+                                      {day.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {scheduleMode === 'monthly' && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Day of Month</label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={31}
+                                value={node.config.monthDay || 1}
+                                onChange={(event) => updateScheduleConfig({ monthDay: Number(event.target.value) })}
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                            </div>
+                          )}
+
+                          {scheduleMode === 'custom' && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Cron Expression</label>
+                              <input
+                                value={node.config.crontab || ''}
+                                onChange={(event) => updateScheduleConfig({ crontab: event.target.value })}
+                                placeholder="0 * * * *"
+                                className="block w-full rounded-md border-0 py-2 font-mono text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                            </div>
+                          )}
+
+                          <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Generated Cron</span>
+                              <code className="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-orange-700 dark:bg-slate-900 dark:text-orange-300">{currentCron}</code>
+                            </div>
+                            {validateCronExpressionEditor(currentCron) ? (
+                              <div className="mt-3 space-y-1">
+                                <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">Next 5 runs</p>
+                                {nextRuns.length > 0 ? nextRuns.map((run) => (
+                                  <div key={run.toISOString()} className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                                    {run.toLocaleString()}
+                                  </div>
+                                )) : (
+                                  <div className="text-xs text-amber-600 dark:text-amber-300">No run found within one year.</div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="mt-3 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+                                Invalid cron expression.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })() : null}
                     {node.config.type === 'device_control' ? (() => {
                       const deviceSource = node.config.deviceSource || 'static';
                       const selectedDevice = deviceSource === 'static'
@@ -2832,6 +3088,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       );
                     })() : null}
                     {Object.entries(node.config).map(([key, value]) => {
+                      if (node.config.type === 'schedule') return null;
                       if (node.config.type === 'device_control') return null;
                       if (node.config.type === 'run_workflow') return null;
                       if (key === 'type') return null;
