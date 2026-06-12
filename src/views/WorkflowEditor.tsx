@@ -822,6 +822,18 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     enabled: true,
     draftVersion: 0,
     publishedVersion: 0,
+    runAlerting: {
+      enabled: false,
+      notifyOnFailure: true,
+      consecutiveFailures: 3,
+      failureRatePercent: 50,
+      failureRateWindow: 10,
+      avgDurationMs: 0,
+      timeoutMs: 30000,
+      cooldownMinutes: 10,
+      notifySystem: true,
+      notifyChannels: false,
+    },
     nodes: []
   });
 
@@ -878,6 +890,19 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     }
     return null;
   }, [workflowLogs, selectedNodeId]);
+  const runAlerting = {
+    enabled: false,
+    notifyOnFailure: true,
+    consecutiveFailures: 3,
+    failureRatePercent: 50,
+    failureRateWindow: 10,
+    avgDurationMs: 0,
+    timeoutMs: 30000,
+    cooldownMinutes: 10,
+    notifySystem: true,
+    notifyChannels: false,
+    ...(draft.runAlerting || {}),
+  };
   const cloneWorkflowNode = (node: WorkflowNode): WorkflowNode => JSON.parse(JSON.stringify(node));
 
   const isTriggerOnly = showSelector.isTriggerSelect || (showSelector.insertIndex === 0 && triggerNodes.length === 0);
@@ -1456,6 +1481,16 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       n.id === nodeId ? { ...n, config: { ...n.config, ...patch } } : n
     );
     setDraft({ ...draft, nodes: newNodes });
+  };
+
+  const updateRunAlerting = (patch: Partial<NonNullable<Workflow['runAlerting']>>) => {
+    setDraft({
+      ...draft,
+      runAlerting: {
+        ...runAlerting,
+        ...patch,
+      },
+    });
   };
 
   const insertReferenceIntoConfig = (nodeId: string, key: string, reference: string) => {
@@ -2213,6 +2248,156 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               <Save className="h-4 w-4" />
               Publish Version
             </button>
+          </div>
+        </div>
+
+        <div className="border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-[#151922] sm:px-6">
+          <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className={cn("h-4 w-4", runAlerting.enabled ? "text-orange-500" : "text-slate-400")} />
+                  <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Run Alerting</h2>
+                  <span className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase",
+                    runAlerting.enabled
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+                      : "border-slate-200 bg-white text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
+                  )}>
+                    {runAlerting.enabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Notify operators when this workflow fails, runs too slowly, or crosses failure-rate thresholds.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={Boolean(runAlerting.enabled)}
+                  onChange={(event) => updateRunAlerting({ enabled: event.target.checked })}
+                  className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900"
+                />
+                Enable alerting
+              </label>
+            </div>
+
+            {runAlerting.enabled && (
+              <div className="mt-4 grid gap-3 xl:grid-cols-6">
+                <label className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <span className="flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(runAlerting.notifyOnFailure)}
+                      onChange={(event) => updateRunAlerting({ notifyOnFailure: event.target.checked })}
+                      className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900"
+                    />
+                    Any failure
+                  </span>
+                  <span className="mt-2 block">Alert when a run status is failed.</span>
+                </label>
+
+                <label className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <span className="block font-semibold uppercase tracking-wider">Consecutive failures</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={runAlerting.consecutiveFailures || 0}
+                    onChange={(event) => updateRunAlerting({ consecutiveFailures: Number(event.target.value || 0) })}
+                    className="mt-2 h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <span className="mt-1 block">0 disables this rule.</span>
+                </label>
+
+                <label className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <span className="block font-semibold uppercase tracking-wider">Failure rate %</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={runAlerting.failureRatePercent || 0}
+                    onChange={(event) => updateRunAlerting({ failureRatePercent: Number(event.target.value || 0) })}
+                    className="mt-2 h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <span className="mt-1 block">Measured over recent runs.</span>
+                </label>
+
+                <label className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <span className="block font-semibold uppercase tracking-wider">Rate window</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={runAlerting.failureRateWindow || 10}
+                    onChange={(event) => updateRunAlerting({ failureRateWindow: Number(event.target.value || 10) })}
+                    className="mt-2 h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <span className="mt-1 block">Recent run count.</span>
+                </label>
+
+                <label className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <span className="block font-semibold uppercase tracking-wider">Avg duration ms</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={runAlerting.avgDurationMs || 0}
+                    onChange={(event) => updateRunAlerting({ avgDurationMs: Number(event.target.value || 0) })}
+                    className="mt-2 h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <span className="mt-1 block">0 disables average duration.</span>
+                </label>
+
+                <label className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <span className="block font-semibold uppercase tracking-wider">Timeout ms</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={runAlerting.timeoutMs || 0}
+                    onChange={(event) => updateRunAlerting({ timeoutMs: Number(event.target.value || 0) })}
+                    className="mt-2 h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <span className="mt-1 block">Alert when one run exceeds this.</span>
+                </label>
+
+                <label className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <span className="block font-semibold uppercase tracking-wider">Cooldown minutes</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={runAlerting.cooldownMinutes || 0}
+                    onChange={(event) => updateRunAlerting({ cooldownMinutes: Number(event.target.value || 0) })}
+                    className="mt-2 h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                  <span className="mt-1 block">Avoid repeated alerts.</span>
+                </label>
+
+                <label className="flex min-h-[92px] items-start gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <input
+                    type="checkbox"
+                    checked={runAlerting.notifySystem !== false}
+                    onChange={(event) => updateRunAlerting({ notifySystem: event.target.checked })}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900"
+                  />
+                  <span>
+                    <span className="block font-semibold text-slate-700 dark:text-slate-200">System notification</span>
+                    <span className="mt-2 block">Show in the top-right notification list.</span>
+                  </span>
+                </label>
+
+                <label className="flex min-h-[92px] items-start gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(runAlerting.notifyChannels)}
+                    onChange={(event) => updateRunAlerting({ notifyChannels: event.target.checked })}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900"
+                  />
+                  <span>
+                    <span className="block font-semibold text-slate-700 dark:text-slate-200">Notification channels</span>
+                    <span className="mt-2 block">Send to enabled Bark/Webhook channels.</span>
+                  </span>
+                </label>
+              </div>
+            )}
           </div>
         </div>
 

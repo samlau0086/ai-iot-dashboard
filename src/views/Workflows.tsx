@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAppStore, type Workflow, type WorkflowNode } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
@@ -52,6 +53,7 @@ type WorkflowRunLog = {
 export function Workflows() {
   const { language, workflows, addWorkflow, updateWorkflow, deleteWorkflow } = useAppStore();
   const t = translations[language];
+  const [searchParams, setSearchParams] = useSearchParams();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [logsWorkflowId, setLogsWorkflowId] = useState<string | null>(null);
   const [workflowLogs, setWorkflowLogs] = useState<WorkflowRunLog[]>([]);
@@ -178,6 +180,13 @@ export function Workflows() {
   useEffect(() => {
     loadWorkflowRunMetrics();
   }, []);
+
+  useEffect(() => {
+    const workflowId = searchParams.get('workflowId');
+    if (!workflowId || !workflows.some((workflow) => workflow.id === workflowId)) return;
+    openLogs(workflowId, searchParams.get('runId') || '', 'all');
+    setSearchParams({}, {replace: true});
+  }, [searchParams, workflows, setSearchParams]);
 
   useEffect(() => {
     if (!selectedRun && filteredWorkflowLogs.length > 0) {

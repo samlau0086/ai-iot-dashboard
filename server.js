@@ -23,6 +23,7 @@ const telemetryMessages = [];
 const workflowRuns = [];
 const workflowLiveStates = new Map();
 const workflowTriggerLastRuns = new Map();
+const workflowAlertLastSent = new Map();
 const deviceControlCommands = [];
 const accessEvents = [];
 const systemNotifications = [];
@@ -1179,30 +1180,36 @@ const sanitizeWorkflowLogValue = (value, options = {}) => {
   return sanitize(value, 0);
 };
 
-const persistWorkflowRun = async (run) => {
+const persistWorkflowRun = async (run, workflowForAlert = null) => {
   const safeRun = sanitizeWorkflowLogValue(run);
   workflowRuns.unshift(safeRun);
   if (workflowRuns.length > maxWorkflowRuns) workflowRuns.splice(maxWorkflowRuns);
 
-  if (!db) return;
+  if (db) {
+    await queryDb(
+      `INSERT INTO workflow_runs (id, workflow_id, workflow_name, workflow_version, trigger_type, event_source, status, event, steps, started_at, finished_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::timestamptz, $11::timestamptz)`,
+      [
+        safeRun.id,
+        safeRun.workflowId,
+        safeRun.workflowName,
+        Number(safeRun.workflowVersion || 1),
+        safeRun.triggerType,
+        safeRun.eventSource,
+        safeRun.status,
+        JSON.stringify(safeRun.event),
+        JSON.stringify(safeRun.steps),
+        safeRun.startedAt,
+        safeRun.finishedAt,
+      ]
+    );
+  }
 
-  await queryDb(
-    `INSERT INTO workflow_runs (id, workflow_id, workflow_name, workflow_version, trigger_type, event_source, status, event, steps, started_at, finished_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::timestamptz, $11::timestamptz)`,
-    [
-      safeRun.id,
-      safeRun.workflowId,
-      safeRun.workflowName,
-      Number(safeRun.workflowVersion || 1),
-      safeRun.triggerType,
-      safeRun.eventSource,
-      safeRun.status,
-      JSON.stringify(safeRun.event),
-      JSON.stringify(safeRun.steps),
-      safeRun.startedAt,
-      safeRun.finishedAt,
-    ]
-  );
+  if (workflowForAlert) {
+    await evaluateWorkflowRunAlert(workflowForAlert, safeRun).catch((error) => {
+      console.error('Workflow run alert evaluation failed', error);
+    });
+  }
 };
 
 const updateWorkflowLiveState = (workflow, patch) => {
@@ -1553,6 +1560,7 @@ const sendNotificationToChannel = async (channel, notification) => {
 const persistSystemNotification = async (notification) => {
   const current = await getSystemNotifications();
   const nextNotification = {
+    ...notification,
     id: notification.id || createId('sys-notice'),
     title: notification.title || 'System Notification',
     message: notification.message || '',
@@ -1587,6 +1595,152 @@ const dispatchWorkflowNotification = async (workflow, config, event) => {
     }
   }
   return {notification, channels: results};
+};
+
+const getWorkflowRunDurationMs = (run) => {
+  const started = new Date(run?.startedAt || run?.started_at || '').getTime();
+  const finished = new Date(run?.finishedAt || run?.finished_at || '').getTime();
+  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return 0;
+  return finished - started;
+};
+
+const loadRecentWorkflowRuns = async (workflowId, limit = 20) => {
+  if (db) {
+    const result = await queryDb(
+      `SELECT id, workflow_id AS "workflowId", workflow_name AS "workflowName", workflow_version AS "workflowVersion", trigger_type AS "triggerType",
+              event_source AS "eventSource", status, event, steps, started_at AS "startedAt", finished_at AS "finishedAt"
+       FROM workflow_runs
+       WHERE workflow_id = $1
+       ORDER BY started_at DESC
+       LIMIT $2`,
+      [workflowId, limit]
+    );
+    return result.rows || [];
+  }
+
+  return workflowRuns
+    .filter((run) => run.workflowId === workflowId)
+    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+    .slice(0, limit);
+};
+
+const summarizeWorkflowRunError = (run) => {
+  const failedStep = (Array.isArray(run?.steps) ? run.steps : []).find((step) => step.status === 'failed') || null;
+  const rawError = failedStep?.error ?? failedStep?.output ?? run?.status;
+  const errorText = typeof rawError === 'string' ? rawError : JSON.stringify(sanitizeWorkflowLogValue(rawError, {maxDepth: 3, maxStringLength: 500}));
+  return {
+    failedNodeName: failedStep?.nodeName || failedStep?.nodeId || '',
+    failedNodeType: failedStep?.type || '',
+    errorText: String(errorText || '').slice(0, 500),
+  };
+};
+
+const dispatchWorkflowRunAlert = async (workflow, run, policy, reasons, metrics) => {
+  const errorSummary = summarizeWorkflowRunError(run);
+  const title = `Workflow alert: ${workflow.name}`;
+  const messageParts = [
+    reasons.join('; '),
+    `Run ${run.id}`,
+    `Status ${run.status}`,
+    errorSummary.failedNodeName ? `Failed node ${errorSummary.failedNodeName}` : '',
+    errorSummary.errorText ? `Error ${errorSummary.errorText}` : '',
+  ].filter(Boolean);
+  const notificationPayload = {
+    title,
+    message: messageParts.join(' | '),
+    level: run.status === 'failed' ? 'Critical' : 'Warning',
+    source: `workflow-alert:${workflow.id}`,
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    runId: run.id,
+    reasons,
+    metrics,
+    failedNodeName: errorSummary.failedNodeName,
+    createdAt: new Date().toISOString(),
+  };
+
+  const notification = policy.notifySystem === false
+    ? notificationPayload
+    : await persistSystemNotification(notificationPayload);
+
+  const channelResults = [];
+  if (policy.notifyChannels) {
+    const state = await getDashboardState();
+    const channels = Array.isArray(state.notificationChannels) ? state.notificationChannels : [];
+    for (const channel of channels.filter((item) => item.enabled)) {
+      try {
+        channelResults.push({channelId: channel.id, channelName: channel.name, ...(await sendNotificationToChannel(channel, notification))});
+      } catch (error) {
+        channelResults.push({channelId: channel.id, channelName: channel.name, ok: false, message: error.message});
+      }
+    }
+  }
+
+  return {notification, channels: channelResults};
+};
+
+const evaluateWorkflowRunAlert = async (workflow, run) => {
+  const policy = workflow?.runAlerting || {};
+  if (!policy.enabled) return null;
+
+  const windowSize = Math.max(1, Math.min(100, Number(policy.failureRateWindow || 10)));
+  const recentLimit = Math.max(windowSize, Number(policy.consecutiveFailures || 1), 10);
+  const recentRuns = await loadRecentWorkflowRuns(workflow.id, recentLimit);
+  const orderedRuns = recentRuns.length > 0 ? recentRuns : [run];
+  const reasons = [];
+
+  if (policy.notifyOnFailure && run.status === 'failed') {
+    reasons.push('current run failed');
+  }
+
+  const consecutiveThreshold = Number(policy.consecutiveFailures || 0);
+  let normalizedConsecutiveFailures = 0;
+  for (const item of orderedRuns) {
+    if (item.status !== 'failed') break;
+    normalizedConsecutiveFailures += 1;
+  }
+  if (consecutiveThreshold > 0 && normalizedConsecutiveFailures >= consecutiveThreshold) {
+    reasons.push(`consecutive failures ${normalizedConsecutiveFailures}/${consecutiveThreshold}`);
+  }
+
+  const failureRateThreshold = Number(policy.failureRatePercent || 0);
+  const rateRuns = orderedRuns.slice(0, windowSize);
+  const failureRate = rateRuns.length > 0
+    ? Math.round((rateRuns.filter((item) => item.status === 'failed').length / rateRuns.length) * 100)
+    : 0;
+  if (failureRateThreshold > 0 && rateRuns.length >= Math.min(windowSize, 2) && failureRate >= failureRateThreshold) {
+    reasons.push(`failure rate ${failureRate}% over last ${rateRuns.length} runs`);
+  }
+
+  const avgDurationMs = rateRuns.length > 0
+    ? rateRuns.reduce((sum, item) => sum + getWorkflowRunDurationMs(item), 0) / rateRuns.length
+    : getWorkflowRunDurationMs(run);
+  const avgDurationThreshold = Number(policy.avgDurationMs || 0);
+  if (avgDurationThreshold > 0 && avgDurationMs >= avgDurationThreshold) {
+    reasons.push(`average duration ${Math.round(avgDurationMs)}ms >= ${avgDurationThreshold}ms`);
+  }
+
+  const runDurationMs = getWorkflowRunDurationMs(run);
+  const timeoutThreshold = Number(policy.timeoutMs || 0);
+  if (timeoutThreshold > 0 && runDurationMs >= timeoutThreshold) {
+    reasons.push(`run duration ${runDurationMs}ms >= ${timeoutThreshold}ms`);
+  }
+
+  if (reasons.length === 0) return null;
+
+  const cooldownMs = Math.max(0, Number(policy.cooldownMinutes || 0)) * 60 * 1000;
+  const cooldownKey = `${workflow.id}:${reasons.join('|')}`;
+  const lastSent = workflowAlertLastSent.get(cooldownKey) || 0;
+  if (cooldownMs > 0 && Date.now() - lastSent < cooldownMs) return null;
+  workflowAlertLastSent.set(cooldownKey, Date.now());
+
+  return dispatchWorkflowRunAlert(workflow, run, policy, reasons, {
+    consecutiveFailures: normalizedConsecutiveFailures,
+    failureRate,
+    windowSize: rateRuns.length,
+    avgDurationMs: Math.round(avgDurationMs),
+    runDurationMs,
+  });
 };
 
 const normalizeWorkflowNodeName = (node, fallback = 'node') => String(node?.name || node?.config?.name || node?.config?.type || fallback)
@@ -2431,7 +2585,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt, opt
     };
     if (!dryRun) {
       completeWorkflowLiveState(workflow, status, steps);
-      await persistWorkflowRun(run);
+      await persistWorkflowRun(run, workflow);
     }
     return sanitizeWorkflowLogValue(run);
   };
@@ -2731,7 +2885,7 @@ const executeWorkflow = async (workflow, trigger, event, options = {}) => {
             steps,
             startedAt,
             finishedAt,
-          });
+          }, workflow);
           return;
         }
 
@@ -2772,7 +2926,7 @@ const executeWorkflow = async (workflow, trigger, event, options = {}) => {
             steps,
             startedAt,
             finishedAt,
-          });
+          }, workflow);
           return;
         }
         nodeIndex++;
@@ -2830,7 +2984,7 @@ const executeWorkflow = async (workflow, trigger, event, options = {}) => {
       steps,
       startedAt,
       finishedAt,
-    });
+    }, workflow);
     return;
   }
 
@@ -2870,7 +3024,7 @@ const executeWorkflow = async (workflow, trigger, event, options = {}) => {
         steps,
         startedAt,
         finishedAt,
-      });
+      }, workflow);
       return;
     }
   }
@@ -2920,7 +3074,7 @@ const executeWorkflow = async (workflow, trigger, event, options = {}) => {
     steps,
     startedAt,
     finishedAt,
-  });
+  }, workflow);
 };
 
 const testWorkflowNode = async ({workflow, nodeId, event = {}, context = {}}) => {
@@ -3083,6 +3237,19 @@ const validateWorkflowDraft = async (workflow) => {
 
   if (!workflow.name || !String(workflow.name).trim()) {
     issues.push(createWorkflowValidationIssue('error', 'workflow.name_missing', 'Workflow name is required.'));
+  }
+
+  const alertPolicy = workflow.runAlerting || {};
+  if (alertPolicy.enabled) {
+    if (alertPolicy.notifySystem === false && !alertPolicy.notifyChannels) {
+      issues.push(createWorkflowValidationIssue('warning', 'workflow_alert.no_target', 'Run Alerting is enabled but no notification target is selected.'));
+    }
+    if (alertPolicy.notifyChannels && notificationChannels.filter((channel) => channel.enabled).length === 0) {
+      issues.push(createWorkflowValidationIssue('warning', 'workflow_alert.no_channels', 'Run Alerting is configured to send channels, but no notification channel is enabled.'));
+    }
+    if (!alertPolicy.notifyOnFailure && !Number(alertPolicy.consecutiveFailures || 0) && !Number(alertPolicy.failureRatePercent || 0) && !Number(alertPolicy.avgDurationMs || 0) && !Number(alertPolicy.timeoutMs || 0)) {
+      issues.push(createWorkflowValidationIssue('warning', 'workflow_alert.no_rules', 'Run Alerting is enabled but no alert rule is active.'));
+    }
   }
 
   const validateExpressionText = (text, node, fieldPath) => {

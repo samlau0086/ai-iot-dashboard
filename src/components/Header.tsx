@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bell, BrainCircuit, CheckCircle2, Languages, Moon, Search, Sun } from 'lucide-react';
+import { Bell, BrainCircuit, CheckCircle2, GitMerge, Languages, Moon, Search, Sun } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 export function Header() {
+  const navigate = useNavigate();
   const { language, setLanguage, theme, toggleTheme, devices: storedDevices, currentUser, sites, activeSiteId, setActiveSite } = useAppStore();
   const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
@@ -13,7 +15,7 @@ export function Header() {
   const [readNotificationKeys, setReadNotificationKeys] = useState<string[]>([]);
   const [notificationReadStateReady, setNotificationReadStateReady] = useState(false);
   const [systemNotificationsReady, setSystemNotificationsReady] = useState(false);
-  const [systemNotifications, setSystemNotifications] = useState<Array<{ id: string; title: string; message: string; level: string; createdAt: string }>>([]);
+  const [systemNotifications, setSystemNotifications] = useState<Array<{ id: string; title: string; message: string; level: string; createdAt: string; workflowId?: string; runId?: string }>>([]);
   const alerts = useMemo(() => deriveAlertsFromDevices(devices), [devices]);
   const notifications = useMemo(() => [
     ...systemNotifications.map((notification) => ({
@@ -23,6 +25,8 @@ export function Header() {
       level: notification.level || 'Info',
       timestamp: notification.createdAt,
       source: 'workflow',
+      workflowId: notification.workflowId,
+      runId: notification.runId,
     })),
     ...alerts.map((alert) => ({
       id: alert.id,
@@ -31,6 +35,8 @@ export function Header() {
       level: alert.level,
       timestamp: alert.timestamp,
       source: 'telemetry',
+      workflowId: '',
+      runId: '',
     })),
   ].sort((first, second) => new Date(second.timestamp).getTime() - new Date(first.timestamp).getTime()), [alerts, systemNotifications]);
   const notificationStorageKey = `ai-iot-dashboard-read-notifications:${currentUser?.id || 'guest'}`;
@@ -68,6 +74,14 @@ export function Header() {
       persistReadNotificationKeys(nextKeys);
       return nextKeys;
     });
+  };
+  const openWorkflowNotification = (notification: typeof notifications[number]) => {
+    if (!notification.workflowId) return;
+    markNotificationRead(notification);
+    setShowNotifications(false);
+    const query = new URLSearchParams({workflowId: notification.workflowId});
+    if (notification.runId) query.set('runId', notification.runId);
+    navigate(`/workflows?${query.toString()}`);
   };
 
   useEffect(() => {
@@ -258,6 +272,16 @@ export function Header() {
                             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                               {notification.level}
                             </span>
+                            {notification.workflowId && (
+                              <button
+                                type="button"
+                                onClick={() => openWorkflowNotification(notification)}
+                                className="inline-flex items-center gap-1 rounded-md border border-orange-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-600 hover:bg-orange-50 dark:border-orange-500/30 dark:text-orange-300 dark:hover:bg-orange-500/10"
+                              >
+                                <GitMerge className="h-3 w-3" />
+                                Open Logs
+                              </button>
+                            )}
                             <p className="font-mono text-[10px] text-slate-400">
                               {new Date(notification.timestamp).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'})}
                             </p>

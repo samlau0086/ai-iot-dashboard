@@ -770,6 +770,18 @@ export interface Workflow {
   enabled: boolean;
   nodes: WorkflowNode[];
   edges?: WorkflowEdge[];
+  runAlerting?: {
+    enabled?: boolean;
+    notifyOnFailure?: boolean;
+    consecutiveFailures?: number;
+    failureRatePercent?: number;
+    failureRateWindow?: number;
+    avgDurationMs?: number;
+    timeoutMs?: number;
+    cooldownMinutes?: number;
+    notifySystem?: boolean;
+    notifyChannels?: boolean;
+  };
   draftVersion?: number;
   publishedVersion?: number;
   publishedAt?: string;

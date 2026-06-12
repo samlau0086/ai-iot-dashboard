@@ -144,6 +144,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [ ] Redis/BullMQ production execution queue for multi-instance deployments.
 - [x] Workflow run metrics: total runs, success rate, failure count, average duration, last run, and per-workflow summaries.
 - [x] Workflow run detail diagnostics: click metrics into logs, status filters, node duration, failed-node highlight, and copy input/output/error.
+- [x] Workflow run alerting: per-workflow failure, consecutive failure, failure-rate, slow-run, timeout, cooldown, and notification-channel policies.
 
 目标：建设工业版 Zapier / n8n，用规则自动响应设备和运营事件。
 
@@ -359,6 +360,8 @@ Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。
 `Schedule` Trigger 支持可视化 Cron 编辑。可以选择 Every N minutes / hours、Daily、Weekly、Monthly 或 Custom cron，编辑器会自动生成 `crontab` 并显示未来 5 次运行时间；Validate 会检查 cron 字段是否合法，并在计划过于频繁时给出 warning。
 
 Workflows 列表支持运行指标总览，会基于最近 workflow run logs 计算 Total Runs、Success Rate、Failed Runs、Avg Duration 和 Last Run；每个 workflow 卡片会显示最近运行状态、失败数、成功率和平均耗时，Logs 窗口也会显示当前 workflow 的运行摘要。点击 Failed Runs / Last Run 可直接打开对应 workflow 的 Logs 并定位到运行记录；Logs 支持 All / Success / Failed / Running 筛选，节点详情会显示执行耗时、失败节点高亮，并可复制 Trigger Event、Input、Output 或 Error。
+
+Workflow 编辑页支持 **Run Alerting**。可为单个 workflow 启用运行异常告警，并配置任一运行失败、连续失败次数、最近 N 次失败率、平均运行耗时、单次运行超时和冷却时间。告警可写入右上角系统 Notifications，也可推送到已启用的 Notification Channels；告警内容会带上 workflow、run ID、状态、失败节点和错误摘要，方便直接回到 Logs 定位。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 
