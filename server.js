@@ -2142,7 +2142,8 @@ const shouldStopWorkflowAfterAction = (action, step) => (
   step?.status === 'failed' && getNodeExecutionPolicy(action).onFailure !== 'continue'
 );
 
-const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => {
+const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt, options = {}) => {
+  const dryRun = Boolean(options.dryRun);
   const nodesById = new Map((workflow.nodes || []).map((node) => [node.id, node]));
   const nodeNamesById = buildWorkflowNodeNameMap(workflow);
   const outgoingEdges = new Map();
@@ -2159,8 +2160,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
 
   const persistResult = async (status) => {
     const finishedAt = new Date().toISOString();
-    completeWorkflowLiveState(workflow, status, steps);
-    await persistWorkflowRun({
+    const run = {
       id: createId('wfr'),
       workflowId: workflow.id,
       workflowName: workflow.name,
@@ -2172,7 +2172,13 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
       steps,
       startedAt,
       finishedAt,
-    });
+      dryRun,
+    };
+    if (!dryRun) {
+      completeWorkflowLiveState(workflow, status, steps);
+      await persistWorkflowRun(run);
+    }
+    return sanitizeWorkflowLogValue(run);
   };
 
   while (currentNode && guard < 200) {
@@ -2188,15 +2194,14 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
         finishedAt: new Date().toISOString(),
       };
       steps.push(step);
-      appendWorkflowLiveStep(workflow, step);
-      await persistResult('failed');
-      return;
+      if (!dryRun) appendWorkflowLiveStep(workflow, step);
+      return persistResult('failed');
     }
     visited.add(currentNode.id);
 
     const outgoing = outgoingEdges.get(currentNode.id) || [];
     const nodeName = nodeNamesById.get(currentNode.id) || normalizeWorkflowNodeName(currentNode, currentNode.id);
-    updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: currentNode.id});
+    if (!dryRun) updateWorkflowLiveState(workflow, {status: 'running', currentNodeId: currentNode.id});
 
     if (currentNode.type === 'trigger') {
       const input = createWorkflowNodeInput(currentNode, event, context, nodeName);
@@ -2213,7 +2218,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
       };
       steps.push(step);
       recordWorkflowNodeResult(context, nodeName, step);
-      appendWorkflowLiveStep(workflow, step);
+      if (!dryRun) appendWorkflowLiveStep(workflow, step);
       const nextEdge = outgoing.find((edge) => edge.type === 'next') || outgoing[0];
       currentNode = nodesById.get(nextEdge?.target);
       continue;
@@ -2238,15 +2243,14 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
       };
       steps.push(step);
       recordWorkflowNodeResult(context, nodeName, step);
-      appendWorkflowLiveStep(workflow, step);
+      if (!dryRun) appendWorkflowLiveStep(workflow, step);
 
       const nextEdge = passed
         ? outgoing.find((edge) => edge.type === 'true' || edge.type === 'next')
         : outgoing.find((edge) => edge.type === 'false');
 
       if (!nextEdge && !passed) {
-        await persistResult('skipped');
-        return;
+        return persistResult('skipped');
       }
 
       currentNode = nodesById.get(nextEdge?.target);
@@ -2255,17 +2259,15 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
 
     if (currentNode.type === 'action') {
       try {
-        const step = await executeWorkflowActionWithPolicy(workflow, currentNode, event, context, nodeName);
+        const step = await executeWorkflowActionWithPolicy(workflow, currentNode, event, context, nodeName, options);
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
-        appendWorkflowLiveStep(workflow, step);
+        if (!dryRun) appendWorkflowLiveStep(workflow, step);
         if (step.status === 'stopped') {
-          await persistResult('stopped');
-          return;
+          return persistResult('stopped');
         }
         if (shouldStopWorkflowAfterAction(currentNode, step)) {
-          await persistResult('failed');
-          return;
+          return persistResult('failed');
         }
       } catch (error) {
         const input = createWorkflowNodeInput(currentNode, event, context, nodeName);
@@ -2281,10 +2283,9 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
         };
         steps.push(step);
         recordWorkflowNodeResult(context, nodeName, step);
-        appendWorkflowLiveStep(workflow, step);
+        if (!dryRun) appendWorkflowLiveStep(workflow, step);
         if (shouldStopWorkflowAfterAction(currentNode, step)) {
-          await persistResult('failed');
-          return;
+          return persistResult('failed');
         }
       }
 
@@ -2307,17 +2308,16 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
       finishedAt: new Date().toISOString(),
     };
     steps.push(step);
-    appendWorkflowLiveStep(workflow, step);
-    await persistResult('failed');
-    return;
+    if (!dryRun) appendWorkflowLiveStep(workflow, step);
+    return persistResult('failed');
   }
 
-  await persistResult(steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success');
+  return persistResult(steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success');
 };
 
-const executeWorkflow = async (workflow, trigger, event) => {
+const executeWorkflow = async (workflow, trigger, event, options = {}) => {
   const startedAt = new Date().toISOString();
-  updateWorkflowLiveState(workflow, {
+  if (!options.dryRun) updateWorkflowLiveState(workflow, {
     runId: createId('live'),
     workflowId: workflow.id,
     workflowName: workflow.name,
@@ -2328,8 +2328,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
     finishedAt: undefined,
   });
   if (Array.isArray(workflow.edges) && workflow.edges.length > 0) {
-    await executeWorkflowWithEdges(workflow, trigger, event, startedAt);
-    return;
+    return executeWorkflowWithEdges(workflow, trigger, event, startedAt, options);
   }
 
   const branchTypes = new Set(['if', 'elif', 'else', 'switch', 'case', 'default']);
@@ -2734,6 +2733,57 @@ const testWorkflowNode = async ({workflow, nodeId, event = {}, context = {}}) =>
   }
 
   return executeWorkflowActionWithPolicy(workflow, node, testEvent, context, nodeName, {dryRun: true});
+};
+
+const createWorkflowDryRunEvent = (trigger, event = {}) => {
+  const triggerType = trigger?.config?.type || 'test';
+  const defaultEventType = ['threshold', 'offline', 'alert', 'mqtt_message'].includes(triggerType)
+    ? 'telemetry'
+    : ['access', 'nfc_access'].includes(triggerType)
+      ? 'access'
+      : triggerType === 'webhook'
+        ? 'webhook'
+        : triggerType === 'schedule'
+          ? 'schedule'
+          : triggerType;
+  const defaultSource = triggerType === 'mqtt_message'
+    ? 'mqtt:dry-run'
+    : triggerType === 'nfc_access'
+      ? 'nfc'
+      : triggerType === 'access'
+        ? 'qr'
+        : 'workflow-dry-run';
+  return {
+    type: event.type || defaultEventType,
+    source: event.source || defaultSource,
+    message: {},
+    receivedAt: new Date().toISOString(),
+    ...event,
+  };
+};
+
+const dryRunWorkflow = async ({workflow, triggerId, event = {}}) => {
+  if (!workflow || !Array.isArray(workflow.nodes)) {
+    throw new Error('Workflow draft is required.');
+  }
+  const triggers = workflow.nodes.filter((node) => node.type === 'trigger');
+  if (triggers.length === 0) throw new Error('Workflow requires at least one trigger for dry run.');
+
+  const selectedTrigger = triggerId
+    ? triggers.find((node) => node.id === triggerId)
+    : triggers.find((node) => triggerMatchesEvent(node, event)) || triggers[0];
+  if (!selectedTrigger) throw new Error('Selected trigger was not found.');
+
+  const testEvent = createWorkflowDryRunEvent(selectedTrigger, event);
+  const workflowForRun = {
+    ...workflow,
+    enabled: false,
+    runningVersion: workflow.draftVersion || workflow.publishedVersion || 1,
+  };
+
+  const run = await executeWorkflowWithEdges(workflowForRun, selectedTrigger, testEvent, new Date().toISOString(), {dryRun: true});
+  if (!run) throw new Error('Dry run did not return an execution log. Save or rebuild workflow edges and try again.');
+  return run;
 };
 
 const dispatchWorkflowEvent = async (event) => {
@@ -4096,6 +4146,19 @@ app.post('/api/workflows/test-node', async (req, res) => {
       context: req.body?.context || {},
     });
     res.status(200).json({ok: true, step: sanitizeWorkflowLogValue(step)});
+  } catch (error) {
+    res.status(400).json({ok: false, error: error.message});
+  }
+});
+
+app.post('/api/workflows/dry-run', async (req, res) => {
+  try {
+    const run = await dryRunWorkflow({
+      workflow: req.body?.workflow,
+      triggerId: req.body?.triggerId,
+      event: req.body?.event || {},
+    });
+    res.status(200).json({ok: true, run});
   } catch (error) {
     res.status(400).json({ok: false, error: error.message});
   }

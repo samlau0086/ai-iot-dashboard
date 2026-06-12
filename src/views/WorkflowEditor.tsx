@@ -42,6 +42,7 @@ type WorkflowRunLog = {
   steps: WorkflowRunStep[];
   startedAt: string;
   finishedAt: string;
+  dryRun?: boolean;
 };
 
 const formatJsonValue = (value: unknown) => {
@@ -568,6 +569,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const [selectedRunId, setSelectedRunId] = useState('');
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState('');
+  const [showDryRun, setShowDryRun] = useState(false);
+  const [dryRunLoading, setDryRunLoading] = useState(false);
+  const [dryRunError, setDryRunError] = useState('');
+  const [dryRunTriggerId, setDryRunTriggerId] = useState('');
+  const [dryRunEventText, setDryRunEventText] = useState('');
   const [nodeTestLoading, setNodeTestLoading] = useState(false);
   const [nodeTestError, setNodeTestError] = useState('');
   const [nodeTestStep, setNodeTestStep] = useState<WorkflowRunStep | null>(null);
@@ -748,7 +754,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   };
 
   useEffect(() => {
-    if (showLogs) loadWorkflowLogs();
+    if (showLogs && workflowLogs.length === 0) loadWorkflowLogs();
   }, [showLogs, draft.id]);
 
   useEffect(() => {
@@ -1036,6 +1042,120 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
       setNodeTestError(error instanceof Error ? error.message : 'Node test failed.');
     } finally {
       setNodeTestLoading(false);
+    }
+  };
+
+  const createDryRunSampleEvent = (triggerType = 'threshold') => {
+    const deviceId = devices[0]?.id || 'DEV-001';
+    const base = {
+      receivedAt: new Date().toISOString(),
+      deviceId,
+      message: {
+        temperature: 86,
+        power: 1450,
+        status: 'warning',
+      },
+    };
+    if (triggerType === 'access' || triggerType === 'nfc_access') {
+      return {
+        type: 'access',
+        source: triggerType === 'nfc_access' ? 'nfc' : 'qr',
+        params: { deviceId, credentialGroups: ['operators'] },
+        accessId: accesses[0]?.id || 'access-demo',
+        accessName: accesses[0]?.name || 'Demo Access',
+        credentialId: 'credential-demo',
+        credentialName: triggerType === 'nfc_access' ? 'NFC-DEMO' : 'QR-DEMO',
+        credentialGroups: ['operators'],
+        receivedAt: base.receivedAt,
+      };
+    }
+    if (triggerType === 'mqtt_message') {
+      return {
+        ...base,
+        type: 'telemetry',
+        source: 'mqtt:dry-run',
+        topic: `devices/${deviceId}/telemetry`,
+        message: {
+          device_id: deviceId,
+          temperature: 86,
+          power: 1450,
+          status: 'alert',
+        },
+      };
+    }
+    if (triggerType === 'offline') {
+      return {
+        ...base,
+        type: 'telemetry',
+        source: 'offline:dry-run',
+        status: 'offline',
+        message: { status: 'offline' },
+      };
+    }
+    if (triggerType === 'schedule') {
+      return {
+        type: 'schedule',
+        source: 'schedule:dry-run',
+        scheduledAt: base.receivedAt,
+        message: {},
+      };
+    }
+    if (triggerType === 'webhook') {
+      return {
+        type: 'webhook',
+        source: 'webhook:dry-run',
+        payload: { deviceId, status: 'warning', temperature: 86 },
+        message: { deviceId, status: 'warning', temperature: 86 },
+        receivedAt: base.receivedAt,
+      };
+    }
+    return {
+      ...base,
+      type: 'telemetry',
+      source: 'telemetry:dry-run',
+    };
+  };
+
+  const applyDryRunSample = (triggerType: string) => {
+    setDryRunEventText(JSON.stringify(createDryRunSampleEvent(triggerType), null, 2));
+    const matchingTrigger = triggerNodes.find((node) => node.config?.type === triggerType) || triggerNodes[0];
+    if (matchingTrigger) setDryRunTriggerId(matchingTrigger.id);
+    setDryRunError('');
+  };
+
+  const openDryRun = () => {
+    const trigger = triggerNodes[0];
+    setDryRunTriggerId(trigger?.id || '');
+    setDryRunEventText(JSON.stringify(createDryRunSampleEvent(trigger?.config?.type || 'threshold'), null, 2));
+    setDryRunError('');
+    setShowDryRun(true);
+  };
+
+  const runWorkflowDryRun = async () => {
+    setDryRunLoading(true);
+    setDryRunError('');
+    try {
+      const event = JSON.parse(dryRunEventText || '{}');
+      const response = await fetch('/api/workflows/dry-run', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({
+          workflow: buildWorkflowForSave(false),
+          triggerId: dryRunTriggerId,
+          event,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || 'Workflow dry run failed.');
+      setWorkflowLogs([payload.run]);
+      setSelectedRunId(payload.run.id);
+      setShowDryRun(false);
+      setShowLogs(true);
+      notifySuccess('Workflow dry run completed.');
+    } catch (error) {
+      setDryRunError(error instanceof Error ? error.message : 'Workflow dry run failed.');
+    } finally {
+      setDryRunLoading(false);
     }
   };
 
@@ -1494,7 +1614,19 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
           <div className="flex items-center gap-3 w-full sm:w-auto justify-end shrink-0">
             <button
               type="button"
-              onClick={() => setShowLogs(true)}
+              onClick={openDryRun}
+              className="px-3 py-1.5 rounded-md border text-sm font-medium flex items-center gap-2 transition-colors bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/20 text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-500/20"
+            >
+              <Play className="h-4 w-4" />
+              Dry Run
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setWorkflowLogs([]);
+                setSelectedRunId('');
+                setShowLogs(true);
+              }}
               className="px-3 py-1.5 rounded-md border text-sm font-medium flex items-center gap-2 transition-colors bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
             >
               <ListTree className="h-4 w-4" />
@@ -2413,6 +2545,129 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         </div>
       )}
 
+      {showDryRun && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div>
+                <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
+                  <Play className="h-4 w-4 text-orange-500" />
+                  Workflow Dry Run
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Simulate the current draft without sending notifications, calling webhooks, or controlling devices.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDryRun(false)}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+              <div className="grid gap-4 md:grid-cols-[1fr_1.2fr]">
+                <div className="space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Trigger
+                    </span>
+                    <select
+                      value={dryRunTriggerId}
+                      onChange={(event) => {
+                        setDryRunTriggerId(event.target.value);
+                        const trigger = triggerNodes.find((node) => node.id === event.target.value);
+                        if (trigger) setDryRunEventText(JSON.stringify(createDryRunSampleEvent(trigger.config?.type), null, 2));
+                      }}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                    >
+                      {triggerNodes.length === 0 && <option value="">No trigger configured</option>}
+                      {triggerNodes.map((trigger) => (
+                        <option key={trigger.id} value={trigger.id}>
+                          {trigger.name || trigger.config?.type || trigger.id}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div>
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Sample Inputs
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        ['threshold', 'Threshold'],
+                        ['offline', 'Offline'],
+                        ['mqtt_message', 'MQTT'],
+                        ['access', 'Access QR'],
+                        ['nfc_access', 'NFC'],
+                        ['webhook', 'Webhook'],
+                        ['schedule', 'Schedule'],
+                      ].map(([type, label]) => (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => applyDryRunSample(type)}
+                          className="rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700 dark:border-slate-700 dark:text-slate-300 dark:hover:border-orange-500/40 dark:hover:bg-orange-500/10 dark:hover:text-orange-300"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                    Dry Run uses the same expression and branch logic as execution. External effects are converted into dry-run output objects.
+                  </div>
+                </div>
+
+                <label className="block">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Trigger Event JSON
+                  </span>
+                  <textarea
+                    value={dryRunEventText}
+                    onChange={(event) => {
+                      setDryRunEventText(event.target.value);
+                      setDryRunError('');
+                    }}
+                    spellCheck={false}
+                    className="h-[420px] w-full resize-none rounded-lg border border-slate-200 bg-slate-950 p-3 font-mono text-xs text-slate-100 outline-none focus:border-orange-500 dark:border-slate-700"
+                  />
+                </label>
+              </div>
+
+              {dryRunError && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+                  {dryRunError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowDryRun(false)}
+                className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={runWorkflowDryRun}
+                disabled={dryRunLoading || triggerNodes.length === 0}
+                className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Play className="h-4 w-4" />
+                {dryRunLoading ? 'Running...' : 'Run Simulation'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showLogs && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
           <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
@@ -2477,7 +2732,14 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                         )}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase", statusClassName(run.status))}>{run.status}</span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase", statusClassName(run.status))}>{run.status}</span>
+                            {run.dryRun && (
+                              <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-orange-700 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-300">
+                                Dry Run
+                              </span>
+                            )}
+                          </div>
                           <span className="text-[10px] text-slate-500 dark:text-slate-400">{new Date(run.startedAt).toLocaleString()}</span>
                         </div>
                         <div className="mt-2 truncate text-xs font-mono text-slate-500 dark:text-slate-400">{run.triggerType} · {run.eventSource}</div>
@@ -2495,6 +2757,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Status</span>
                         <span className={cn("mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold uppercase", statusClassName(selectedRun.status))}>{selectedRun.status}</span>
+                        {selectedRun.dryRun && (
+                          <span className="ml-2 mt-2 inline-flex rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-xs font-semibold uppercase text-orange-700 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-300">
+                            Dry Run
+                          </span>
+                        )}
                       </div>
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Trigger</span>
