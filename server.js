@@ -2786,6 +2786,152 @@ const dryRunWorkflow = async ({workflow, triggerId, event = {}}) => {
   return run;
 };
 
+const createWorkflowValidationIssue = (severity, code, message, node) => ({
+  id: createId('wfv'),
+  severity,
+  code,
+  message,
+  nodeId: node?.id || '',
+  nodeName: node?.name || node?.config?.type || '',
+  nodeType: node?.type || '',
+});
+
+const validateWorkflowDraft = async (workflow) => {
+  if (!workflow || !Array.isArray(workflow.nodes)) {
+    return {
+      ok: false,
+      issues: [createWorkflowValidationIssue('error', 'workflow.invalid', 'Workflow draft is required.')],
+      summary: {errors: 1, warnings: 0, info: 0},
+    };
+  }
+
+  const state = await getDashboardState();
+  const devices = Array.isArray(state.devices) ? state.devices : [];
+  const accesses = Array.isArray(state.accesses) ? state.accesses : [];
+  const notificationChannels = Array.isArray(state.notificationChannels) ? state.notificationChannels : [];
+  const deviceIds = new Set(devices.flatMap((device) => [device.id, device.config?.externalDeviceId].filter(Boolean)));
+  const accessIds = new Set(accesses.map((access) => access.id));
+  const notificationGroupIds = new Set(notificationChannels.map((channel) => channel.groupId || channel.id).filter(Boolean));
+  const issues = [];
+  const nodes = workflow.nodes || [];
+  const triggers = nodes.filter((node) => node.type === 'trigger');
+  const edges = Array.isArray(workflow.edges) ? workflow.edges : [];
+  const edgeTargets = new Set(edges.map((edge) => edge.target));
+  const edgeSources = new Set(edges.map((edge) => edge.source));
+
+  if (triggers.length === 0) {
+    issues.push(createWorkflowValidationIssue('error', 'trigger.missing', 'Workflow requires at least one trigger.'));
+  }
+
+  if (!workflow.name || !String(workflow.name).trim()) {
+    issues.push(createWorkflowValidationIssue('error', 'workflow.name_missing', 'Workflow name is required.'));
+  }
+
+  nodes.forEach((node) => {
+    const config = node.config || {};
+    const configType = config.type || node.type;
+
+    if (!node.name || !String(node.name).trim()) {
+      issues.push(createWorkflowValidationIssue('warning', 'node.name_missing', 'Node has no stable name. Expressions are easier to maintain with named nodes.', node));
+    }
+
+    if (node.type !== 'trigger' && triggers.length > 0 && edges.length > 0 && !edgeTargets.has(node.id)) {
+      issues.push(createWorkflowValidationIssue('warning', 'node.unreachable', 'Node is not connected from an upstream node and may never execute.', node));
+    }
+
+    if (node.type !== 'action' && edges.length > 0 && !edgeSources.has(node.id) && configType !== 'stop_workflow') {
+      issues.push(createWorkflowValidationIssue('info', 'node.terminal', 'Node has no outgoing connection.', node));
+    }
+
+    if (node.type === 'trigger') {
+      if (!config.cooldown && !config.debounce) {
+        issues.push(createWorkflowValidationIssue('warning', 'trigger.cooldown_missing', 'Trigger has no cooldown/debounce. Repeated events may start many runs.', node));
+      }
+      if (configType === 'threshold' && (!config.metric || config.value === undefined || config.value === '')) {
+        issues.push(createWorkflowValidationIssue('error', 'threshold.incomplete', 'Threshold trigger requires metric and value.', node));
+      }
+      if (configType === 'mqtt_message' && !config.topic) {
+        issues.push(createWorkflowValidationIssue('warning', 'mqtt.topic_missing', 'MQTT trigger has no topic filter.', node));
+      }
+      if (configType === 'webhook' && !config.endpoint) {
+        issues.push(createWorkflowValidationIssue('error', 'webhook.endpoint_missing', 'Webhook trigger endpoint is missing.', node));
+      }
+      if (['access', 'nfc_access'].includes(configType)) {
+        if (!config.accessId) {
+          issues.push(createWorkflowValidationIssue('error', 'access.not_bound', 'Access trigger must bind an Access entry.', node));
+        } else if (accessIds.size > 0 && !accessIds.has(config.accessId)) {
+          issues.push(createWorkflowValidationIssue('error', 'access.not_found', 'Bound Access entry does not exist.', node));
+        }
+      }
+    }
+
+    if (node.type === 'condition') {
+      if (['if', 'elif'].includes(configType) && !config.metric && !config.expression && !config.status) {
+        issues.push(createWorkflowValidationIssue('warning', 'condition.incomplete', 'Condition has no metric, expression, or status to evaluate.', node));
+      }
+      if (configType === 'case' && (config.value === undefined || config.value === '')) {
+        issues.push(createWorkflowValidationIssue('warning', 'case.value_missing', 'Switch case has no match value.', node));
+      }
+    }
+
+    if (node.type === 'action') {
+      if (configType === 'webhook') {
+        const url = config.url || config.webhookUrl || config.endpoint || config.target;
+        if (!url || !String(url).startsWith('http')) {
+          issues.push(createWorkflowValidationIssue('error', 'webhook.url_invalid', 'Webhook action requires a valid http/https URL.', node));
+        }
+      }
+      if (configType === 'http_request') {
+        if (!config.url || !String(config.url).startsWith('http')) {
+          issues.push(createWorkflowValidationIssue('error', 'http.url_invalid', 'HTTP Request requires a valid http/https URL.', node));
+        }
+      }
+      if (configType === 'notification') {
+        if (!config.message) {
+          issues.push(createWorkflowValidationIssue('warning', 'notification.message_empty', 'Notification message is empty.', node));
+        }
+        if (config.groupId && notificationGroupIds.size > 0 && !notificationGroupIds.has(config.groupId)) {
+          issues.push(createWorkflowValidationIssue('warning', 'notification.group_missing', 'Notification group does not match any configured notification channel group.', node));
+        }
+      }
+      if (configType === 'device_control') {
+        const hasDeviceExpression = config.deviceSource === 'expression' && config.deviceExpression;
+        const staticDevice = config.device || config.target;
+        if (!hasDeviceExpression && !staticDevice) {
+          issues.push(createWorkflowValidationIssue('error', 'device_control.device_missing', 'Device Control action requires a device or device expression.', node));
+        } else if (staticDevice && deviceIds.size > 0 && !deviceIds.has(staticDevice)) {
+          issues.push(createWorkflowValidationIssue('warning', 'device_control.device_not_found', 'Static device binding does not match any known device.', node));
+        }
+        if (!config.controlId && !config.command) {
+          issues.push(createWorkflowValidationIssue('error', 'device_control.control_missing', 'Device Control action requires a control action ID.', node));
+        }
+      }
+      if (configType === 'mqtt_publish' && !config.topic) {
+        issues.push(createWorkflowValidationIssue('error', 'mqtt_publish.topic_missing', 'MQTT Publish action requires a topic.', node));
+      }
+      if (configType === 'function' && !config.code) {
+        issues.push(createWorkflowValidationIssue('warning', 'function.code_empty', 'Function node has no code.', node));
+      }
+      if (['webhook', 'http_request', 'mqtt_publish', 'device_control', 'notification'].includes(configType)) {
+        issues.push(createWorkflowValidationIssue('info', 'action.external_effect', `This ${configType} action has external side effects during real execution.`, node));
+      }
+    }
+  });
+
+  const summary = issues.reduce((acc, issue) => {
+    if (issue.severity === 'error') acc.errors += 1;
+    else if (issue.severity === 'warning') acc.warnings += 1;
+    else acc.info += 1;
+    return acc;
+  }, {errors: 0, warnings: 0, info: 0});
+
+  return {
+    ok: summary.errors === 0,
+    issues,
+    summary,
+  };
+};
+
 const dispatchWorkflowEvent = async (event) => {
   const workflows = await getDashboardWorkflows();
   const enabledWorkflows = workflows.filter((workflow) => workflow?.enabled);
@@ -4161,6 +4307,20 @@ app.post('/api/workflows/dry-run', async (req, res) => {
     res.status(200).json({ok: true, run});
   } catch (error) {
     res.status(400).json({ok: false, error: error.message});
+  }
+});
+
+app.post('/api/workflows/validate', async (req, res) => {
+  try {
+    const result = await validateWorkflowDraft(req.body?.workflow);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      issues: [createWorkflowValidationIssue('error', 'validation.failed', error.message)],
+      summary: {errors: 1, warnings: 0, info: 0},
+    });
   }
 });
 

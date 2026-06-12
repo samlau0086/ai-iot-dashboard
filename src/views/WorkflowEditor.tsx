@@ -46,6 +46,16 @@ type WorkflowRunLog = {
   dryRun?: boolean;
 };
 
+type WorkflowValidationIssue = {
+  id: string;
+  severity: 'error' | 'warning' | 'info';
+  code: string;
+  message: string;
+  nodeId?: string;
+  nodeName?: string;
+  nodeType?: string;
+};
+
 const formatJsonValue = (value: unknown) => {
   if (typeof value === 'string') return value;
   try {
@@ -570,6 +580,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const [publishNotes, setPublishNotes] = useState('');
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [selectedVersionNumber, setSelectedVersionNumber] = useState<number | null>(null);
+  const [showValidationModal, setShowValidationModal] = useState(false);
+  const [validationIssues, setValidationIssues] = useState<WorkflowValidationIssue[]>([]);
+  const [validationLoading, setValidationLoading] = useState(false);
+  const [validationSource, setValidationSource] = useState<'manual' | 'publish'>('manual');
   const [workflowLogs, setWorkflowLogs] = useState<WorkflowRunLog[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
   const [logsLoading, setLogsLoading] = useState(false);
@@ -859,6 +873,30 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
   const formatNodeLabel = (node: WorkflowNode) => `${node.name || node.config?.type || node.id} (${node.type})`;
   const selectedVersionCompare = compareDraftToVersion(selectedVersion);
+  const validationSummary = validationIssues.reduce((acc, issue) => {
+    if (issue.severity === 'error') acc.errors += 1;
+    else if (issue.severity === 'warning') acc.warnings += 1;
+    else acc.info += 1;
+    return acc;
+  }, { errors: 0, warnings: 0, info: 0 });
+  const validationCanPublish = validationSource === 'publish' && validationSummary.errors === 0 && validationIssues.length > 0;
+
+  const severityClassName = (severity: WorkflowValidationIssue['severity']) => {
+    switch (severity) {
+      case 'error':
+        return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300';
+      case 'warning':
+        return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300';
+      default:
+        return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300';
+    }
+  };
+
+  const focusValidationIssue = (issue: WorkflowValidationIssue) => {
+    if (!issue.nodeId) return;
+    setSelectedNodeId(issue.nodeId);
+    setShowValidationModal(false);
+  };
 
   const buildWorkflowEdges = () => {
     const edges: WorkflowEdge[] = [];
@@ -1018,15 +1056,55 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     persistWorkflowDraft(buildWorkflowForSave(false), 'Workflow draft saved successfully.');
   };
 
+  const validateWorkflow = async (source: 'manual' | 'publish' = 'manual') => {
+    setValidationLoading(true);
+    setValidationSource(source);
+    try {
+      const response = await fetch('/api/workflows/validate', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({ workflow: buildWorkflowForSave(false) }),
+      });
+      const payload = await response.json();
+      const issues = Array.isArray(payload.issues) ? payload.issues : [];
+      setValidationIssues(issues);
+      if (!response.ok) throw new Error(payload.error || 'Workflow validation failed.');
+      if (source === 'manual' || issues.length > 0) setShowValidationModal(true);
+      if (source === 'manual' && issues.length === 0) notifySuccess('Workflow validation passed.');
+      return issues as WorkflowValidationIssue[];
+    } catch (error) {
+      const issue = {
+        id: `validation-${Date.now()}`,
+        severity: 'error' as const,
+        code: 'validation.request_failed',
+        message: error instanceof Error ? error.message : 'Workflow validation failed.',
+      };
+      setValidationIssues([issue]);
+      setShowValidationModal(true);
+      return [issue];
+    } finally {
+      setValidationLoading(false);
+    }
+  };
+
   const handlePublish = () => {
     setPublishNotes('');
     setShowPublishModal(true);
   };
 
-  const confirmPublish = () => {
+  const publishWithoutValidation = () => {
     persistWorkflowDraft(buildWorkflowForSave(true, publishNotes), 'Workflow version published successfully.');
     setShowPublishModal(false);
+    setShowValidationModal(false);
     setPublishNotes('');
+  };
+
+  const confirmPublish = async () => {
+    const issues = await validateWorkflow('publish');
+    const hasErrors = issues.some((issue) => issue.severity === 'error');
+    const hasWarnings = issues.some((issue) => issue.severity === 'warning');
+    if (hasErrors || hasWarnings) return;
+    publishWithoutValidation();
   };
 
   const openVersionHistory = () => {
@@ -1725,6 +1803,15 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             >
               <Play className="h-4 w-4" />
               Dry Run
+            </button>
+            <button
+              type="button"
+              onClick={() => validateWorkflow('manual')}
+              disabled={validationLoading}
+              className="px-3 py-1.5 rounded-md border text-sm font-medium flex items-center gap-2 transition-colors bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 disabled:opacity-60 dark:hover:bg-slate-700"
+            >
+              <AlertTriangle className={cn("h-4 w-4", validationLoading ? "text-slate-400" : "text-amber-500")} />
+              {validationLoading ? 'Validating' : 'Validate'}
             </button>
             <button
               type="button"
@@ -2659,6 +2746,113 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
         </div>
       )}
 
+      {showValidationModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div>
+                <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
+                  <AlertTriangle className="h-4 w-4 text-amber-500" />
+                  Workflow Validation
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Preflight checks catch missing bindings, invalid URLs, risky triggers, and external side effects before publishing.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowValidationModal(false)}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              <div className="grid gap-3 sm:grid-cols-3">
+                {([
+                  ['Errors', validationSummary.errors, 'error'],
+                  ['Warnings', validationSummary.warnings, 'warning'],
+                  ['Info', validationSummary.info, 'info'],
+                ] as Array<[string, number, WorkflowValidationIssue['severity']]>).map(([label, value, severity]) => (
+                  <div key={label} className={cn("rounded-lg border p-4", severityClassName(severity))}>
+                    <span className="block text-2xl font-bold">{value}</span>
+                    <span className="mt-1 block text-xs font-semibold uppercase tracking-wider">{label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {validationIssues.length === 0 ? (
+                <div className="mt-5 rounded-lg border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+                  Validation passed. No blocking issues were found.
+                </div>
+              ) : (
+                <div className="mt-5 space-y-2">
+                  {validationIssues.map((issue) => (
+                    <button
+                      key={issue.id}
+                      type="button"
+                      onClick={() => focusValidationIssue(issue)}
+                      className={cn(
+                        "w-full rounded-lg border p-4 text-left transition-colors",
+                        severityClassName(issue.severity),
+                        issue.nodeId && "hover:ring-2 hover:ring-orange-500/30"
+                      )}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-white/60 px-2 py-0.5 text-[10px] font-semibold uppercase dark:bg-slate-950/30">
+                              {issue.severity}
+                            </span>
+                            <span className="font-mono text-[11px] opacity-80">{issue.code}</span>
+                          </div>
+                          <p className="mt-2 text-sm font-medium">{issue.message}</p>
+                        </div>
+                        {issue.nodeId && (
+                          <span className="shrink-0 rounded-md bg-white/60 px-2 py-1 text-xs font-medium dark:bg-slate-950/30">
+                            {issue.nodeName || issue.nodeId}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => validateWorkflow(validationSource)}
+                disabled={validationLoading}
+                className="mr-auto inline-flex items-center gap-2 rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                <RefreshCw className={cn("h-4 w-4", validationLoading && "animate-spin")} />
+                Revalidate
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowValidationModal(false)}
+                className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                Close
+              </button>
+              {validationCanPublish && (
+                <button
+                  type="button"
+                  onClick={publishWithoutValidation}
+                  className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500"
+                >
+                  <Save className="h-4 w-4" />
+                  Publish Anyway
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showPublishModal && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
           <div className="w-full max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
@@ -2704,6 +2898,15 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4 dark:border-slate-800">
               <button
                 type="button"
+                onClick={() => validateWorkflow('manual')}
+                disabled={validationLoading}
+                className="mr-auto inline-flex items-center gap-2 rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                {validationLoading ? 'Validating' : 'Validate'}
+              </button>
+              <button
+                type="button"
                 onClick={() => setShowPublishModal(false)}
                 className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
               >
@@ -2712,10 +2915,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               <button
                 type="button"
                 onClick={confirmPublish}
-                className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500"
+                disabled={validationLoading}
+                className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Save className="h-4 w-4" />
-                Publish Version
+                {validationLoading ? 'Validating...' : 'Publish Version'}
               </button>
             </div>
           </div>

@@ -132,6 +132,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Node execution policy: timeout, retry attempts, retry interval, fixed/exponential backoff, stop/continue on failure.
 - [x] Expression builder with variable picker, preview, and unresolved reference hints.
 - [x] Workflow dry-run simulator with full-flow logs and no external side effects.
+- [x] Workflow preflight validation with error/warning/info severity before publish.
 - [ ] Expression helper functions such as now(), formatDate(), toNumber(), contains(), round().
 - [x] Workflow import / export JSON.
 - [x] Workflow template library / preset workflows.
@@ -345,6 +346,8 @@ Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。
 工作流编辑页支持 **Dry Run**。可以选择某个 Trigger，使用 Access、NFC、MQTT、Webhook、Schedule、Threshold 等示例输入或自定义 JSON 来模拟执行当前草稿。Dry Run 会复用真实分支、表达式和节点执行逻辑，但不会写入真实工作流日志、不会发送通知渠道、不会调用外部 Webhook，也不会向设备下发控制命令；模拟结果会临时显示在 Logs 窗口中。
 
 工作流编辑页支持 **Versions**。每次 **Publish Version** 都需要填写发布说明，并保存 published snapshot 到版本历史。版本历史可查看发布人、发布时间、节点摘要、发布说明，也可以比较当前 Draft 与历史版本的新增、删除和修改节点；选择 **Restore to Draft** 会把历史版本恢复到当前草稿，用户仍需再点击 Save Draft 或 Publish Version 才会固化。
+
+工作流编辑页支持 **Validate** 发布前校验。校验结果分为 Error、Warning、Info：Error 会阻止发布，例如缺少 Trigger、设备控制未绑定设备或控制项、Webhook URL 非法、Access Trigger 未绑定 Access；Warning 会在发布前提示确认，例如通知消息为空、Trigger 未配置 cooldown、静态设备绑定未找到；Info 用于提示外部副作用节点等结构信息。点击带节点信息的校验项可以定位到对应节点。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 
