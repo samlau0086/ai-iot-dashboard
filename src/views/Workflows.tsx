@@ -27,6 +27,7 @@ type WorkflowRunLog = {
   id: string;
   workflowId: string;
   workflowName: string;
+  workflowVersion?: number;
   triggerType: string;
   eventSource: string;
   status: string;
@@ -360,6 +361,11 @@ export function Workflows() {
                       {workflow.name}
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400 max-w-2xl">{workflow.description}</p>
+                    <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      <span>Draft v{workflow.draftVersion || 0}</span>
+                      <span>Published v{workflow.publishedVersion || 0}</span>
+                      {workflow.publishedAt && <span>{new Date(workflow.publishedAt).toLocaleString()}</span>}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -540,7 +546,7 @@ export function Workflows() {
               <main className="min-h-0 overflow-y-auto p-5">
                 {selectedRun ? (
                   <div className="space-y-5">
-                    <div className="grid gap-3 sm:grid-cols-4">
+                    <div className="grid gap-3 sm:grid-cols-5">
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Status</span>
                         <span className={cn("mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold uppercase", statusClassName(selectedRun.status))}>
@@ -550,6 +556,10 @@ export function Workflows() {
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Trigger</span>
                         <span className="mt-2 block text-sm font-semibold text-slate-900 dark:text-white">{selectedRun.triggerType}</span>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                        <span className="block text-xs text-slate-500 dark:text-slate-400">Version</span>
+                        <span className="mt-2 block text-sm font-semibold text-slate-900 dark:text-white">v{selectedRun.workflowVersion || 1}</span>
                       </div>
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Started</span>

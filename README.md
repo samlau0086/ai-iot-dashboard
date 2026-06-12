@@ -122,6 +122,23 @@ An AI-powered industrial operations platform that connects machines, meters and 
 
 ### V5: Workflow Automation
 
+#### Workflow Automation Backlog
+
+- [x] Draft / Published workflow version metadata.
+- [x] Published workflow snapshot execution with backward compatibility for legacy workflows.
+- [x] Trigger cooldown / dedupe configuration.
+- [x] Node-level test run API and editor action.
+- [x] Node execution policy: timeout, retry attempts, retry interval, fixed/exponential backoff, stop/continue on failure.
+- [ ] Expression builder with preview, validation, and helper functions.
+- [ ] Workflow import / export JSON.
+- [ ] Workflow template library / marketplace.
+- [ ] Sub-workflow invocation.
+- [ ] Advanced cron editor.
+- [ ] Node search and keyboard shortcuts.
+- [ ] Canvas mini map, grouping, comments, and collapse/expand.
+- [ ] Redis/BullMQ production execution queue for multi-instance deployments.
+- [ ] Workflow run metrics: success rate, average duration, failure count, current running jobs.
+
 目标：建设工业版 Zapier / n8n，用规则自动响应设备和运营事件。
 
 - [x] Workflow 页面基础结构

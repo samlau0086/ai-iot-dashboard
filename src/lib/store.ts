@@ -755,6 +755,16 @@ export interface Workflow {
   enabled: boolean;
   nodes: WorkflowNode[];
   edges?: WorkflowEdge[];
+  draftVersion?: number;
+  publishedVersion?: number;
+  publishedAt?: string;
+  updatedAt?: string;
+  publishedSnapshot?: {
+    name: string;
+    description: string;
+    nodes: WorkflowNode[];
+    edges?: WorkflowEdge[];
+  };
 }
 
 interface AppState {

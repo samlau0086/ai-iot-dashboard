@@ -34,6 +34,7 @@ type WorkflowRunLog = {
   id: string;
   workflowId: string;
   workflowName: string;
+  workflowVersion?: number;
   triggerType: string;
   eventSource: string;
   status: string;
@@ -251,15 +252,15 @@ const getActionIcon = (type: string) => {
 };
 
 const defaultConfigs: Record<string, any> = {
-  threshold: { device: '', metric: 'temperature', condition: '>', value: 10, duration: '5m' },
-  offline: { device: '', duration: '10m' },
-  alert: { device: '', severity: 'critical' },
-  schedule: { device: '', crontab: '0 * * * *' },
-  ai: { device: '', anomalyType: 'all' },
-  webhook: { device: '', endpoint: '/api/v1/webhook/' },
-  access: { accessId: '' },
-  nfc_access: { accessId: '' },
-  mqtt_message: { device: '', topic: 'sensors/+/data', payload_match: '{"status":"alert"}' },
+  threshold: { device: '', metric: 'temperature', condition: '>', value: 10, duration: '5m', cooldown: '60s', dedupeKey: '$.input.event.deviceId' },
+  offline: { device: '', duration: '10m', cooldown: '10m', dedupeKey: '$.input.event.deviceId' },
+  alert: { device: '', severity: 'critical', cooldown: '5m', dedupeKey: '$.input.event.deviceId' },
+  schedule: { device: '', crontab: '0 * * * *', cooldown: '0s', dedupeKey: '' },
+  ai: { device: '', anomalyType: 'all', cooldown: '5m', dedupeKey: '$.input.event.deviceId' },
+  webhook: { device: '', endpoint: '/api/v1/webhook/', cooldown: '0s', dedupeKey: '' },
+  access: { accessId: '', cooldown: '0s', dedupeKey: '$.input.event.credentialId' },
+  nfc_access: { accessId: '', cooldown: '0s', dedupeKey: '$.input.event.credentialId' },
+  mqtt_message: { device: '', topic: 'sensors/+/data', payload_match: '{"status":"alert"}', cooldown: '30s', dedupeKey: '$.input.event.message.topic' },
   whatsapp: { target: '+1234567890', message: 'Alert triggered!' },
   email: { to: 'admin@factory.com', subject: 'Alert Notification' },
   ticket: { priority: 'high', assignee: 'maintenance' },
@@ -484,6 +485,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     name: 'New Workflow',
     description: '',
     enabled: true,
+    draftVersion: 0,
+    publishedVersion: 0,
     nodes: []
   });
 
@@ -503,6 +506,9 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const [selectedRunId, setSelectedRunId] = useState('');
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState('');
+  const [nodeTestLoading, setNodeTestLoading] = useState(false);
+  const [nodeTestError, setNodeTestError] = useState('');
+  const [nodeTestStep, setNodeTestStep] = useState<WorkflowRunStep | null>(null);
 
   const triggerNodes = draft.nodes.filter(n => n.type === 'trigger');
   const otherNodes = draft.nodes.filter(n => n.type !== 'trigger');
@@ -690,6 +696,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const node = draft.nodes.find((item) => item.id === selectedNodeId);
     setSelectedNodeDraft(node ? cloneWorkflowNode(node) : null);
     setNodeSettingsDirty(false);
+    setNodeTestError('');
+    setNodeTestStep(null);
   }, [selectedNodeId]);
 
   const formatJson = (value: unknown) => {
@@ -808,10 +816,13 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     return edges;
   };
 
-  const handleSave = () => {
+  const buildWorkflowForSave = (publish = false): Workflow => {
     const usedNames = new Set<string>();
     let currentBranchRootName = '';
-    const namedNodes = draft.nodes.map((node) => {
+    const sourceNodes = selectedNodeDraft
+      ? draft.nodes.map((node) => node.id === selectedNodeDraft.id ? selectedNodeDraft : node)
+      : draft.nodes;
+    const namedNodes = sourceNodes.map((node) => {
       let nodeName = slugifyNodeName(node.name || node.config?.name || node.config?.type || node.id);
 
       if (node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config?.type)) {
@@ -833,14 +844,40 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
 
       return { ...node, name: nodeName };
     });
-    const workflowToSave = { ...draft, nodes: namedNodes, edges: buildWorkflowEdges() };
+    const now = new Date().toISOString();
+    const draftVersion = Number(draft.draftVersion || 0) + 1;
+    const baseWorkflow: Workflow = { ...draft, nodes: namedNodes, edges: buildWorkflowEdges(), draftVersion, updatedAt: now };
+    if (!publish) return baseWorkflow;
+
+    return {
+      ...baseWorkflow,
+      publishedVersion: draftVersion,
+      publishedAt: now,
+      publishedSnapshot: {
+        name: baseWorkflow.name,
+        description: baseWorkflow.description,
+        nodes: namedNodes,
+        edges: baseWorkflow.edges,
+      },
+    };
+  };
+
+  const persistWorkflowDraft = (workflowToSave: Workflow, message: string) => {
     if (isNew) {
       addWorkflow(workflowToSave);
     } else {
       updateWorkflow(draft.id, workflowToSave);
     }
-    notifySuccess('Workflow saved successfully.');
+    notifySuccess(message);
     onBack();
+  };
+
+  const handleSave = () => {
+    persistWorkflowDraft(buildWorkflowForSave(false), 'Workflow draft saved successfully.');
+  };
+
+  const handlePublish = () => {
+    persistWorkflowDraft(buildWorkflowForSave(true), 'Workflow version published successfully.');
   };
 
   const getActionLabel = (type: string) => {
@@ -894,6 +931,38 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     setNodeSettingsDirty(false);
   };
 
+  const testSelectedNode = async () => {
+    if (!selectedNodeDraft) return;
+    setNodeTestLoading(true);
+    setNodeTestError('');
+    setNodeTestStep(null);
+    try {
+      const testWorkflow = {
+        ...buildWorkflowForSave(false),
+      };
+      const response = await fetch('/api/workflows/test-node', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({
+          workflow: testWorkflow,
+          nodeId: selectedNodeDraft.id,
+          event: {
+            message: {status: 'warning', temperature: 32, power: 1200},
+            deviceId: devices[0]?.id || 'TEST-DEVICE',
+          },
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || 'Node test failed.');
+      setNodeTestStep(payload.step);
+      notifySuccess('Workflow node test completed.');
+    } catch (error) {
+      setNodeTestError(error instanceof Error ? error.message : 'Node test failed.');
+    } finally {
+      setNodeTestLoading(false);
+    }
+  };
+
   const buildWorkflowControlPatch = (deviceId: string, controlId?: string) => {
     const device = devices.find((item) => item.id === deviceId);
     const controls = getDeviceControlDefinitions(device);
@@ -927,7 +996,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     let nodeConfig = { ...defaultConfigs[type] };
     if (type === 'webhook') {
       if (isTrigger) {
-        nodeConfig = { endpoint: createWebhookEndpoint(draft.id), expectedContent: '{"status": "error"}' };
+        nodeConfig = { endpoint: createWebhookEndpoint(draft.id), expectedContent: '{"status": "error"}', cooldown: '0s', dedupeKey: '' };
       } else {
         nodeConfig = { endpoint: '/api/v1/webhook/' };
       }
@@ -1339,6 +1408,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                 className="text-xs sm:text-sm font-medium bg-transparent border-none p-0 focus:ring-0 text-slate-500 dark:text-slate-400 placeholder:text-slate-300 dark:placeholder:text-slate-600 w-full"
                 placeholder="Brief description of this workflow"
               />
+              <div className="flex flex-wrap gap-2 text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                <span>Draft v{draft.draftVersion || 0}</span>
+                <span>Published v{draft.publishedVersion || 0}</span>
+                {draft.publishedAt && <span>{new Date(draft.publishedAt).toLocaleString()}</span>}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto justify-end shrink-0">
@@ -1364,10 +1438,17 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             </button>
             <button
               onClick={handleSave}
+              className="inline-flex items-center gap-x-2 rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            >
+              <Save className="h-4 w-4" />
+              Save Draft
+            </button>
+            <button
+              onClick={handlePublish}
               className="inline-flex items-center gap-x-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 transition-colors"
             >
               <Save className="h-4 w-4" />
-              Save
+              Publish Version
             </button>
           </div>
         </div>
@@ -1473,9 +1554,36 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             {draft.nodes.map(originalNode => {
               if (originalNode.id !== selectedNodeId) return null;
               const node = selectedNodeDraft?.id === originalNode.id ? selectedNodeDraft : originalNode;
+              const displayedStep = nodeTestStep || selectedNodeLastLog?.step || null;
+              const displayedRunId = nodeTestStep ? 'Node test result' : selectedNodeLastLog?.run.id;
+              const displayedStartedAt = nodeTestStep?.startedAt || selectedNodeLastLog?.run.startedAt || selectedNodeLastLog?.run.finishedAt;
               
               return (
                 <div key={node.id} className="space-y-6">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900 dark:text-white">Node Test</p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Runs this node with a sample event. Side-effect actions use dry-run mode.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={testSelectedNode}
+                        disabled={nodeTestLoading}
+                        className="inline-flex items-center gap-2 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700 hover:bg-orange-100 disabled:cursor-default disabled:opacity-50 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-300 dark:hover:bg-orange-500/20"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        {nodeTestLoading ? 'Testing...' : 'Test Node'}
+                      </button>
+                    </div>
+                    {nodeSettingsDirty && (
+                      <p className="mt-2 text-xs text-amber-600 dark:text-amber-300">The test will include the unsaved settings shown in this panel.</p>
+                    )}
+                    {nodeTestError && (
+                      <p className="mt-2 text-xs text-red-600 dark:text-red-300">{nodeTestError}</p>
+                    )}
+                  </div>
+
                   <div>
                     <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Node Name</label>
                     {node.type === 'condition' && ['elif', 'else', 'case', 'default'].includes(node.config.type) ? (
@@ -1933,6 +2041,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                               retryEnabled: event.target.checked,
                               retryAttempts: node.config.executionPolicy?.retryAttempts ?? 3,
                               retryInterval: node.config.executionPolicy?.retryInterval ?? '10s',
+                              retryBackoff: node.config.executionPolicy?.retryBackoff || 'fixed',
+                              timeout: node.config.executionPolicy?.timeout || '30s',
                               onFailure: node.config.executionPolicy?.onFailure || 'stop',
                             },
                           })}
@@ -1973,8 +2083,41 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                               className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
                             />
                           </div>
+                          <div className="col-span-2">
+                            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Backoff</label>
+                            <select
+                              value={node.config.executionPolicy?.retryBackoff || 'fixed'}
+                              onChange={(event) => updateNodeConfig(node.id, {
+                                executionPolicy: {
+                                  ...(node.config.executionPolicy || {}),
+                                  retryEnabled: true,
+                                  retryBackoff: event.target.value,
+                                },
+                              })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            >
+                              <option value="fixed">Fixed interval</option>
+                              <option value="exponential">Exponential backoff</option>
+                            </select>
+                          </div>
                         </div>
                       )}
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Timeout</label>
+                        <input
+                          value={node.config.executionPolicy?.timeout ?? '30s'}
+                          placeholder="30s, 5000ms, 2m"
+                          onChange={(event) => updateNodeConfig(node.id, {
+                            executionPolicy: {
+                              ...(node.config.executionPolicy || {}),
+                              timeout: event.target.value,
+                            },
+                          })}
+                          className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                        />
+                        <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">Examples: 5000ms, 30s, 2m. Empty means no timeout.</p>
+                      </div>
 
                       <div>
                         <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">On Failure</label>
@@ -1985,6 +2128,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                               ...(node.config.executionPolicy || {}),
                               retryAttempts: node.config.executionPolicy?.retryAttempts ?? 3,
                               retryInterval: node.config.executionPolicy?.retryInterval ?? '10s',
+                              retryBackoff: node.config.executionPolicy?.retryBackoff || 'fixed',
+                              timeout: node.config.executionPolicy?.timeout || '30s',
                               onFailure: event.target.value,
                             },
                           })}
@@ -2002,8 +2147,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       <div>
                         <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Input / Output</label>
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {selectedNodeLastLog
-                            ? `Latest run: ${new Date(selectedNodeLastLog.run.startedAt || selectedNodeLastLog.run.finishedAt).toLocaleString()}`
+                          {nodeTestStep
+                            ? 'Showing latest node test result.'
+                            : selectedNodeLastLog
+                              ? `Latest run: ${new Date(selectedNodeLastLog.run.startedAt || selectedNodeLastLog.run.finishedAt).toLocaleString()}`
                             : logsLoading
                               ? 'Loading node logs...'
                               : 'No run log found for this node yet.'}
@@ -2020,21 +2167,22 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       </button>
                     </div>
 
-                    {selectedNodeLastLog && (
+                    {displayedStep && (
                       <div className="space-y-3">
                         <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className={cn("rounded-full border px-2 py-0.5 font-medium", statusClassName(selectedNodeLastLog.step.status))}>
-                            {selectedNodeLastLog.step.status || 'unknown'}
+                          <span className={cn("rounded-full border px-2 py-0.5 font-medium", statusClassName(displayedStep.status))}>
+                            {displayedStep.status || 'unknown'}
                           </span>
-                          <span className="text-slate-500 dark:text-slate-400">{selectedNodeLastLog.run.id}</span>
+                          <span className="text-slate-500 dark:text-slate-400">{displayedRunId}</span>
+                          {displayedStartedAt && <span className="text-slate-500 dark:text-slate-400">{new Date(displayedStartedAt).toLocaleString()}</span>}
                         </div>
                         <div>
                           <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Input</div>
-                          <JsonInspector value={selectedNodeLastLog.step.input} baseReference="$.input" />
+                          <JsonInspector value={displayedStep.input} baseReference="$.input" />
                         </div>
                         <div>
                           <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Output</div>
-                          <JsonInspector value={selectedNodeLastLog.step.output} baseReference="$.output" failed={selectedNodeLastLog.step.status === 'failed'} />
+                          <JsonInspector value={displayedStep.output} baseReference="$.output" failed={displayedStep.status === 'failed'} />
                         </div>
                       </div>
                     )}
@@ -2149,7 +2297,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               <main className="min-h-0 overflow-y-auto p-5">
                 {selectedRun ? (
                   <div className="space-y-5">
-                    <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="grid gap-3 sm:grid-cols-4">
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Status</span>
                         <span className={cn("mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold uppercase", statusClassName(selectedRun.status))}>{selectedRun.status}</span>
@@ -2157,6 +2305,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Trigger</span>
                         <span className="mt-2 block text-sm font-semibold text-slate-900 dark:text-white">{selectedRun.triggerType}</span>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                        <span className="block text-xs text-slate-500 dark:text-slate-400">Version</span>
+                        <span className="mt-2 block text-sm font-semibold text-slate-900 dark:text-white">v{selectedRun.workflowVersion || 1}</span>
                       </div>
                       <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                         <span className="block text-xs text-slate-500 dark:text-slate-400">Started</span>

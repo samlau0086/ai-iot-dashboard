@@ -22,6 +22,7 @@ const db = databaseUrl ? new Pool({connectionString: databaseUrl, ssl: databaseS
 const telemetryMessages = [];
 const workflowRuns = [];
 const workflowLiveStates = new Map();
+const workflowTriggerLastRuns = new Map();
 const deviceControlCommands = [];
 const accessEvents = [];
 const systemNotifications = [];
@@ -263,6 +264,7 @@ const initDatabase = async () => {
       id text PRIMARY KEY,
       workflow_id text NOT NULL,
       workflow_name text NOT NULL,
+      workflow_version integer NOT NULL DEFAULT 1,
       trigger_type text NOT NULL,
       event_source text NOT NULL,
       status text NOT NULL,
@@ -272,6 +274,7 @@ const initDatabase = async () => {
       finished_at timestamptz NOT NULL
     )
   `);
+  await queryDb('ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS workflow_version integer NOT NULL DEFAULT 1');
   await queryDb(`
     CREATE TABLE IF NOT EXISTS device_control_commands (
       id text PRIMARY KEY,
@@ -919,6 +922,58 @@ const triggerMatchesEvent = (trigger, event) => {
   return false;
 };
 
+const getExecutableWorkflow = (workflow) => {
+  const snapshot = workflow?.publishedSnapshot;
+  if (!snapshot || !Array.isArray(snapshot.nodes)) return workflow;
+  return {
+    ...workflow,
+    name: snapshot.name || workflow.name,
+    description: snapshot.description || workflow.description,
+    nodes: snapshot.nodes,
+    edges: Array.isArray(snapshot.edges) ? snapshot.edges : workflow.edges,
+    runningVersion: workflow.publishedVersion || workflow.draftVersion || 1,
+  };
+};
+
+const createTriggerDedupeKey = (workflow, trigger, event) => {
+  const context = {};
+  const nodeName = normalizeWorkflowNodeName(trigger, trigger.id);
+  const input = createWorkflowNodeInput(trigger, event, context, nodeName);
+  const runtimeContext = {
+    [nodeName]: {
+      nodeId: trigger.id,
+      type: trigger.config?.type || 'trigger',
+      status: 'running',
+      input,
+      output: createWorkflowTriggerOutput(trigger, event),
+    },
+  };
+  const configuredKey = trigger.config?.dedupeKey
+    ? resolveWorkflowValue(trigger.config.dedupeKey, runtimeContext, nodeName)
+    : '';
+  const fallbackKey = event.deviceId
+    || event.message?.device_id
+    || event.message?.deviceId
+    || event.credentialId
+    || event.accessId
+    || event.token
+    || event.source
+    || event.type
+    || 'event';
+  return `${workflow.id}:${trigger.id}:${String(configuredKey || fallbackKey)}`;
+};
+
+const shouldExecuteWorkflowTrigger = (workflow, trigger, event) => {
+  const cooldownMs = parseWorkflowDurationMs(trigger.config?.cooldown || trigger.config?.debounce || '0s', 24 * 60 * 60 * 1000);
+  if (!cooldownMs) return true;
+  const key = createTriggerDedupeKey(workflow, trigger, event);
+  const now = Date.now();
+  const previous = workflowTriggerLastRuns.get(key) || 0;
+  if (now - previous < cooldownMs) return false;
+  workflowTriggerLastRuns.set(key, now);
+  return true;
+};
+
 const cronFieldMatches = (field, value) => {
   const part = String(field || '*').trim();
   if (part === '*') return true;
@@ -1084,12 +1139,13 @@ const persistWorkflowRun = async (run) => {
   if (!db) return;
 
   await queryDb(
-    `INSERT INTO workflow_runs (id, workflow_id, workflow_name, trigger_type, event_source, status, event, steps, started_at, finished_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::timestamptz, $10::timestamptz)`,
+    `INSERT INTO workflow_runs (id, workflow_id, workflow_name, workflow_version, trigger_type, event_source, status, event, steps, started_at, finished_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::timestamptz, $11::timestamptz)`,
     [
       safeRun.id,
       safeRun.workflowId,
       safeRun.workflowName,
+      Number(safeRun.workflowVersion || 1),
       safeRun.triggerType,
       safeRun.eventSource,
       safeRun.status,
@@ -1659,28 +1715,49 @@ const recordWorkflowNodeResult = (context, nodeName, step) => {
   }
 };
 
-const parseWorkflowRetryInterval = (value) => {
+const parseWorkflowDurationMs = (value, maxMs = 30000) => {
   const text = String(value || '0').trim();
   const match = text.match(/^(\d+(?:\.\d+)?)(ms|s|m)?$/i);
   if (!match) return 0;
   const amount = Number(match[1]);
   const unit = (match[2] || 'ms').toLowerCase();
   const multiplier = unit === 'm' ? 60000 : unit === 's' ? 1000 : 1;
-  return Math.max(0, Math.min(amount * multiplier, 30000));
+  return Math.max(0, Math.min(amount * multiplier, maxMs));
 };
 
+const parseWorkflowRetryInterval = (value) => parseWorkflowDurationMs(value, 30000);
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const withWorkflowTimeout = async (promise, timeoutMs, label = 'Workflow node') => {
+  if (!timeoutMs) return promise;
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
 
 const getNodeExecutionPolicy = (node) => ({
   retryEnabled: Boolean(node?.config?.executionPolicy?.retryEnabled),
   retryAttempts: Math.max(1, Math.min(Number(node?.config?.executionPolicy?.retryAttempts || 1) || 1, 10)),
   retryInterval: node?.config?.executionPolicy?.retryInterval || '0s',
+  retryBackoff: ['fixed', 'exponential'].includes(node?.config?.executionPolicy?.retryBackoff)
+    ? node.config.executionPolicy.retryBackoff
+    : 'fixed',
+  timeout: node?.config?.executionPolicy?.timeout || '',
   onFailure: ['continue', 'stop'].includes(node?.config?.executionPolicy?.onFailure)
     ? node.config.executionPolicy.onFailure
     : 'stop',
 });
 
-const executeWorkflowAction = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id)) => {
+const executeWorkflowAction = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id), options = {}) => {
   const input = createWorkflowNodeInput(action, event, context, nodeName);
   let config = input.config || {};
   const runtimeContext = {
@@ -1711,6 +1788,9 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
     const url = config.url || config.webhookUrl || config.endpoint || config.target;
     if (!url || !String(url).startsWith('http')) {
       return {...baseStep, status: 'skipped', output: 'Webhook action requires url/webhookUrl/target.'};
+    }
+    if (options.dryRun) {
+      return {...baseStep, output: {dryRun: true, action: 'webhook', method: 'POST', url}};
     }
 
     const response = await fetch(url, {
@@ -1791,6 +1871,19 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
     const headers = parseJsonConfig(config.headers, {'content-type': 'application/json'});
     const rawBody = config.body ? resolveWorkflowValue(config.body, runtimeContext, nodeName) : undefined;
     const bodyValue = typeof rawBody === 'string' ? parseJsonConfig(rawBody, rawBody) : rawBody;
+    if (options.dryRun) {
+      return {
+        ...baseStep,
+        output: {
+          dryRun: true,
+          action: 'http_request',
+          method: config.method || 'POST',
+          url: config.url,
+          headers,
+          body: bodyValue ?? {workflow: workflow.id, event},
+        },
+      };
+    }
     const response = await fetch(config.url, {
       method: config.method || 'POST',
       headers,
@@ -1870,6 +1963,18 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   }
 
   if (config.type === 'mqtt_publish') {
+    if (options.dryRun) {
+      return {
+        ...baseStep,
+        output: {
+          dryRun: true,
+          action: 'mqtt_publish',
+          deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, runtimeContext, nodeName) || event.deviceId || event.device?.id,
+          topic: config.topic,
+          payload: config.payload,
+        },
+      };
+    }
     const command = await createDeviceControlCommand({
       deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, runtimeContext, nodeName) || event.deviceId || event.device?.id,
       command: 'mqtt_publish',
@@ -1885,6 +1990,18 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
     const resolvedDeviceId = config.deviceSource === 'expression'
       ? resolveWorkflowValue(config.deviceExpression, runtimeContext, nodeName)
       : resolveWorkflowValue(config.device || config.target || config.deviceExpression, runtimeContext, nodeName);
+    if (options.dryRun) {
+      return {
+        ...baseStep,
+        output: {
+          dryRun: true,
+          action: 'device_control',
+          deviceId: resolvedDeviceId || event.deviceId || event.device?.id,
+          command: config.controlId || config.command || 'device_control',
+          parameters: config.parameters && typeof config.parameters === 'object' ? config.parameters : {value: config.value},
+        },
+      };
+    }
     const command = await createDeviceControlCommand({
       deviceId: resolvedDeviceId || event.deviceId || event.device?.id,
       command: config.controlId || config.command || 'device_control',
@@ -1899,6 +2016,16 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   }
 
   if (config.type === 'start_backup' || config.type === 'stop_device') {
+    if (options.dryRun) {
+      return {
+        ...baseStep,
+        output: {
+          dryRun: true,
+          action: config.type,
+          deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, runtimeContext, nodeName) || event.deviceId || event.device?.id,
+        },
+      };
+    }
     const command = await createDeviceControlCommand({
       deviceId: resolveWorkflowValue(config.targetExpression || config.deviceExpression || config.target, runtimeContext, nodeName) || event.deviceId || event.device?.id,
       command: config.type,
@@ -1911,6 +2038,18 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   }
 
   if (config.type === 'notification') {
+    if (options.dryRun) {
+      return {
+        ...baseStep,
+        output: {
+          dryRun: true,
+          action: 'notification',
+          title: config.title || 'System Notification',
+          message: config.message || '',
+          level: config.level || 'Info',
+        },
+      };
+    }
     const result = await dispatchWorkflowNotification(workflow, config, event);
     return {
       ...baseStep,
@@ -1938,16 +2077,21 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
   return {...baseStep, status: 'skipped', output: `Unsupported action type: ${config.type || 'unknown'}`};
 };
 
-const executeWorkflowActionWithPolicy = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id)) => {
+const executeWorkflowActionWithPolicy = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id), options = {}) => {
   const policy = getNodeExecutionPolicy(action);
   const totalAttempts = policy.retryEnabled ? policy.retryAttempts : 1;
   const retryIntervalMs = parseWorkflowRetryInterval(policy.retryInterval);
+  const timeoutMs = parseWorkflowDurationMs(policy.timeout, 120000);
   const attempts = [];
   let lastStep = null;
 
   for (let attempt = 1; attempt <= totalAttempts; attempt++) {
     try {
-      const step = await executeWorkflowAction(workflow, action, event, context, nodeName);
+      const step = await withWorkflowTimeout(
+        executeWorkflowAction(workflow, action, event, context, nodeName, options),
+        timeoutMs,
+        `Workflow node ${nodeName}`
+      );
       attempts.push({attempt, status: step.status, output: step.output});
       lastStep = step;
       if (step.status !== 'failed') break;
@@ -1966,13 +2110,14 @@ const executeWorkflowActionWithPolicy = async (workflow, action, event, context 
     }
 
     if (attempt < totalAttempts && retryIntervalMs > 0) {
-      await sleep(retryIntervalMs);
+      const backoffFactor = policy.retryBackoff === 'exponential' ? 2 ** (attempt - 1) : 1;
+      await sleep(Math.min(retryIntervalMs * backoffFactor, 120000));
     }
   }
 
-  if (!lastStep) return executeWorkflowAction(workflow, action, event, context, nodeName);
+  if (!lastStep) return executeWorkflowAction(workflow, action, event, context, nodeName, options);
 
-  if (policy.retryEnabled || lastStep.status === 'failed') {
+  if (policy.retryEnabled || lastStep.status === 'failed' || timeoutMs > 0) {
     lastStep = {
       ...lastStep,
       output: {
@@ -1981,6 +2126,8 @@ const executeWorkflowActionWithPolicy = async (workflow, action, event, context 
           retryEnabled: policy.retryEnabled,
           retryAttempts: totalAttempts,
           retryInterval: policy.retryInterval,
+          retryBackoff: policy.retryBackoff,
+          timeout: policy.timeout,
           onFailure: policy.onFailure,
         },
         attempts,
@@ -2017,6 +2164,7 @@ const executeWorkflowWithEdges = async (workflow, trigger, event, startedAt) => 
       id: createId('wfr'),
       workflowId: workflow.id,
       workflowName: workflow.name,
+      workflowVersion: workflow.runningVersion || workflow.publishedVersion || workflow.draftVersion || 1,
       triggerType: trigger.config?.type || 'unknown',
       eventSource: event.source || event.type,
       status,
@@ -2321,6 +2469,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
             id: createId('wfr'),
             workflowId: workflow.id,
             workflowName: workflow.name,
+            workflowVersion: workflow.runningVersion || workflow.publishedVersion || workflow.draftVersion || 1,
             triggerType: trigger.config?.type || 'unknown',
             eventSource: event.source || event.type,
             status: 'skipped',
@@ -2361,6 +2510,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
             id: createId('wfr'),
             workflowId: workflow.id,
             workflowName: workflow.name,
+            workflowVersion: workflow.runningVersion || workflow.publishedVersion || workflow.draftVersion || 1,
             triggerType: trigger.config?.type || 'unknown',
             eventSource: event.source || event.type,
             status: 'skipped',
@@ -2418,6 +2568,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
       id: createId('wfr'),
       workflowId: workflow.id,
       workflowName: workflow.name,
+      workflowVersion: workflow.runningVersion || workflow.publishedVersion || workflow.draftVersion || 1,
       triggerType: trigger.config?.type || 'unknown',
       eventSource: event.source || event.type,
       status: steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success',
@@ -2457,6 +2608,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
         id: createId('wfr'),
         workflowId: workflow.id,
         workflowName: workflow.name,
+        workflowVersion: workflow.runningVersion || workflow.publishedVersion || workflow.draftVersion || 1,
         triggerType: trigger.config?.type || 'unknown',
         eventSource: event.source || event.type,
         status: 'skipped',
@@ -2506,6 +2658,7 @@ const executeWorkflow = async (workflow, trigger, event) => {
     id: createId('wfr'),
     workflowId: workflow.id,
     workflowName: workflow.name,
+    workflowVersion: workflow.runningVersion || workflow.publishedVersion || workflow.draftVersion || 1,
     triggerType: trigger.config?.type || 'unknown',
     eventSource: event.source || event.type,
     status: steps.some((step) => step.status === 'failed') ? 'failed' : steps.some((step) => step.status === 'stopped') ? 'stopped' : 'success',
@@ -2516,15 +2669,85 @@ const executeWorkflow = async (workflow, trigger, event) => {
   });
 };
 
+const testWorkflowNode = async ({workflow, nodeId, event = {}, context = {}}) => {
+  if (!workflow || !Array.isArray(workflow.nodes)) {
+    throw new Error('Workflow draft is required.');
+  }
+  const node = workflow.nodes.find((item) => item.id === nodeId);
+  if (!node) throw new Error('Workflow node not found.');
+
+  const triggerType = node.config?.type || 'test';
+  const defaultEventType = node.type === 'trigger'
+    ? (['threshold', 'offline', 'alert', 'mqtt_message'].includes(triggerType)
+      ? 'telemetry'
+      : ['access', 'nfc_access'].includes(triggerType)
+        ? 'access'
+        : triggerType === 'webhook'
+          ? 'webhook'
+          : triggerType === 'schedule'
+            ? 'schedule'
+            : triggerType)
+    : 'test';
+  const defaultSource = triggerType === 'mqtt_message'
+    ? 'mqtt:test'
+    : triggerType === 'nfc_access'
+      ? 'nfc'
+      : 'node-test';
+  const testEvent = {
+    type: event.type || defaultEventType,
+    source: event.source || defaultSource,
+    message: {},
+    receivedAt: new Date().toISOString(),
+    ...event,
+  };
+  const nodeNamesById = buildWorkflowNodeNameMap(workflow);
+  const nodeName = nodeNamesById.get(node.id) || normalizeWorkflowNodeName(node, node.id);
+
+  if (node.type === 'trigger') {
+    const input = createWorkflowNodeInput(node, testEvent, context, nodeName);
+    const output = createWorkflowTriggerOutput(node, testEvent);
+    return {
+      nodeId: node.id,
+      nodeName,
+      type: node.config?.type || 'trigger',
+      status: triggerMatchesEvent(node, testEvent) ? 'success' : 'skipped',
+      input,
+      output,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    };
+  }
+
+  if (node.type === 'condition') {
+    const input = createWorkflowNodeInput(node, testEvent, context, nodeName);
+    const passed = conditionMatchesEvent(node, testEvent, context, nodeName);
+    return {
+      nodeId: node.id,
+      nodeName,
+      type: node.config?.type || 'condition',
+      status: passed ? 'success' : 'skipped',
+      input,
+      output: {passed, message: passed ? 'Condition passed' : 'Condition did not match test event'},
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    };
+  }
+
+  return executeWorkflowActionWithPolicy(workflow, node, testEvent, context, nodeName, {dryRun: true});
+};
+
 const dispatchWorkflowEvent = async (event) => {
   const workflows = await getDashboardWorkflows();
   const enabledWorkflows = workflows.filter((workflow) => workflow?.enabled);
 
   await Promise.all(enabledWorkflows.map(async (workflow) => {
-    const triggers = workflow.nodes.filter((node) => node.type === 'trigger');
+    const executableWorkflow = getExecutableWorkflow(workflow);
+    const triggers = executableWorkflow.nodes.filter((node) => node.type === 'trigger');
     const matchedTrigger = triggers.find((trigger) => triggerMatchesEvent(trigger, event));
 
-    if (matchedTrigger) await executeWorkflow(workflow, matchedTrigger, event);
+    if (matchedTrigger && shouldExecuteWorkflowTrigger(executableWorkflow, matchedTrigger, event)) {
+      await executeWorkflow(executableWorkflow, matchedTrigger, event);
+    }
   }));
 };
 
@@ -2538,20 +2761,25 @@ const runScheduledWorkflows = async () => {
   const enabledWorkflows = workflows.filter((workflow) => workflow?.enabled);
 
   for (const workflow of enabledWorkflows) {
-    const scheduleTrigger = workflow.nodes.find((node) => (
+    const executableWorkflow = getExecutableWorkflow(workflow);
+    const scheduleTrigger = executableWorkflow.nodes.find((node) => (
       node.type === 'trigger'
       && node.config?.type === 'schedule'
       && cronMatchesNow(node.config?.crontab, now)
     ));
 
-    if (scheduleTrigger) {
-      await executeWorkflow(workflow, scheduleTrigger, {
+    if (!scheduleTrigger) continue;
+
+    const scheduleEvent = {
         type: 'schedule',
         source: 'schedule',
-        workflowId: workflow.id,
+        workflowId: executableWorkflow.id,
         scheduledAt: now.toISOString(),
         crontab: scheduleTrigger.config?.crontab,
-      });
+    };
+
+    if (shouldExecuteWorkflowTrigger(executableWorkflow, scheduleTrigger, scheduleEvent)) {
+      await executeWorkflow(executableWorkflow, scheduleTrigger, scheduleEvent);
     }
   }
 };
@@ -3809,8 +4037,11 @@ app.post('/api/workflow-webhooks/:workflowId/:token', async (req, res) => {
     const workflows = await getDashboardWorkflows();
     const targetWorkflow = workflows.find((workflow) => workflow.id === workflowId);
     if (targetWorkflow?.enabled) {
-      const trigger = targetWorkflow.nodes.find((node) => node.type === 'trigger' && triggerMatchesEvent(node, event));
-      if (trigger) await executeWorkflow(targetWorkflow, trigger, event);
+      const executableWorkflow = getExecutableWorkflow(targetWorkflow);
+      const trigger = executableWorkflow.nodes.find((node) => node.type === 'trigger' && triggerMatchesEvent(node, event));
+      if (trigger && shouldExecuteWorkflowTrigger(executableWorkflow, trigger, event)) {
+        await executeWorkflow(executableWorkflow, trigger, event);
+      }
     }
 
     res.status(202).json({accepted: true, workflowId});
@@ -3827,7 +4058,7 @@ app.get('/api/workflow-runs', async (req, res) => {
     if (db) {
       const result = workflowId
         ? await queryDb(
-          `SELECT id, workflow_id AS "workflowId", workflow_name AS "workflowName", trigger_type AS "triggerType",
+          `SELECT id, workflow_id AS "workflowId", workflow_name AS "workflowName", workflow_version AS "workflowVersion", trigger_type AS "triggerType",
                   event_source AS "eventSource", status, event, steps, started_at AS "startedAt", finished_at AS "finishedAt"
            FROM workflow_runs
            WHERE workflow_id = $1
@@ -3836,7 +4067,7 @@ app.get('/api/workflow-runs', async (req, res) => {
           [workflowId, limit]
         )
         : await queryDb(
-          `SELECT id, workflow_id AS "workflowId", workflow_name AS "workflowName", trigger_type AS "triggerType",
+          `SELECT id, workflow_id AS "workflowId", workflow_name AS "workflowName", workflow_version AS "workflowVersion", trigger_type AS "triggerType",
                   event_source AS "eventSource", status, event, steps, started_at AS "startedAt", finished_at AS "finishedAt"
            FROM workflow_runs
            ORDER BY started_at DESC
@@ -3853,6 +4084,20 @@ app.get('/api/workflow-runs', async (req, res) => {
     res.status(200).json({runs});
   } catch (error) {
     res.status(500).json({error: error.message, runs: []});
+  }
+});
+
+app.post('/api/workflows/test-node', async (req, res) => {
+  try {
+    const step = await testWorkflowNode({
+      workflow: req.body?.workflow,
+      nodeId: req.body?.nodeId,
+      event: req.body?.event || {},
+      context: req.body?.context || {},
+    });
+    res.status(200).json({ok: true, step: sanitizeWorkflowLogValue(step)});
+  } catch (error) {
+    res.status(400).json({ok: false, error: error.message});
   }
 });
 
