@@ -1,4 +1,5 @@
 import type { Device, DeviceTelemetryMessage } from '../types';
+import { applyMetricMappingsToMetrics } from './metricMappings';
 
 const toNumberMetrics = (metrics: Record<string, unknown> = {}) => {
   return Object.entries(metrics).reduce<Record<string, number>>((acc, [key, value]) => {
@@ -80,7 +81,7 @@ export const mergeTelemetryIntoDevices = (devices: Device[], payload: DeviceTele
 
   const existingDevice = devices.find((device) => device.id === id || device.config?.externalDeviceId === id);
   const nextDevice = normalizeDevice(payload);
-  const incomingMetrics = extractTelemetryMetrics(payload);
+  const incomingMetrics = applyMetricMappingsToMetrics(existingDevice, extractTelemetryMetrics(payload));
 
   if (!existingDevice) {
     return nextDevice ? [...devices, nextDevice] : devices;

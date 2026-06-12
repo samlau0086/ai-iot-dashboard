@@ -11,6 +11,7 @@ import type { Device } from '../types';
 import { isDeviceTelemetryFresh } from '../lib/deviceStatus';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
+import { applyMetricMappingsToMetrics } from '../lib/metricMappings';
 
 const CANVAS_WIDTH = 2200;
 const CANVAS_HEIGHT = 1400;
@@ -473,7 +474,7 @@ export function ScadaView() {
           lastSeen: messageTime ? new Date(messageTime).toISOString() : target.lastSeen,
           metrics: {
             ...target.metrics,
-            ...getTelemetryMetrics(message),
+            ...applyMetricMappingsToMetrics(target, getTelemetryMetrics(message)),
           },
         });
       });

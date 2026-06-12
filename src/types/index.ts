@@ -34,6 +34,7 @@ export interface DeviceConfig {
   commandTopic?: string;
   mqttCommandTopic?: string;
   metricMapping?: Record<string, string>;
+  metricMappings?: DeviceMetricMapping[];
   controlState?: Record<string, unknown>;
   controlDefinitions?: Array<{
     id: string;
@@ -111,6 +112,15 @@ export interface Device {
     fileName?: string;
   };
   config?: DeviceConfig;
+}
+
+export interface DeviceMetricMapping {
+  rawKey: string;
+  standardKey: string;
+  displayName?: string;
+  unit?: string;
+  precision?: number;
+  primary?: boolean;
 }
 
 export interface DeviceTelemetryMessage {

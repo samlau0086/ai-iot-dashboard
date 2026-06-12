@@ -9,6 +9,17 @@ import { DeviceForm } from '../components/DeviceForm';
 import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, sanitizeControlDefinition, type DeviceControlDefinition, type DeviceControlValueType } from '../lib/deviceControls';
 import { confirmDelete } from '../lib/confirm';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import {
+  STANDARD_METRIC_OPTIONS,
+  applyMetricMappingsToMetrics,
+  getMetricLabel,
+  getMetricMappings,
+  getMetricPrecision,
+  getMetricUnit,
+  getPrimaryMappedMetricKeys,
+  inferMetricUnit,
+} from '../lib/metricMappings';
+import type { DeviceMetricMapping } from '../types';
 
 type DeviceMetricLog = {
   device_id?: string;
@@ -63,6 +74,8 @@ export function DeviceDetails() {
   const [metricLogsError, setMetricLogsError] = useState('');
   const [metricLogMetric, setMetricLogMetric] = useState('');
   const [metricLogLimit, setMetricLogLimit] = useState(50);
+  const [metricMappingsDraft, setMetricMappingsDraft] = useState<DeviceMetricMapping[]>([]);
+  const [metricMappingMessage, setMetricMappingMessage] = useState('');
   const controlDefinitions = getDeviceControlDefinitions(device);
   const canControl = currentUser?.role !== 'Demo' && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
 
@@ -92,7 +105,6 @@ export function DeviceDetails() {
       const responses = await Promise.all(deviceIds.map(async (deviceIdValue) => {
         const params = new URLSearchParams();
         params.set('deviceId', String(deviceIdValue));
-        if (metricLogMetric) params.set('metric', metricLogMetric);
         params.set('limit', String(metricLogLimit));
         const response = await fetch(`/api/telemetry?${params.toString()}`);
         const payload = await response.json();
@@ -119,11 +131,22 @@ export function DeviceDetails() {
     queryMetricLogs();
   }, [storedDevice?.id, storedDevice?.config?.externalDeviceId, metricLogMetric, metricLogLimit]);
 
+  useEffect(() => {
+    setMetricMappingsDraft(getMetricMappings(storedDevice || device));
+    setMetricMappingMessage('');
+  }, [storedDevice?.id, device?.id]);
+
   const metricLogOptions = Array.from(new Set([
     ...Object.keys(storedDevice?.metrics || {}),
     ...Object.keys(device?.metrics || {}),
     ...metricLogs.flatMap((message) => Object.keys(message.metrics || {})),
   ])).sort();
+
+  const rawMetricOptions = Array.from(new Set([
+    ...metricLogs.flatMap((message) => Object.keys(message.metrics || {})),
+    ...metricMappingsDraft.map((mapping) => mapping.rawKey),
+  ])).sort();
+  const discoveredMetricKeys = rawMetricOptions.length ? rawMetricOptions : metricLogOptions;
 
   if (!device) {
     return (
@@ -299,6 +322,8 @@ export function DeviceDetails() {
   const metricValue = (key: string) => Number(device.metrics?.[key]) || 0;
 
   const metricUnit = (key: string) => {
+    const mappedUnit = getMetricUnit(device, key);
+    if (mappedUnit) return mappedUnit;
     if (key.includes('power') || key === 'pv_power') return 'W';
     if (key.includes('energy') || key.includes('generation')) return 'kWh';
     if (key.includes('temp')) return 'deg C';
@@ -468,7 +493,12 @@ export function DeviceDetails() {
     ],
   };
 
-  const primaryMetricKeys = primaryMetricKeysByType[device.type] || Object.keys(device.metrics || {}).slice(0, 4).map((key) => ({ key, label: key, icon: Activity }));
+  const mappedPrimaryMetricKeys = getPrimaryMappedMetricKeys(device)
+    .filter((key) => device.metrics?.[key] !== undefined)
+    .map((key) => ({ key, label: getMetricLabel(device, key), icon: Activity }));
+  const primaryMetricKeys = mappedPrimaryMetricKeys.length
+    ? mappedPrimaryMetricKeys
+    : primaryMetricKeysByType[device.type] || Object.keys(device.metrics || {}).slice(0, 4).map((key) => ({ key, label: getMetricLabel(device, key), icon: Activity }));
   const primaryMetrics = primaryMetricKeys.filter((metric) => device.metrics?.[metric.key] !== undefined);
   const primaryMetricSet = new Set(primaryMetrics.map((metric) => metric.key));
   const secondaryMetrics = Object.entries(device.metrics || {}).filter(([key]) => !primaryMetricSet.has(key));
@@ -478,11 +508,67 @@ export function DeviceDetails() {
     return String(value);
   };
 
+  const updateMetricMappingDraft = (rawKey: string, patch: Partial<DeviceMetricMapping>) => {
+    setMetricMappingsDraft((current) => {
+      const existing = current.find((mapping) => mapping.rawKey === rawKey);
+      const nextMapping = {
+        rawKey,
+        standardKey: patch.standardKey || existing?.standardKey || rawKey,
+        displayName: patch.displayName ?? existing?.displayName ?? getMetricLabel(device, patch.standardKey || existing?.standardKey || rawKey),
+        unit: patch.unit ?? existing?.unit ?? inferMetricUnit(patch.standardKey || existing?.standardKey || rawKey),
+        precision: patch.precision ?? existing?.precision ?? 2,
+        primary: patch.primary ?? existing?.primary ?? false,
+      };
+      return existing
+        ? current.map((mapping) => mapping.rawKey === rawKey ? { ...mapping, ...nextMapping } : mapping)
+        : [...current, nextMapping].sort((first, second) => first.rawKey.localeCompare(second.rawKey));
+    });
+    setMetricMappingMessage('');
+  };
+
+  const deleteMetricMappingDraft = async (rawKey: string) => {
+    if (!(await confirmDelete({ title: 'Delete metric mapping', itemName: rawKey, description: 'This raw telemetry field will no longer be mapped to a standard metric.' }))) return;
+    setMetricMappingsDraft((current) => current.filter((mapping) => mapping.rawKey !== rawKey));
+    setMetricMappingMessage('');
+  };
+
+  const saveMetricMappings = () => {
+    const nextMappings = metricMappingsDraft
+      .map((mapping) => ({
+        rawKey: String(mapping.rawKey || '').trim(),
+        standardKey: String(mapping.standardKey || '').trim(),
+        displayName: String(mapping.displayName || '').trim(),
+        unit: String(mapping.unit || '').trim(),
+        precision: Math.max(0, Math.min(6, Number(mapping.precision ?? 2))),
+        primary: Boolean(mapping.primary),
+      }))
+      .filter((mapping) => mapping.rawKey && mapping.standardKey);
+
+    const nextDeviceForMapping = {
+      ...device,
+      config: {
+        ...(device.config || {}),
+        metricMappings: nextMappings,
+      },
+    };
+
+    updateDevice(device.id, {
+      metrics: applyMetricMappingsToMetrics(nextDeviceForMapping, device.metrics || {}),
+      config: {
+        ...(device.config || {}),
+        metricMappings: nextMappings,
+        metricMapping: Object.fromEntries(nextMappings.map((mapping) => [mapping.rawKey, mapping.standardKey])),
+      },
+    });
+    setMetricMappingMessage('Metric mappings saved. New telemetry will populate mapped standard metrics automatically.');
+  };
+
   const renderMetricCard = (metric: { key: string; label: string; icon: any }) => {
     const value = metricValue(metric.key);
     const max = metricMax(metric.key, value);
     const percent = max === 0 ? 100 : Math.max(0, Math.min(100, Math.abs(value) / max * 100));
     const Icon = metric.icon;
+    const precision = getMetricPrecision(device, metric.key);
 
     return (
       <div key={metric.key} className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800/50 dark:bg-slate-900">
@@ -490,7 +576,7 @@ export function DeviceDetails() {
           <div className="min-w-0">
             <p className="truncate text-[10px] font-mono uppercase tracking-wider text-slate-500">{metric.label}</p>
             <p className="mt-2 truncate text-2xl font-semibold text-slate-900 dark:text-white">
-              {value.toFixed(value % 1 === 0 ? 0 : 1)}
+              {value.toFixed(value % 1 === 0 ? 0 : precision)}
               <span className="ml-1 text-sm font-normal text-slate-500">{metricUnit(metric.key)}</span>
             </p>
           </div>
@@ -633,9 +719,9 @@ export function DeviceDetails() {
                     <div className="divide-y divide-slate-100 dark:divide-slate-800/70">
                       {secondaryMetrics.map(([key, value]) => (
                         <div key={key} className="flex items-center justify-between gap-3 px-4 py-3 text-xs font-mono">
-                          <span className="min-w-0 truncate text-slate-500">{key}</span>
+                          <span className="min-w-0 truncate text-slate-500">{getMetricLabel(device, key)}</span>
                           <span className="text-slate-900 dark:text-slate-300">
-                            {String(value)} {metricUnit(key)}
+                            {Number(value).toFixed(Number(value) % 1 === 0 ? 0 : getMetricPrecision(device, key))} {metricUnit(key)}
                           </span>
                         </div>
                       ))}
@@ -661,6 +747,141 @@ export function DeviceDetails() {
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white uppercase tracking-wider text-[11px] font-mono">
+                  <Settings className="h-4 w-4" /> Metrics Mapping
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Map raw telemetry fields to standard metrics used by Overview widgets, Analytics charts, SCADA, and reports.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={saveMetricMappings}
+                className="inline-flex h-8 items-center gap-1.5 rounded border border-orange-500 bg-orange-600 px-3 text-xs font-semibold text-white hover:bg-orange-500"
+              >
+                Save Mappings
+              </button>
+            </div>
+
+            {metricMappingMessage && (
+              <div className="mb-4 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+                {metricMappingMessage}
+              </div>
+            )}
+
+            <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+              <div className="max-h-96 overflow-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-left text-xs dark:divide-slate-800">
+                  <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 dark:bg-slate-900">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Raw Field</th>
+                      <th className="px-3 py-2 font-semibold">Standard Metric</th>
+                      <th className="px-3 py-2 font-semibold">Display Name</th>
+                      <th className="px-3 py-2 font-semibold">Unit</th>
+                      <th className="px-3 py-2 font-semibold">Precision</th>
+                      <th className="px-3 py-2 font-semibold">Primary</th>
+                      <th className="px-3 py-2 font-semibold"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white font-mono dark:divide-slate-800/70 dark:bg-[#1c2128]">
+                    {discoveredMetricKeys.map((rawKey) => {
+                      const mapping = metricMappingsDraft.find((item) => item.rawKey === rawKey);
+                      const standardKey = mapping?.standardKey || '';
+                      const currentValue = device.metrics?.[rawKey];
+
+                      return (
+                        <tr key={rawKey} className="hover:bg-slate-50 dark:hover:bg-slate-900/60">
+                          <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">
+                            <div className="font-semibold">{rawKey}</div>
+                            <div className="mt-0.5 text-[10px] text-slate-400">latest {formatMetricLogValue(currentValue)}</div>
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              list="standard-metric-options"
+                              value={standardKey}
+                              onChange={(event) => {
+                                const nextStandardKey = event.target.value;
+                                const standardMetric = STANDARD_METRIC_OPTIONS.find((option) => option.key === nextStandardKey);
+                                updateMetricMappingDraft(rawKey, {
+                                  standardKey: nextStandardKey,
+                                  displayName: mapping?.displayName || standardMetric?.label || nextStandardKey,
+                                  unit: mapping?.unit || standardMetric?.unit || inferMetricUnit(nextStandardKey),
+                                });
+                              }}
+                              placeholder="temperature"
+                              className="h-8 w-44 rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              value={mapping?.displayName || ''}
+                              onChange={(event) => updateMetricMappingDraft(rawKey, { displayName: event.target.value })}
+                              placeholder="Display name"
+                              className="h-8 w-40 rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              value={mapping?.unit || ''}
+                              onChange={(event) => updateMetricMappingDraft(rawKey, { unit: event.target.value })}
+                              placeholder="unit"
+                              className="h-8 w-24 rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="number"
+                              min={0}
+                              max={6}
+                              value={mapping?.precision ?? 2}
+                              onChange={(event) => updateMetricMappingDraft(rawKey, { precision: Number(event.target.value || 0) })}
+                              className="h-8 w-20 rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(mapping?.primary)}
+                              onChange={(event) => updateMetricMappingDraft(rawKey, { primary: event.target.checked })}
+                              className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                            />
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {mapping && (
+                              <button
+                                type="button"
+                                onClick={() => deleteMetricMappingDraft(rawKey)}
+                                className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10"
+                                title="Delete mapping"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {discoveredMetricKeys.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">
+                          No telemetry fields discovered yet. Send a MQTT or HTTP telemetry payload, then refresh this page.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <datalist id="standard-metric-options">
+              {STANDARD_METRIC_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>{option.label}</option>
+              ))}
+            </datalist>
           </div>
 
           <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
@@ -740,7 +961,8 @@ export function DeviceDetails() {
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white font-mono dark:divide-slate-800/70 dark:bg-[#1c2128]">
                     {metricLogs.map((message, index) => {
-                      const metrics = message.metrics || {};
+                      const rawMetrics = message.metrics || {};
+                      const metrics = applyMetricMappingsToMetrics(device, rawMetrics);
                       const metricEntries = Object.entries(metrics);
                       const selectedValue = metricLogMetric ? metrics[metricLogMetric] : undefined;
                       const preview = metricEntries.slice(0, 4).map(([key, value]) => `${key}: ${formatMetricLogValue(value)}`).join(' | ');

@@ -13,6 +13,7 @@ import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import type { Device } from '../types';
+import { applyMetricMappingsToMetrics } from '../lib/metricMappings';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 const GRID_COLS = 12;
@@ -883,7 +884,15 @@ export function Overview() {
     });
 
     const visibleMessages = historyMessages
-      .map((message) => ({ message, time: getTelemetryTime(message), metrics: getTelemetryMetrics(message) }))
+      .map((message) => {
+        const telemetryDeviceId = getTelemetryDeviceId(message);
+        const boundDevice = targetDevices.find((device) => device.id === telemetryDeviceId || device.config?.externalDeviceId === telemetryDeviceId);
+        return {
+          message,
+          time: getTelemetryTime(message),
+          metrics: applyMetricMappingsToMetrics(boundDevice, getTelemetryMetrics(message)),
+        };
+      })
       .filter(({ message, time, metrics }) => (
         time >= historyStartMs
         && time <= historyCursor

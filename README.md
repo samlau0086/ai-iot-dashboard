@@ -99,6 +99,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [ ] 时间范围查询
 - [ ] 设备对比
 - [ ] 数据导出
+- [x] Device Metrics Mapping：raw telemetry fields 可映射到标准 metrics，并配置显示名、单位、精度和 Primary 标记
 - [ ] SQL-like Query / Metric Builder
 
 ### V4: Control Center
@@ -485,6 +486,17 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 项目已提供真实设备数据接入入口。推荐方式是网关通过 HTTP 主动 POST 遥测数据到 Dashboard 后端；也可以让 Dashboard 后端连接外部 MQTT Broker 并订阅 Topic。前端统一只读取 Dashboard 后端的 `/api/telemetry` 缓冲区。
 
 同一种数据源类型支持配置多条通道。可以在后台 **Settings -> Data Sources** 中新增多个 HTTP Push endpoint 或多个 MQTT Subscriber，例如不同厂区、不同网关、不同客户站点各用独立通道。配置会保存到 PostgreSQL 的 `app_state` 表；未配置 `DATABASE_URL` 的本地演示环境才会回退到服务器本地 `runtime-config.json`。
+
+### Device Metrics Mapping
+
+不同设备上报的字段名可能不同，例如 `pwr`、`kw`、`active_power` 都可能表示系统里的标准指标 `power`。进入 **Device Details -> Metrics Mapping** 后，系统会根据该设备历史 telemetry logs 自动列出已经出现过的 raw fields；可以将每个 raw field 映射为标准 metric，并配置显示名称、单位、精度和是否作为 Primary metric。
+
+保存 mapping 后：
+
+- 后续 MQTT / HTTP 上报会保留原始字段，同时自动生成映射后的标准字段。
+- Overview widgets、Analytics charts、SCADA 和 Reports 可直接绑定标准 metric，例如 `power`、`energy`、`temperature`。
+- 设备详情页的 Live Metrics 会优先使用 mapping 中的显示名称、单位和精度。
+- 历史回放会基于设备 mapping 将原始 telemetry logs 转换为标准 metric 后再展示。
 
 ### Gateway HTTP Push
 
