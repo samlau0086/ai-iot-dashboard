@@ -238,6 +238,64 @@ const getPathValue = (target: unknown, pathExpression = '') => {
 };
 
 const workflowReferenceTokenRegex = /\$\.(?:([A-Za-z0-9_$\u4e00-\u9fa5-]+)\.)?(input|output)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?/g;
+const workflowFunctionHelpers = [
+  { name: 'now', snippet: 'now()', description: 'Current timestamp as ISO string.' },
+  { name: 'formatDate', snippet: 'formatDate($.input.receivedAt, "YYYY-MM-DD HH:mm:ss")', description: 'Format a date value.' },
+  { name: 'toNumber', snippet: 'toNumber($.input.value)', description: 'Convert value to number.' },
+  { name: 'round', snippet: 'round($.input.value, 2)', description: 'Round number to decimals.' },
+  { name: 'contains', snippet: 'contains($.input.status, "alarm")', description: 'Check whether text contains keyword.' },
+  { name: 'default', snippet: 'default($.input.deviceId, "UNKNOWN")', description: 'Fallback when value is empty.' },
+  { name: 'upper', snippet: 'upper($.input.name)', description: 'Uppercase text.' },
+  { name: 'lower', snippet: 'lower($.input.name)', description: 'Lowercase text.' },
+];
+const workflowFunctionNames = new Set(workflowFunctionHelpers.map((helper) => helper.name));
+const workflowFunctionArity: Record<string, [number, number]> = {
+  now: [0, 0],
+  formatDate: [1, 2],
+  toNumber: [1, 1],
+  round: [1, 2],
+  contains: [2, 2],
+  default: [2, 2],
+  upper: [1, 1],
+  lower: [1, 1],
+};
+
+const splitWorkflowFunctionArgs = (argsText = '') => {
+  const args: string[] = [];
+  let current = '';
+  let quote = '';
+  let depth = 0;
+  for (let index = 0; index < argsText.length; index += 1) {
+    const char = argsText[index];
+    const previous = argsText[index - 1];
+    if (quote) {
+      current += char;
+      if (char === quote && previous !== '\\') quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '(') depth += 1;
+    if (char === ')') depth = Math.max(0, depth - 1);
+    if (char === ',' && depth === 0) {
+      args.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim() || argsText.trim()) args.push(current.trim());
+  return args;
+};
+
+const parseWorkflowFunctionCall = (expression: string) => {
+  const match = String(expression || '').trim().match(/^([A-Za-z_][A-Za-z0-9_]*)\(([\s\S]*)\)$/);
+  if (!match) return null;
+  return { name: match[1], args: splitWorkflowFunctionArgs(match[2]) };
+};
 
 const resolveEditorReference = (
   reference: string,
@@ -254,16 +312,94 @@ const resolveEditorReference = (
   return getPathValue(section === 'input' ? sourceStep.input : sourceStep.output, pathExpression || '');
 };
 
+const formatEditorDate = (value: unknown, format = 'iso') => {
+  const date = value ? new Date(String(value)) : new Date();
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (number: number) => String(number).padStart(2, '0');
+  const tokens: Record<string, string> = {
+    YYYY: String(date.getFullYear()),
+    MM: pad(date.getMonth() + 1),
+    DD: pad(date.getDate()),
+    HH: pad(date.getHours()),
+    mm: pad(date.getMinutes()),
+    ss: pad(date.getSeconds()),
+  };
+  if (format === 'iso') return date.toISOString();
+  if (format === 'date') return `${tokens.YYYY}-${tokens.MM}-${tokens.DD}`;
+  if (format === 'time') return `${tokens.HH}:${tokens.mm}:${tokens.ss}`;
+  return String(format).replace(/YYYY|MM|DD|HH|mm|ss/g, (token) => tokens[token]);
+};
+
+const evaluateEditorFunction = (name: string, args: unknown[]) => {
+  switch (name) {
+    case 'now':
+      return new Date().toISOString();
+    case 'formatDate':
+      return formatEditorDate(args[0], String(args[1] || 'iso'));
+    case 'toNumber': {
+      const number = Number(args[0]);
+      return Number.isFinite(number) ? number : 0;
+    }
+    case 'round': {
+      const decimals = Math.max(0, Math.min(Number(args[1] ?? 0) || 0, 10));
+      const factor = 10 ** decimals;
+      return Math.round((Number(args[0]) || 0) * factor) / factor;
+    }
+    case 'contains':
+      return String(args[0] ?? '').includes(String(args[1] ?? ''));
+    case 'default':
+      return args[0] === undefined || args[0] === null || args[0] === '' ? args[1] : args[0];
+    case 'upper':
+      return String(args[0] ?? '').toUpperCase();
+    case 'lower':
+      return String(args[0] ?? '').toLowerCase();
+    default:
+      return undefined;
+  }
+};
+
+const resolveEditorExpressionValue = (
+  expression: string,
+  currentStep: WorkflowRunStep | null,
+  run?: WorkflowRunLog | null,
+): unknown => {
+  const trimmed = String(expression || '').trim();
+  const wholeReference = resolveEditorReference(trimmed, currentStep, run);
+  if (wholeReference !== undefined) return wholeReference;
+  const call = parseWorkflowFunctionCall(trimmed);
+  if (call && workflowFunctionNames.has(call.name)) {
+    const args = call.args.map((arg) => {
+      const value = arg.trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
+      if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+      if (value === 'null') return null;
+      const directReference = resolveEditorReference(value, currentStep, run);
+      if (directReference !== undefined) return directReference;
+      if (/^\$\.(?:([A-Za-z0-9_$\u4e00-\u9fa5-]+)\.)?(input|output)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?$/.test(value)) return undefined;
+      const nested = resolveEditorExpressionValue(value, currentStep, run);
+      return nested === undefined ? value : nested;
+    });
+    return evaluateEditorFunction(call.name, args);
+  }
+  return undefined;
+};
+
 const previewEditorExpression = (
   expression: unknown,
   currentStep: WorkflowRunStep | null,
   run?: WorkflowRunLog | null,
 ) => {
-  if (typeof expression !== 'string' || !expression.includes('$.')) return null;
-  const whole = resolveEditorReference(expression, currentStep, run);
+  if (typeof expression !== 'string' || (!expression.includes('$.') && !expression.includes('('))) return null;
+  const whole = resolveEditorExpressionValue(expression, currentStep, run);
   if (whole !== undefined) return whole;
   return expression.replace(workflowReferenceTokenRegex, (match) => {
     const value = resolveEditorReference(match, currentStep, run);
+    if (value === undefined || value === null) return match;
+    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+  }).replace(/\b(now|formatDate|toNumber|round|contains|default|upper|lower)\(([^()]*)\)/g, (match) => {
+    const value = resolveEditorExpressionValue(match, currentStep, run);
     if (value === undefined || value === null) return match;
     return typeof value === 'object' ? JSON.stringify(value) : String(value);
   });
@@ -279,6 +415,25 @@ const getUnresolvedEditorReferences = (
   return matches.filter((reference, index, items) => (
     items.indexOf(reference) === index && resolveEditorReference(reference, currentStep, run) === undefined
   ));
+};
+
+const getEditorFunctionIssues = (expression: unknown) => {
+  if (typeof expression !== 'string' || !expression.includes('(')) return [];
+  const issues: string[] = [];
+  const matches = Array.from(expression.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\(([^()]*)\)/g));
+  matches.forEach((match) => {
+    const name = match[1];
+    if (!workflowFunctionNames.has(name)) {
+      if (expression.includes('$.')) issues.push(`Unknown function: ${name}()`);
+      return;
+    }
+    const args = splitWorkflowFunctionArgs(match[2]);
+    const [minArgs, maxArgs] = workflowFunctionArity[name] || [0, 99];
+    if (args.length < minArgs || args.length > maxArgs) {
+      issues.push(`${name}() expects ${minArgs === maxArgs ? minArgs : `${minArgs}-${maxArgs}`} argument(s), got ${args.length}`);
+    }
+  });
+  return issues.filter((issue, index, items) => items.indexOf(issue) === index);
 };
 
 const getActionIcon = (type: string) => {
@@ -2075,7 +2230,8 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               const renderExpressionPreview = (value: unknown) => {
                 const preview = previewEditorExpression(value, displayedStep, referenceRun);
                 const unresolved = getUnresolvedEditorReferences(value, displayedStep, referenceRun);
-                if (preview === null && unresolved.length === 0) return null;
+                const functionIssues = getEditorFunctionIssues(value);
+                if (preview === null && unresolved.length === 0 && functionIssues.length === 0) return null;
                 return (
                   <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-800 dark:bg-slate-900/60">
                     <div className="mb-1 font-semibold text-slate-500 dark:text-slate-400">Preview</div>
@@ -2085,6 +2241,11 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                     {unresolved.length > 0 && (
                       <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
                         Unresolved: {unresolved.join(', ')}
+                      </div>
+                    )}
+                    {functionIssues.length > 0 && (
+                      <div className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+                        Function: {functionIssues.join(', ')}
                       </div>
                     )}
                   </div>
@@ -2124,6 +2285,22 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                         ))}
                       </div>
                     )}
+                    <div className="mt-2 border-t border-orange-200 pt-2 dark:border-orange-500/20">
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Function Helpers</div>
+                      <div className="grid gap-1 sm:grid-cols-2">
+                        {workflowFunctionHelpers.map((helper) => (
+                          <button
+                            key={`${key}-${helper.name}`}
+                            type="button"
+                            onClick={() => insertReferenceIntoConfig(node.id, key, helper.snippet)}
+                            className="rounded-md border border-orange-100 bg-white/80 px-2 py-1.5 text-left hover:border-orange-300 hover:bg-orange-100 dark:border-orange-500/20 dark:bg-slate-950/30 dark:hover:bg-orange-500/20"
+                          >
+                            <span className="block truncate font-mono text-[11px] font-semibold text-orange-700 dark:text-orange-300">{helper.snippet}</span>
+                            <span className="block truncate text-[10px] text-slate-500 dark:text-slate-400">{helper.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 );
               };

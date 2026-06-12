@@ -133,7 +133,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Expression builder with variable picker, preview, and unresolved reference hints.
 - [x] Workflow dry-run simulator with full-flow logs and no external side effects.
 - [x] Workflow preflight validation with error/warning/info severity before publish.
-- [ ] Expression helper functions such as now(), formatDate(), toNumber(), contains(), round().
+- [x] Expression helper functions: now(), formatDate(), toNumber(), round(), contains(), default(), upper(), lower().
 - [x] Workflow import / export JSON.
 - [x] Workflow template library / preset workflows.
 - [ ] Workflow template marketplace.
@@ -350,6 +350,8 @@ Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。
 工作流编辑页支持 **Validate** 发布前校验。校验结果分为 Error、Warning、Info：Error 会阻止发布，例如缺少 Trigger、设备控制未绑定设备或控制项、Webhook URL 非法、Access Trigger 未绑定 Access；Warning 会在发布前提示确认，例如通知消息为空、Trigger 未配置 cooldown、静态设备绑定未找到；Info 用于提示外部副作用节点等结构信息。点击带节点信息的校验项可以定位到对应节点。
 
 工作流编辑页支持 **Search Nodes** 与快捷键操作。可以按节点名称、节点类型、设备 ID、Access ID、配置内容或变量引用快速定位节点；`Ctrl/Cmd + K` 打开搜索，`Ctrl/Cmd + S` 保存草稿，`Ctrl/Cmd + Enter` 打开 Dry Run，`Esc` 关闭当前弹层。
+
+工作流表达式支持函数 helper，可在通知消息、Webhook body、设备控制表达式、IF / CASE 条件、Set 节点等配置字段中使用。当前支持 `now()`、`formatDate(value, format)`、`toNumber(value)`、`round(value, decimals)`、`contains(value, keyword)`、`default(value, fallback)`、`upper(value)`、`lower(value)`；变量选择器中提供 **Function Helpers** 插入入口，预览区会显示解析结果、未解析变量和函数参数错误。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 

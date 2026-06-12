@@ -1585,6 +1585,17 @@ const getObjectPath = (target, pathExpression = '') => {
 const workflowReferencePattern = String.raw`\$\.(?:([A-Za-z0-9_$\u4e00-\u9fa5-]+)\.)?(input|output|status|nodeId|type)(?:\.([A-Za-z0-9_$\u4e00-\u9fa5.-]+))?`;
 const workflowReferenceRegex = new RegExp(`^${workflowReferencePattern}$`);
 const workflowReferenceTokenRegex = new RegExp(workflowReferencePattern, 'g');
+const workflowFunctionNames = new Set(['now', 'formatDate', 'toNumber', 'round', 'contains', 'default', 'upper', 'lower']);
+const workflowFunctionArity = {
+  now: [0, 0],
+  formatDate: [1, 2],
+  toNumber: [1, 1],
+  round: [1, 2],
+  contains: [2, 2],
+  default: [2, 2],
+  upper: [1, 1],
+  lower: [1, 1],
+};
 
 const resolveWorkflowReference = (expression, context, currentNodeName) => {
   const match = String(expression || '').trim().match(workflowReferenceRegex);
@@ -1609,6 +1620,90 @@ const parseJsonConfig = (value, fallback) => {
     return JSON.parse(value);
   } catch (error) {
     return fallback;
+  }
+};
+
+const splitWorkflowFunctionArgs = (argsText = '') => {
+  const args = [];
+  let current = '';
+  let quote = '';
+  let depth = 0;
+  for (let index = 0; index < argsText.length; index += 1) {
+    const char = argsText[index];
+    const previous = argsText[index - 1];
+    if (quote) {
+      current += char;
+      if (char === quote && previous !== '\\') quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '(') depth += 1;
+    if (char === ')') depth = Math.max(0, depth - 1);
+    if (char === ',' && depth === 0) {
+      args.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim() || argsText.trim()) args.push(current.trim());
+  return args;
+};
+
+const parseWorkflowFunctionCall = (expression) => {
+  const text = String(expression || '').trim();
+  const match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\(([\s\S]*)\)$/);
+  if (!match) return null;
+  return {name: match[1], args: splitWorkflowFunctionArgs(match[2])};
+};
+
+const formatWorkflowDate = (value, format = 'iso') => {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (number, length = 2) => String(number).padStart(length, '0');
+  const tokens = {
+    YYYY: String(date.getFullYear()),
+    MM: pad(date.getMonth() + 1),
+    DD: pad(date.getDate()),
+    HH: pad(date.getHours()),
+    mm: pad(date.getMinutes()),
+    ss: pad(date.getSeconds()),
+  };
+  if (format === 'iso') return date.toISOString();
+  if (format === 'date') return `${tokens.YYYY}-${tokens.MM}-${tokens.DD}`;
+  if (format === 'time') return `${tokens.HH}:${tokens.mm}:${tokens.ss}`;
+  return String(format).replace(/YYYY|MM|DD|HH|mm|ss/g, (token) => tokens[token]);
+};
+
+const evaluateWorkflowFunction = (name, args) => {
+  switch (name) {
+    case 'now':
+      return new Date().toISOString();
+    case 'formatDate':
+      return formatWorkflowDate(args[0], args[1] || 'iso');
+    case 'toNumber': {
+      const number = Number(args[0]);
+      return Number.isFinite(number) ? number : 0;
+    }
+    case 'round': {
+      const decimals = Math.max(0, Math.min(Number(args[1] ?? 0) || 0, 10));
+      const factor = 10 ** decimals;
+      return Math.round((Number(args[0]) || 0) * factor) / factor;
+    }
+    case 'contains':
+      return String(args[0] ?? '').includes(String(args[1] ?? ''));
+    case 'default':
+      return args[0] === undefined || args[0] === null || args[0] === '' ? args[1] : args[0];
+    case 'upper':
+      return String(args[0] ?? '').toUpperCase();
+    case 'lower':
+      return String(args[0] ?? '').toLowerCase();
+    default:
+      return undefined;
   }
 };
 
@@ -1646,13 +1741,42 @@ const getWorkflowScopedValue = (pathExpression, scope) => {
   return getObjectPath(scope, pathExpression);
 };
 
+const resolveWorkflowFunctionCall = (expression, context, currentNodeName) => {
+  const call = parseWorkflowFunctionCall(expression);
+  if (!call || !workflowFunctionNames.has(call.name)) return undefined;
+  const args = call.args.map((arg) => {
+    const trimmed = String(arg || '').trim();
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+      return trimmed.slice(1, -1).replace(/\\(["'])/g, '$1');
+    }
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+    if (trimmed === 'true') return true;
+    if (trimmed === 'false') return false;
+    if (trimmed === 'null') return null;
+    const directReference = resolveWorkflowReference(trimmed, context, currentNodeName);
+    if (directReference !== undefined) return directReference;
+    if (workflowReferenceRegex.test(trimmed)) return undefined;
+    const nestedFunction = resolveWorkflowFunctionCall(trimmed, context, currentNodeName);
+    if (nestedFunction !== undefined) return nestedFunction;
+    return resolveWorkflowValue(trimmed, context, currentNodeName);
+  });
+  return evaluateWorkflowFunction(call.name, args);
+};
+
 const resolveWorkflowValue = (value, context, currentNodeName) => {
   if (typeof value === 'string') {
     const wholeReference = resolveWorkflowReference(value, context, currentNodeName);
     if (wholeReference !== undefined) return wholeReference;
 
+    const wholeFunction = resolveWorkflowFunctionCall(value, context, currentNodeName);
+    if (wholeFunction !== undefined) return wholeFunction;
+
     return value.replace(workflowReferenceTokenRegex, (match) => {
       const resolved = resolveWorkflowReference(match, context, currentNodeName);
+      if (resolved === undefined) return match;
+      return stringifyReferenceValue(resolved);
+    }).replace(/\b(now|formatDate|toNumber|round|contains|default|upper|lower)\(([^()]*)\)/g, (match) => {
+      const resolved = resolveWorkflowFunctionCall(match, context, currentNodeName);
       if (resolved === undefined) return match;
       return stringifyReferenceValue(resolved);
     });
@@ -2827,9 +2951,43 @@ const validateWorkflowDraft = async (workflow) => {
     issues.push(createWorkflowValidationIssue('error', 'workflow.name_missing', 'Workflow name is required.'));
   }
 
+  const validateExpressionText = (text, node, fieldPath) => {
+    if (typeof text !== 'string' || !text.includes('(')) return;
+    const matches = Array.from(text.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\(([^()]*)\)/g));
+    matches.forEach((match) => {
+      const name = match[1];
+      if (!workflowFunctionNames.has(name)) {
+        if (text.includes('$.')) {
+          issues.push(createWorkflowValidationIssue('warning', 'expression.unknown_function', `Unknown expression function "${name}" in ${fieldPath}.`, node));
+        }
+        return;
+      }
+      const args = splitWorkflowFunctionArgs(match[2]);
+      const [minArgs, maxArgs] = workflowFunctionArity[name] || [0, 99];
+      if (args.length < minArgs || args.length > maxArgs) {
+        issues.push(createWorkflowValidationIssue('error', 'expression.invalid_args', `${name}() expects ${minArgs === maxArgs ? minArgs : `${minArgs}-${maxArgs}`} argument(s), got ${args.length} in ${fieldPath}.`, node));
+      }
+    });
+  };
+
+  const walkConfigExpressions = (value, node, path = 'config') => {
+    if (typeof value === 'string') {
+      validateExpressionText(value, node, path);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => walkConfigExpressions(item, node, `${path}[${index}]`));
+      return;
+    }
+    if (value && typeof value === 'object') {
+      Object.entries(value).forEach(([key, item]) => walkConfigExpressions(item, node, `${path}.${key}`));
+    }
+  };
+
   nodes.forEach((node) => {
     const config = node.config || {};
     const configType = config.type || node.type;
+    walkConfigExpressions(config, node);
 
     if (!node.name || !String(node.name).trim()) {
       issues.push(createWorkflowValidationIssue('warning', 'node.name_missing', 'Node has no stable name. Expressions are easier to maintain with named nodes.', node));
