@@ -5,6 +5,7 @@ import { Plus } from 'lucide-react';
 import { ChartRenderer } from '../components/ChartRenderer';
 import { confirmDelete } from '../lib/confirm';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 export function Analytics() {
   const { language, theme, charts, addChart, removeChart, devices: storedDevices } = useAppStore();
@@ -56,7 +57,10 @@ export function Analytics() {
     <div className="space-y-6">
       <div className="sm:flex sm:items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{t.nav.analytics}</h1>
+          <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+            {t.nav.analytics}
+            <UnderDevelopmentBadge />
+          </h1>
           <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
             Dynamically monitor and analyze operational statistics.
           </p>

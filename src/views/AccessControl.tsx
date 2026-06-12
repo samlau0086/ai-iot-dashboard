@@ -4,6 +4,7 @@ import { useAppStore, type AccessCredential, type AccessDefinition } from '../li
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 const createAccessDraft = (): AccessDefinition => ({
   id: `access-${Date.now()}`,
@@ -473,9 +474,10 @@ export function AccessControl() {
     <div className="space-y-6">
       <div className="border-b border-slate-200 pb-6 dark:border-slate-800">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+          <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
             <KeyRound className="h-6 w-6 text-orange-500" />
             Access Control
+            <UnderDevelopmentBadge />
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Manage access entries, QR credentials, and workflow trigger parameters.

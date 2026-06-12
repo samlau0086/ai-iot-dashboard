@@ -10,6 +10,7 @@ import { notifySuccess } from '../lib/toast';
 import type { Device } from '../types';
 import { isDeviceTelemetryFresh } from '../lib/deviceStatus';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 const CANVAS_WIDTH = 2200;
 const CANVAS_HEIGHT = 1400;
@@ -2907,9 +2908,10 @@ export function ScadaView() {
       `}</style>
       <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-white">
+          <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold text-slate-900 dark:text-white">
             <Network className="h-6 w-6 text-orange-500" />
             SCADA 运维视图
+            <UnderDevelopmentBadge />
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{activeSite.name} dynamic operations map driven by realtime telemetry.</p>
         </div>

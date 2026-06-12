@@ -12,6 +12,7 @@ import { cn } from '../lib/utils';
 import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 interface WorkflowEditorProps {
   workflowId: string;
@@ -1321,13 +1322,16 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div className="flex-1 min-w-0 flex flex-col gap-1">
-              <input 
-                type="text" 
-                value={draft.name}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                className="text-base sm:text-lg font-bold bg-transparent border-none p-0 focus:ring-0 text-slate-900 dark:text-white placeholder:text-slate-400 w-full"
-                placeholder="Workflow Name"
-              />
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={draft.name}
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                  className="min-w-[12rem] flex-1 border-none bg-transparent p-0 text-base font-bold text-slate-900 placeholder:text-slate-400 focus:ring-0 dark:text-white sm:text-lg"
+                  placeholder="Workflow Name"
+                />
+                <UnderDevelopmentBadge />
+              </div>
               <input 
                 type="text" 
                 value={draft.description}

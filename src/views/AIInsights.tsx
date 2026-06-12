@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { BrainCircuit, Send, Sparkles, Zap, Wrench } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 export function AIInsights() {
   const [query, setQuery] = useState('');
@@ -31,11 +32,12 @@ export function AIInsights() {
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
       <div className="mb-6">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white font-sans flex items-center gap-2">
+        <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white font-sans">
           <div className="w-8 h-8 rounded bg-orange-600 flex items-center justify-center shadow-sm">
             <BrainCircuit className="text-white h-5 w-5" /> 
           </div>
           {t.ai.title}
+          <UnderDevelopmentBadge />
         </h1>
         <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
           {t.ai.desc}

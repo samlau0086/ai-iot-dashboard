@@ -4,6 +4,7 @@ import { useAppStore } from '../lib/store';
 import { cn } from '../lib/utils';
 import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, isDeviceControllable } from '../lib/deviceControls';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 type ControlCommand = {
   id: string;
@@ -131,9 +132,10 @@ export function ControlCenter() {
     <div className="space-y-6">
       <div className="border-b border-slate-200 pb-5 dark:border-slate-800 sm:flex sm:items-center sm:justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+          <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
             <SlidersHorizontal className="h-6 w-6 text-orange-600 dark:text-orange-500" />
             Control Center
+            <UnderDevelopmentBadge />
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Issue audited remote control commands for controllable devices.

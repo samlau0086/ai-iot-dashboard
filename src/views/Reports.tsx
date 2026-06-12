@@ -4,6 +4,7 @@ import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 type ReportItem = {
   id: string;
@@ -160,7 +161,10 @@ export function Reports() {
     <div className="space-y-6 relative">
       <div className="sm:flex sm:items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{t.reports.title}</h1>
+          <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+            {t.reports.title}
+            <UnderDevelopmentBadge />
+          </h1>
           <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
             {t.reports.desc}
           </p>

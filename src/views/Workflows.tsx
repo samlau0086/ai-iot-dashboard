@@ -10,6 +10,7 @@ import {
 import { cn } from '../lib/utils';
 import { WorkflowEditor } from './WorkflowEditor';
 import { confirmDelete } from '../lib/confirm';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 type WorkflowRunStep = {
   nodeId?: string;
@@ -307,9 +308,10 @@ export function Workflows() {
     <div className="space-y-6">
       <div className="sm:flex sm:items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-5">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+          <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
             <GitMerge className="h-6 w-6 text-orange-600 dark:text-orange-500" />
             {t.workflows.title}
+            <UnderDevelopmentBadge />
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             {t.workflows.desc}

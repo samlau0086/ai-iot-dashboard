@@ -5,6 +5,7 @@ import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
+import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
@@ -523,7 +524,10 @@ export function Settings() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{t.settings.title}</h1>
+        <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+          {t.settings.title}
+          <UnderDevelopmentBadge />
+        </h1>
         <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{t.settings.desc}</p>
       </div>
 
@@ -598,7 +602,10 @@ export function Settings() {
             <div className="space-y-6">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">Site / Tenant Management</h2>
+                  <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold leading-7 text-slate-900 dark:text-white">
+                    Site / Tenant Management
+                    <UnderDevelopmentBadge />
+                  </h2>
                   <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
                     Model tenants and physical sites, then bind users and devices to a site for data isolation and dashboard scoping.
                   </p>
@@ -1292,7 +1299,10 @@ export function Settings() {
             <div className="space-y-6">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">User Management</h2>
+                  <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold leading-7 text-slate-900 dark:text-white">
+                    User Management
+                    <UnderDevelopmentBadge />
+                  </h2>
                   <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
                     Registered users must be approved here before they can log in to the backend.
                   </p>
