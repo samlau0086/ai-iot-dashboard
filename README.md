@@ -137,7 +137,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Workflow import / export JSON.
 - [x] Workflow template library / preset workflows.
 - [ ] Workflow template marketplace.
-- [ ] Sub-workflow invocation.
+- [x] Sub-workflow invocation with Run Workflow node, payload mapping, dry-run support, logs, and recursion protection.
 - [ ] Advanced cron editor.
 - [x] Node search and keyboard shortcuts.
 - [ ] Canvas mini map, grouping, comments, and collapse/expand.
@@ -352,6 +352,8 @@ Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。
 工作流编辑页支持 **Search Nodes** 与快捷键操作。可以按节点名称、节点类型、设备 ID、Access ID、配置内容或变量引用快速定位节点；`Ctrl/Cmd + K` 打开搜索，`Ctrl/Cmd + S` 保存草稿，`Ctrl/Cmd + Enter` 打开 Dry Run，`Esc` 关闭当前弹层。
 
 工作流表达式支持函数 helper，可在通知消息、Webhook body、设备控制表达式、IF / CASE 条件、Set 节点等配置字段中使用。当前支持 `now()`、`formatDate(value, format)`、`toNumber(value)`、`round(value, decimals)`、`contains(value, keyword)`、`default(value, fallback)`、`upper(value)`、`lower(value)`；变量选择器中提供 **Function Helpers** 插入入口，预览区会显示解析结果、未解析变量和函数参数错误。
+
+工作流支持 **Run Workflow** 子工作流调用节点。父流程可以选择一个已发布工作流，或用表达式指定 `workflowId`，并通过 Payload JSON / Payload Expression 传入参数；子流程输出会写入父节点 output，可继续通过 `$.run_workflow.output.status`、`$.run_workflow.output.result`、`$.run_workflow.output.steps` 等引用。系统会记录父流程与子流程各自的 Logs，并内置递归检测与最大调用深度，避免工作流互相调用造成死循环。Dry Run 会以无外部副作用模式执行子流程。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 

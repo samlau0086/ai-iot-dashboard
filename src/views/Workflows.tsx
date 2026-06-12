@@ -227,6 +227,7 @@ export function Workflows() {
       case 'mqtt_message': return <Radio className="h-4 w-4 text-sky-500" />;
       case 'mqtt_publish': return <Wifi className="h-4 w-4 text-sky-600" />;
       case 'notification': return <Bell className="h-4 w-4 text-yellow-500" />;
+      case 'run_workflow': return <GitMerge className="h-4 w-4 text-orange-500" />;
       default: return <Zap className="h-4 w-4 text-slate-400" />;
     }
   };

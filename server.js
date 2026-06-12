@@ -1883,6 +1883,7 @@ const getNodeExecutionPolicy = (node) => ({
 
 const executeWorkflowAction = async (workflow, action, event, context = {}, nodeName = normalizeWorkflowNodeName(action, action.id), options = {}) => {
   const input = createWorkflowNodeInput(action, event, context, nodeName);
+  const rawConfig = action.config || {};
   let config = input.config || {};
   const runtimeContext = {
     ...context,
@@ -1962,6 +1963,88 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
       setObjectPath(base, pathExpression, resolveWorkflowValue(assignmentValue, runtimeContext, nodeName));
     });
     return {...baseStep, output: base};
+  }
+
+  if (config.type === 'run_workflow') {
+    const workflowSource = config.workflowSource || 'static';
+    const targetWorkflowId = workflowSource === 'expression'
+      ? resolveWorkflowValue(rawConfig.workflowExpression || config.workflowExpression, runtimeContext, nodeName)
+      : config.workflowId;
+    const maxDepth = Math.max(1, Math.min(Number(config.maxDepth || options.maxSubWorkflowDepth || 5) || 5, 20));
+    const depth = Number(options.subWorkflowDepth || 0) + 1;
+    const callStack = Array.isArray(options.callStack) && options.callStack.length > 0 ? options.callStack : [workflow.id];
+
+    if (!targetWorkflowId) {
+      return {...baseStep, status: 'failed', output: 'Run Workflow requires a target workflow.'};
+    }
+    if (depth > maxDepth) {
+      return {...baseStep, status: 'failed', output: `Sub-workflow depth exceeded maxDepth ${maxDepth}.`};
+    }
+
+    const workflows = await getDashboardWorkflows();
+    const targetWorkflow = workflows.find((item) => item.id === targetWorkflowId);
+    if (!targetWorkflow) {
+      return {...baseStep, status: 'failed', output: `Target workflow ${targetWorkflowId} was not found.`};
+    }
+    if (callStack.includes(targetWorkflow.id)) {
+      return {...baseStep, status: 'failed', output: `Sub-workflow recursion detected: ${[...callStack, targetWorkflow.id].join(' -> ')}.`};
+    }
+
+    const executableWorkflow = getExecutableWorkflow(targetWorkflow);
+    if (!Array.isArray(executableWorkflow.edges) || executableWorkflow.edges.length === 0) {
+      return {...baseStep, status: 'failed', output: 'Target workflow must be saved with graph edges before it can be called as a sub-workflow.'};
+    }
+    const targetTrigger = config.triggerId
+      ? executableWorkflow.nodes?.find((node) => node.id === config.triggerId && node.type === 'trigger')
+      : executableWorkflow.nodes?.find((node) => node.type === 'trigger');
+    if (!targetTrigger) {
+      return {...baseStep, status: 'failed', output: 'Target workflow has no trigger node to start from.'};
+    }
+
+    const payloadSource = config.payloadSource || 'json';
+    const payloadTemplate = payloadSource === 'expression'
+      ? (rawConfig.payloadExpression || config.payloadExpression || '$.input')
+      : parseJsonConfig(rawConfig.payloadJson ?? rawConfig.payload ?? '{}', {});
+    const payload = resolveWorkflowValue(payloadTemplate, runtimeContext, nodeName);
+    const childEvent = {
+      type: 'sub_workflow',
+      source: 'workflow',
+      parentWorkflowId: workflow.id,
+      parentWorkflowName: workflow.name,
+      parentNodeId: action.id,
+      parentNodeName: nodeName,
+      payload,
+      message: payload && typeof payload === 'object' ? payload : {value: payload},
+      receivedAt: new Date().toISOString(),
+    };
+
+    const childRun = await executeWorkflow(executableWorkflow, targetTrigger, childEvent, {
+      ...options,
+      dryRun: Boolean(options.dryRun),
+      callStack: [...callStack, targetWorkflow.id],
+      subWorkflowDepth: depth,
+      maxSubWorkflowDepth: maxDepth,
+    });
+    const childSteps = Array.isArray(childRun?.steps) ? childRun.steps : [];
+    const lastChildStep = childSteps[childSteps.length - 1] || null;
+    const childStatus = childRun?.status || 'unknown';
+    return {
+      ...baseStep,
+      status: ['failed', 'stopped'].includes(childStatus) ? 'failed' : 'success',
+      output: {
+        dryRun: Boolean(options.dryRun),
+        action: 'run_workflow',
+        workflowId: targetWorkflow.id,
+        workflowName: executableWorkflow.name || targetWorkflow.name,
+        workflowVersion: executableWorkflow.runningVersion || targetWorkflow.publishedVersion || targetWorkflow.draftVersion || 1,
+        runId: childRun?.id,
+        status: childStatus,
+        triggerId: targetTrigger.id,
+        payload,
+        result: lastChildStep?.output,
+        steps: childSteps,
+      },
+    };
   }
 
   if (config.type === 'function') {
@@ -2933,9 +3016,12 @@ const validateWorkflowDraft = async (workflow) => {
   const devices = Array.isArray(state.devices) ? state.devices : [];
   const accesses = Array.isArray(state.accesses) ? state.accesses : [];
   const notificationChannels = Array.isArray(state.notificationChannels) ? state.notificationChannels : [];
+  const workflows = Array.isArray(state.workflows) ? state.workflows : [];
   const deviceIds = new Set(devices.flatMap((device) => [device.id, device.config?.externalDeviceId].filter(Boolean)));
   const accessIds = new Set(accesses.map((access) => access.id));
   const notificationGroupIds = new Set(notificationChannels.map((channel) => channel.groupId || channel.id).filter(Boolean));
+  const workflowIds = new Set(workflows.map((item) => item.id));
+  const publishedWorkflowIds = new Set(workflows.filter((item) => item.publishedSnapshot && Array.isArray(item.publishedSnapshot.nodes)).map((item) => item.id));
   const issues = [];
   const nodes = workflow.nodes || [];
   const triggers = nodes.filter((node) => node.type === 'trigger');
@@ -3070,7 +3156,36 @@ const validateWorkflowDraft = async (workflow) => {
       if (configType === 'function' && !config.code) {
         issues.push(createWorkflowValidationIssue('warning', 'function.code_empty', 'Function node has no code.', node));
       }
-      if (['webhook', 'http_request', 'mqtt_publish', 'device_control', 'notification'].includes(configType)) {
+      if (configType === 'run_workflow') {
+        const staticWorkflowId = config.workflowSource === 'expression' ? '' : config.workflowId;
+        if (config.workflowSource === 'expression') {
+          if (!config.workflowExpression) {
+            issues.push(createWorkflowValidationIssue('error', 'run_workflow.expression_missing', 'Run Workflow requires a workflow ID expression.', node));
+          }
+        } else if (!staticWorkflowId) {
+          issues.push(createWorkflowValidationIssue('error', 'run_workflow.target_missing', 'Run Workflow requires a target workflow.', node));
+        } else if (staticWorkflowId === workflow.id) {
+          issues.push(createWorkflowValidationIssue('error', 'run_workflow.self_reference', 'Run Workflow cannot call the current workflow directly.', node));
+        } else if (workflowIds.size > 0 && !workflowIds.has(staticWorkflowId)) {
+          issues.push(createWorkflowValidationIssue('error', 'run_workflow.target_not_found', 'Target workflow does not exist.', node));
+        } else if (workflowIds.size > 0 && !publishedWorkflowIds.has(staticWorkflowId)) {
+          issues.push(createWorkflowValidationIssue('warning', 'run_workflow.not_published', 'Target workflow has no published snapshot. Publish it before production use.', node));
+        } else {
+          const targetWorkflow = workflows.find((item) => item.id === staticWorkflowId);
+          const targetEdges = targetWorkflow?.publishedSnapshot?.edges || targetWorkflow?.edges || [];
+          if (!Array.isArray(targetEdges) || targetEdges.length === 0) {
+            issues.push(createWorkflowValidationIssue('error', 'run_workflow.no_edges', 'Target workflow must be saved with graph edges before it can be called.', node));
+          }
+        }
+        if ((config.payloadSource || 'json') === 'json') {
+          try {
+            JSON.parse(config.payloadJson || config.payload || '{}');
+          } catch (error) {
+            issues.push(createWorkflowValidationIssue('error', 'run_workflow.payload_invalid', 'Run Workflow payload JSON is invalid.', node));
+          }
+        }
+      }
+      if (['webhook', 'http_request', 'mqtt_publish', 'device_control', 'notification', 'run_workflow'].includes(configType)) {
         issues.push(createWorkflowValidationIssue('info', 'action.external_effect', `This ${configType} action has external side effects during real execution.`, node));
       }
     }

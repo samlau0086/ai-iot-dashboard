@@ -468,6 +468,7 @@ const getActionIcon = (type: string) => {
     case 'debug': return <Activity className="h-5 w-5 text-lime-500" />;
     case 'set': return <Braces className="h-5 w-5 text-emerald-500" />;
     case 'function': return <Code2 className="h-5 w-5 text-violet-500" />;
+    case 'run_workflow': return <Route className="h-5 w-5 text-orange-500" />;
     case 'switch': return <Route className="h-5 w-5 text-indigo-500" />;
     case 'http_request': return <Globe className="h-5 w-5 text-blue-500" />;
     case 'metric_mapper': return <Shuffle className="h-5 w-5 text-cyan-500" />;
@@ -504,6 +505,7 @@ const defaultConfigs: Record<string, any> = {
   debug: { expression: '', label: 'Debug snapshot' },
   set: { assignments: '{\n  "payload.status": "processed"\n}', mergeMode: 'merge' },
   function: { code: 'return { ...input.event, processedAt: new Date().toISOString() };' },
+  run_workflow: { workflowSource: 'static', workflowId: '', triggerId: '', payloadSource: 'json', payloadJson: '{\n  "event": "$.input.event",\n  "previous": "$.input.previous"\n}', payloadExpression: '$.input', maxDepth: 5 },
   switch: { property: 'event.message.status', condition: '==', value: 'warning' },
   case: { property: 'event.message.status', condition: '==', value: 'normal' },
   default: {},
@@ -523,10 +525,12 @@ const defaultConfigs: Record<string, any> = {
   time_window: { start: '22:00', end: '06:00' },
 };
 
-const multilineConfigKeys = new Set(['assignments', 'code', 'rules', 'headers', 'body', 'mappings', 'payload', 'expression']);
+const multilineConfigKeys = new Set(['assignments', 'code', 'rules', 'headers', 'body', 'mappings', 'payload', 'payloadJson', 'expression']);
 const selectConfigOptions: Record<string, string[]> = {
   method: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   mergeMode: ['merge', 'replace'],
+  workflowSource: ['static', 'expression'],
+  payloadSource: ['json', 'expression'],
   from: ['C', 'F', 'K', 'W', 'kW', 'Wh', 'kWh', 'bar', 'psi'],
   to: ['C', 'F', 'K', 'W', 'kW', 'Wh', 'kWh', 'bar', 'psi'],
 };
@@ -2671,8 +2675,165 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                         </div>
                       );
                     })() : null}
+                    {node.config.type === 'run_workflow' ? (() => {
+                      const callableWorkflows = workflows.filter((workflow) => workflow.id !== draft.id);
+                      const selectedWorkflow = callableWorkflows.find((workflow) => workflow.id === node.config.workflowId) || null;
+                      const selectedWorkflowNodes = selectedWorkflow?.publishedSnapshot?.nodes || selectedWorkflow?.nodes || [];
+                      const targetTriggers = selectedWorkflowNodes.filter((item) => item.type === 'trigger');
+                      const payloadSource = node.config.payloadSource || 'json';
+                      return (
+                        <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Workflow Source</label>
+                            <select
+                              value={node.config.workflowSource || 'static'}
+                              onChange={(event) => updateNodeConfig(node.id, { workflowSource: event.target.value })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            >
+                              <option value="static">Select published workflow</option>
+                              <option value="expression">From workflow ID expression</option>
+                            </select>
+                          </div>
+
+                          {(node.config.workflowSource || 'static') === 'expression' ? (
+                            <div>
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Workflow ID Expression</label>
+                                <button
+                                  type="button"
+                                  onClick={() => setVariablePicker((current) => current?.nodeId === node.id && current.key === 'workflowExpression' ? null : { nodeId: node.id, key: 'workflowExpression' })}
+                                  className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                                >
+                                  <Braces className="h-3 w-3" />
+                                  Insert Variable
+                                </button>
+                              </div>
+                              <input
+                                value={node.config.workflowExpression || ''}
+                                onChange={(event) => updateNodeConfig(node.id, { workflowExpression: event.target.value })}
+                                placeholder="$.input.payload.workflowId"
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                              {renderVariablePicker('workflowExpression')}
+                              {renderExpressionPreview(node.config.workflowExpression || '')}
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Target Workflow</label>
+                              <select
+                                value={node.config.workflowId || ''}
+                                onChange={(event) => {
+                                  const nextWorkflow = callableWorkflows.find((workflow) => workflow.id === event.target.value);
+                                  const firstTrigger = (nextWorkflow?.publishedSnapshot?.nodes || nextWorkflow?.nodes || []).find((item) => item.type === 'trigger');
+                                  updateNodeConfig(node.id, { workflowId: event.target.value, triggerId: firstTrigger?.id || '' });
+                                }}
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              >
+                                <option value="">Select workflow</option>
+                                {callableWorkflows.map((workflow) => (
+                                  <option key={workflow.id} value={workflow.id}>
+                                    {workflow.name}{workflow.publishedSnapshot ? ` - v${workflow.publishedVersion || 1}` : ' - draft only'}
+                                  </option>
+                                ))}
+                              </select>
+                              {selectedWorkflow && !selectedWorkflow.publishedSnapshot && (
+                                <p className="mt-1 text-xs text-amber-600 dark:text-amber-300">Publish this workflow before production use. Draft-only workflows are allowed for local testing.</p>
+                              )}
+                            </div>
+                          )}
+
+                          {(node.config.workflowSource || 'static') === 'static' && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Start From Trigger</label>
+                              <select
+                                value={node.config.triggerId || targetTriggers[0]?.id || ''}
+                                onChange={(event) => updateNodeConfig(node.id, { triggerId: event.target.value })}
+                                disabled={targetTriggers.length === 0}
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 disabled:opacity-60 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              >
+                                {targetTriggers.map((trigger) => (
+                                  <option key={trigger.id} value={trigger.id}>{trigger.name || getActionLabel(trigger.config?.type)}</option>
+                                ))}
+                                {targetTriggers.length === 0 && <option value="">No trigger available</option>}
+                              </select>
+                            </div>
+                          )}
+
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Payload Source</label>
+                            <select
+                              value={payloadSource}
+                              onChange={(event) => updateNodeConfig(node.id, { payloadSource: event.target.value })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            >
+                              <option value="json">Payload JSON</option>
+                              <option value="expression">Payload Expression</option>
+                            </select>
+                          </div>
+
+                          {payloadSource === 'expression' ? (
+                            <div>
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Payload Expression</label>
+                                <button
+                                  type="button"
+                                  onClick={() => setVariablePicker((current) => current?.nodeId === node.id && current.key === 'payloadExpression' ? null : { nodeId: node.id, key: 'payloadExpression' })}
+                                  className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                                >
+                                  <Braces className="h-3 w-3" />
+                                  Insert Variable
+                                </button>
+                              </div>
+                              <input
+                                value={node.config.payloadExpression || ''}
+                                onChange={(event) => updateNodeConfig(node.id, { payloadExpression: event.target.value })}
+                                placeholder="$.input"
+                                className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                              {renderVariablePicker('payloadExpression')}
+                              {renderExpressionPreview(node.config.payloadExpression || '')}
+                            </div>
+                          ) : (
+                            <div>
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Payload JSON</label>
+                                <button
+                                  type="button"
+                                  onClick={() => setVariablePicker((current) => current?.nodeId === node.id && current.key === 'payloadJson' ? null : { nodeId: node.id, key: 'payloadJson' })}
+                                  className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                                >
+                                  <Braces className="h-3 w-3" />
+                                  Insert Variable
+                                </button>
+                              </div>
+                              <textarea
+                                value={node.config.payloadJson || node.config.payload || '{}'}
+                                rows={6}
+                                onChange={(event) => updateNodeConfig(node.id, { payloadJson: event.target.value })}
+                                className="block w-full resize-y rounded-md border-0 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                              />
+                              {renderVariablePicker('payloadJson')}
+                              {renderExpressionPreview(node.config.payloadJson || node.config.payload || '')}
+                            </div>
+                          )}
+
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Max Call Depth</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              value={node.config.maxDepth ?? 5}
+                              onChange={(event) => updateNodeConfig(node.id, { maxDepth: Number(event.target.value) })}
+                              className="block w-full rounded-md border-0 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-600 sm:text-sm dark:bg-slate-800 dark:text-white dark:ring-slate-700"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })() : null}
                     {Object.entries(node.config).map(([key, value]) => {
                       if (node.config.type === 'device_control') return null;
+                      if (node.config.type === 'run_workflow') return null;
                       if (key === 'type') return null;
                       if (key === 'executionPolicy') return null;
 
@@ -3560,7 +3721,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                   <ListTree className="h-4 w-4 text-orange-500" />
                   Logs
                 </h3>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{draft.name} · execution flow and errors</p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{draft.name} - execution flow and errors</p>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -3625,7 +3786,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                           </div>
                           <span className="text-[10px] text-slate-500 dark:text-slate-400">{new Date(run.startedAt).toLocaleString()}</span>
                         </div>
-                        <div className="mt-2 truncate text-xs font-mono text-slate-500 dark:text-slate-400">{run.triggerType} · {run.eventSource}</div>
+                        <div className="mt-2 truncate text-xs font-mono text-slate-500 dark:text-slate-400">{run.triggerType} - {run.eventSource}</div>
                         <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{run.steps?.length || 0} steps</div>
                       </button>
                     ))}
