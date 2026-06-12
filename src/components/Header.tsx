@@ -36,6 +36,10 @@ export function Header() {
   const notificationStorageKey = `ai-iot-dashboard-read-notifications:${currentUser?.id || 'guest'}`;
   const notificationKey = (notification: typeof notifications[number]) => `${notification.source}:${notification.id}`;
   const legacyNotificationKey = (notification: typeof notifications[number]) => `${notification.source}:${notification.id}:${notification.timestamp}`;
+  const notificationReadKeys = (notification: typeof notifications[number]) => [
+    notificationKey(notification),
+    legacyNotificationKey(notification),
+  ];
   const isNotificationRead = (notification: typeof notifications[number]) => (
     readNotificationKeys.includes(notificationKey(notification))
     || readNotificationKeys.includes(legacyNotificationKey(notification))
@@ -50,15 +54,15 @@ export function Header() {
     }
   };
   const markNotificationRead = (notification: typeof notifications[number]) => {
-    const key = notificationKey(notification);
+    const keys = notificationReadKeys(notification);
     setReadNotificationKeys((current) => {
-      const nextKeys = current.includes(key) ? current : [...current, key];
+      const nextKeys = Array.from(new Set([...current, ...keys]));
       persistReadNotificationKeys(nextKeys);
       return nextKeys;
     });
   };
   const markAllNotificationsRead = () => {
-    const keys = notifications.map(notificationKey);
+    const keys = notifications.flatMap(notificationReadKeys);
     setReadNotificationKeys((current) => {
       const nextKeys = Array.from(new Set([...current, ...keys]));
       persistReadNotificationKeys(nextKeys);
@@ -110,7 +114,7 @@ export function Header() {
   useEffect(() => {
     if (!notificationReadStateReady || !systemNotificationsReady) return;
     try {
-      const activeKeys = new Set(notifications.map(notificationKey));
+      const activeKeys = new Set(notifications.flatMap(notificationReadKeys));
       const nextReadKeys = readNotificationKeys.filter((key) => activeKeys.has(key));
       window.localStorage.setItem(notificationStorageKey, JSON.stringify(nextReadKeys));
       if (nextReadKeys.length !== readNotificationKeys.length) {

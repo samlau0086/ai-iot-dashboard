@@ -302,6 +302,7 @@ const defaultElementEndpoints: ScadaShapeEndpoint[] = [
   { id: 'right', label: 'Right', x: 100, y: 50 },
 ];
 const distanceBetween = (first: { x: number; y: number }, second: { x: number; y: number }) => Math.hypot(first.x - second.x, first.y - second.y);
+const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
 const clampPercent = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 const getPrimitiveCenter = (primitive: ScadaShapePrimitive) => ({
   x: primitive.x + (primitive.width ?? 32) / 2,
@@ -1247,8 +1248,23 @@ export function ScadaView() {
     event.preventDefault();
     event.stopPropagation();
     const point = toSvgPoint(event.clientX, event.clientY);
-    const layout = getInnerPartLayout(element, part);
-    const startSize = part === 'icon' ? Number(layout.size || 32) : Number(layout.fontSize || 13);
+    const startSize = (() => {
+      if (part === 'icon') {
+        const {device} = getDeviceValue(element, scadaRenderDevices, scadaRenderNow, historyMode);
+        const layout = { ...getDefaultIconLayout(element, device), ...(element.iconStyle || {}) };
+        return Number(layout.size || 32);
+      }
+      if (part === 'value') {
+        const layout = { ...getDefaultValueLayout(element), ...(element.valueStyle || {}) };
+        return Number(layout.fontSize || 13);
+      }
+      if (part === 'meta') {
+        const layout = { ...getDefaultMetaLayout(element), ...(element.metaStyle || {}) };
+        return Number(layout.fontSize || 13);
+      }
+      const layout = { ...getDefaultLabelLayout(), ...(element.labelStyle || {}) };
+      return Number(layout.fontSize || 13);
+    })();
     setSelectedElementId(element.id);
     setActiveInnerPart({ id: element.id, part });
     setDragState({ type: 'innerPartResize', id: element.id, part, startX: point.x, startY: point.y, startSize });
@@ -1345,10 +1361,11 @@ export function ScadaView() {
         ...current,
         elements: current.elements.map((element) => {
           if (element.id !== dragState.id || (element.type !== 'device' && element.type !== 'metric')) return element;
-          const layout = getInnerPartLayout(element, dragState.part);
           const delta = Math.max(point.x - dragState.startX, point.y - dragState.startY);
-          const nextSize = Math.round(clamp(dragState.startSize + delta, getInnerPartMinSize(dragState.part), getInnerPartMaxSize(dragState.part)));
+          const nextSize = Math.round(clampValue(dragState.startSize + delta, getInnerPartMinSize(dragState.part), getInnerPartMaxSize(dragState.part)));
           if (dragState.part === 'icon') {
+            const {device} = getDeviceValue(element, scadaRenderDevices, scadaRenderNow, historyMode);
+            const layout = { ...getDefaultIconLayout(element, device), ...(element.iconStyle || {}) };
             return {
               ...element,
               iconStyle: {
@@ -1358,6 +1375,7 @@ export function ScadaView() {
             };
           }
           if (dragState.part === 'value') {
+            const layout = { ...getDefaultValueLayout(element), ...(element.valueStyle || {}) };
             return {
               ...element,
               valueStyle: {
@@ -1367,6 +1385,7 @@ export function ScadaView() {
             };
           }
           if (dragState.part === 'meta') {
+            const layout = { ...getDefaultMetaLayout(element), ...(element.metaStyle || {}) };
             return {
               ...element,
               metaStyle: {
@@ -1375,6 +1394,7 @@ export function ScadaView() {
               },
             };
           }
+          const layout = { ...getDefaultLabelLayout(), ...(element.labelStyle || {}) };
           return {
             ...element,
             labelStyle: {
