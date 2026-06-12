@@ -126,6 +126,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 
 - [x] Draft / Published workflow version metadata.
 - [x] Published workflow snapshot execution with backward compatibility for legacy workflows.
+- [x] Workflow version history, publish notes, draft comparison, and rollback-to-draft.
 - [x] Trigger cooldown / dedupe configuration.
 - [x] Node-level test run API and editor action.
 - [x] Node execution policy: timeout, retry attempts, retry interval, fixed/exponential backoff, stop/continue on failure.
@@ -342,6 +343,8 @@ GET /api/telemetry?deviceId=AIR-COMP-001&metric=pressure&source=mqtt&from=2026-0
 Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。模板会创建为未启用草稿，导入时会重新生成 workflow、node、edge ID，并为 Webhook Trigger 重新生成当前域名下的 endpoint，避免复用旧环境的地址或误触发已启用流程。
 
 工作流编辑页支持 **Dry Run**。可以选择某个 Trigger，使用 Access、NFC、MQTT、Webhook、Schedule、Threshold 等示例输入或自定义 JSON 来模拟执行当前草稿。Dry Run 会复用真实分支、表达式和节点执行逻辑，但不会写入真实工作流日志、不会发送通知渠道、不会调用外部 Webhook，也不会向设备下发控制命令；模拟结果会临时显示在 Logs 窗口中。
+
+工作流编辑页支持 **Versions**。每次 **Publish Version** 都需要填写发布说明，并保存 published snapshot 到版本历史。版本历史可查看发布人、发布时间、节点摘要、发布说明，也可以比较当前 Draft 与历史版本的新增、删除和修改节点；选择 **Restore to Draft** 会把历史版本恢复到当前草稿，用户仍需再点击 Save Draft 或 Publish Version 才会固化。
 
 当添加 **Webhook** Trigger 时，系统会基于当前 Dashboard 域名生成唯一 endpoint，例如 `https://your-dashboard-domain.com/api/workflow-webhooks/{workflowId}/{token}`。外部系统 POST 到该地址后，后端会记录 webhook payload，后续可由工作流执行器消费。
 

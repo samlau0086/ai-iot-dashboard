@@ -51,6 +51,12 @@ const sanitizeWorkflowForExport = (workflow: Workflow): Workflow => {
   if (nextWorkflow.publishedSnapshot?.nodes) {
     nextWorkflow.publishedSnapshot.nodes = nextWorkflow.publishedSnapshot.nodes.map(sanitizeWorkflowNodeForExport);
   }
+  if (Array.isArray(nextWorkflow.versionHistory)) {
+    nextWorkflow.versionHistory = nextWorkflow.versionHistory.map((version) => ({
+      ...version,
+      nodes: (version.nodes || []).map(sanitizeWorkflowNodeForExport),
+    }));
+  }
   return nextWorkflow;
 };
 

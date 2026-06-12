@@ -748,6 +748,21 @@ export interface WorkflowEdge {
   label?: string;
 }
 
+export interface WorkflowVersionSnapshot {
+  version: number;
+  publishedAt: string;
+  publishedBy?: string;
+  notes?: string;
+  name: string;
+  description: string;
+  nodes: WorkflowNode[];
+  edges?: WorkflowEdge[];
+  nodeCount: number;
+  triggerCount: number;
+  conditionCount: number;
+  actionCount: number;
+}
+
 export interface Workflow {
   id: string;
   name: string;
@@ -765,6 +780,7 @@ export interface Workflow {
     nodes: WorkflowNode[];
     edges?: WorkflowEdge[];
   };
+  versionHistory?: WorkflowVersionSnapshot[];
 }
 
 interface AppState {

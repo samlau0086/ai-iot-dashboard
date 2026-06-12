@@ -435,6 +435,7 @@ export function Workflows() {
                     <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       <span>Draft v{workflow.draftVersion || 0}</span>
                       <span>Published v{workflow.publishedVersion || 0}</span>
+                      <span>{workflow.versionHistory?.length || 0} versions</span>
                       {workflow.publishedAt && <span>{new Date(workflow.publishedAt).toLocaleString()}</span>}
                     </div>
                   </div>

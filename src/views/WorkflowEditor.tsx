@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useAppStore, Workflow, WorkflowEdge, WorkflowNode, type AccessDefinition } from '../lib/store';
+import { useAppStore, Workflow, WorkflowEdge, WorkflowNode, type AccessDefinition, type WorkflowVersionSnapshot } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { 
   ArrowLeft, Plus, Save, Trash2, Play, Square,
   MessageCircle, Mail, Ticket, Power, Globe, FileText, BrainCircuit,
   Activity, Clock, Zap, PowerOff, ArrowDown, X, AlertTriangle, Settings,
   GitBranch, GitCommit, Settings2, Timer, ChevronDown, Radio, Wifi, Bell,
-  Code2, Shuffle, Ruler, Database, Repeat2, Ban, Braces, Route, KeyRound, ListTree, RefreshCw, ChevronRight, Copy
+  Code2, Shuffle, Ruler, Database, Repeat2, Ban, Braces, Route, KeyRound, ListTree, RefreshCw, ChevronRight, Copy,
+  History, RotateCcw
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { buildControlParameters, getDeviceControlDefinitions } from '../lib/deviceControls';
@@ -539,7 +540,7 @@ function AccessSelect({ value, onChange, accesses }: { value: string; onChange: 
 }
 
 export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
-  const { language, workflows, addWorkflow, updateWorkflow, devices, accesses } = useAppStore();
+  const { language, workflows, addWorkflow, updateWorkflow, devices, accesses, currentUser } = useAppStore();
   const t = translations[language];
   const isNew = workflowId === 'new';
 
@@ -565,6 +566,10 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   const [selectedNodeDraft, setSelectedNodeDraft] = useState<WorkflowNode | null>(null);
   const [nodeSettingsDirty, setNodeSettingsDirty] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [publishNotes, setPublishNotes] = useState('');
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [selectedVersionNumber, setSelectedVersionNumber] = useState<number | null>(null);
   const [workflowLogs, setWorkflowLogs] = useState<WorkflowRunLog[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
   const [logsLoading, setLogsLoading] = useState(false);
@@ -794,6 +799,67 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     }
   };
 
+  const versionHistory = useMemo(
+    () => [...(draft.versionHistory || [])].sort((a, b) => b.version - a.version),
+    [draft.versionHistory]
+  );
+  const selectedVersion = versionHistory.find((version) => version.version === selectedVersionNumber) || versionHistory[0] || null;
+
+  const cloneWorkflowNodes = (nodes: WorkflowNode[] = []) => JSON.parse(JSON.stringify(nodes)) as WorkflowNode[];
+  const cloneWorkflowEdges = (edges: WorkflowEdge[] = []) => JSON.parse(JSON.stringify(edges)) as WorkflowEdge[];
+
+  const summarizeWorkflowNodes = (nodes: WorkflowNode[] = []) => ({
+    nodeCount: nodes.length,
+    triggerCount: nodes.filter((node) => node.type === 'trigger').length,
+    conditionCount: nodes.filter((node) => node.type === 'condition').length,
+    actionCount: nodes.filter((node) => node.type === 'action').length,
+  });
+
+  const createVersionSnapshot = (
+    workflow: Workflow,
+    version: number,
+    publishedAt: string,
+    notes: string
+  ): WorkflowVersionSnapshot => {
+    const summary = summarizeWorkflowNodes(workflow.nodes);
+    return {
+      version,
+      publishedAt,
+      publishedBy: currentUser?.name || currentUser?.email || 'Unknown User',
+      notes: notes.trim(),
+      name: workflow.name,
+      description: workflow.description,
+      nodes: cloneWorkflowNodes(workflow.nodes),
+      edges: cloneWorkflowEdges(workflow.edges || []),
+      ...summary,
+    };
+  };
+
+  const getNodeCompareKey = (node: WorkflowNode) => node.id || node.name || `${node.type}:${node.config?.type}`;
+  const compareDraftToVersion = (version: WorkflowVersionSnapshot | null) => {
+    const currentNodes = draft.nodes || [];
+    const previousNodes = version?.nodes || [];
+    const currentMap = new Map(currentNodes.map((node) => [getNodeCompareKey(node), node]));
+    const previousMap = new Map(previousNodes.map((node) => [getNodeCompareKey(node), node]));
+    const added = currentNodes.filter((node) => !previousMap.has(getNodeCompareKey(node)));
+    const removed = previousNodes.filter((node) => !currentMap.has(getNodeCompareKey(node)));
+    const changed = currentNodes.filter((node) => {
+      const previous = previousMap.get(getNodeCompareKey(node));
+      return previous && JSON.stringify(previous) !== JSON.stringify(node);
+    });
+
+    return {
+      draft: summarizeWorkflowNodes(currentNodes),
+      version: summarizeWorkflowNodes(previousNodes),
+      added,
+      removed,
+      changed,
+    };
+  };
+
+  const formatNodeLabel = (node: WorkflowNode) => `${node.name || node.config?.type || node.id} (${node.type})`;
+  const selectedVersionCompare = compareDraftToVersion(selectedVersion);
+
   const buildWorkflowEdges = () => {
     const edges: WorkflowEdge[] = [];
     const addEdge = (source: string | undefined, target: string | undefined, type: WorkflowEdge['type'], label?: string) => {
@@ -886,7 +952,7 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     return edges;
   };
 
-  const buildWorkflowForSave = (publish = false): Workflow => {
+  const buildWorkflowForSave = (publish = false, notes = ''): Workflow => {
     const usedNames = new Set<string>();
     let currentBranchRootName = '';
     const sourceNodes = selectedNodeDraft
@@ -918,16 +984,22 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
     const draftVersion = Number(draft.draftVersion || 0) + 1;
     const baseWorkflow: Workflow = { ...draft, nodes: namedNodes, edges: buildWorkflowEdges(), draftVersion, updatedAt: now };
     if (!publish) return baseWorkflow;
+    const versionSnapshot = createVersionSnapshot(baseWorkflow, draftVersion, now, notes);
+    const versionHistory = [
+      ...(draft.versionHistory || []).filter((version) => version.version !== draftVersion),
+      versionSnapshot,
+    ].sort((a, b) => a.version - b.version);
 
     return {
       ...baseWorkflow,
       publishedVersion: draftVersion,
       publishedAt: now,
+      versionHistory,
       publishedSnapshot: {
-        name: baseWorkflow.name,
-        description: baseWorkflow.description,
-        nodes: namedNodes,
-        edges: baseWorkflow.edges,
+        name: versionSnapshot.name,
+        description: versionSnapshot.description,
+        nodes: versionSnapshot.nodes,
+        edges: versionSnapshot.edges,
       },
     };
   };
@@ -947,7 +1019,41 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
   };
 
   const handlePublish = () => {
-    persistWorkflowDraft(buildWorkflowForSave(true), 'Workflow version published successfully.');
+    setPublishNotes('');
+    setShowPublishModal(true);
+  };
+
+  const confirmPublish = () => {
+    persistWorkflowDraft(buildWorkflowForSave(true, publishNotes), 'Workflow version published successfully.');
+    setShowPublishModal(false);
+    setPublishNotes('');
+  };
+
+  const openVersionHistory = () => {
+    setSelectedVersionNumber(versionHistory[0]?.version || null);
+    setShowVersionHistory(true);
+  };
+
+  const rollbackVersionToDraft = async (version: WorkflowVersionSnapshot) => {
+    if (!(await confirmDelete({
+      title: `Restore version v${version.version} to draft`,
+      itemName: draft.name || 'this workflow',
+      description: 'The current editor draft will be replaced with this published snapshot. Existing published production version will not change until you publish again.',
+      confirmLabel: 'Restore Draft',
+    }))) return;
+    const now = new Date().toISOString();
+    setDraft({
+      ...draft,
+      name: version.name,
+      description: version.description,
+      nodes: cloneWorkflowNodes(version.nodes),
+      edges: cloneWorkflowEdges(version.edges || []),
+      draftVersion: Number(draft.draftVersion || 0) + 1,
+      updatedAt: now,
+    });
+    setSelectedNodeId(null);
+    setSelectedNodeDraft(null);
+    notifySuccess(`Version v${version.version} restored into draft. Save or publish to keep it.`);
   };
 
   const getActionLabel = (type: string) => {
@@ -1619,6 +1725,14 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
             >
               <Play className="h-4 w-4" />
               Dry Run
+            </button>
+            <button
+              type="button"
+              onClick={openVersionHistory}
+              className="px-3 py-1.5 rounded-md border text-sm font-medium flex items-center gap-2 transition-colors bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+            >
+              <History className="h-4 w-4" />
+              Versions
             </button>
             <button
               type="button"
@@ -2541,6 +2655,220 @@ export function WorkflowEditor({ workflowId, onBack }: WorkflowEditorProps) {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {showPublishModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div>
+                <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
+                  <Save className="h-4 w-4 text-orange-500" />
+                  Publish Workflow Version
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  This creates a published snapshot that production execution can use.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPublishModal(false)}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <div className="grid grid-cols-4 gap-3">
+                {Object.entries(summarizeWorkflowNodes(draft.nodes)).map(([key, value]) => (
+                  <div key={key} className="rounded-lg border border-slate-200 p-3 text-center dark:border-slate-800">
+                    <span className="block text-lg font-bold text-slate-900 dark:text-white">{value}</span>
+                    <span className="mt-1 block text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">{key.replace('Count', '')}</span>
+                  </div>
+                ))}
+              </div>
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Publish Notes
+                </span>
+                <textarea
+                  value={publishNotes}
+                  onChange={(event) => setPublishNotes(event.target.value)}
+                  placeholder="Describe what changed in this version."
+                  className="h-32 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700 outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowPublishModal(false)}
+                className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmPublish}
+                className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500"
+              >
+                <Save className="h-4 w-4" />
+                Publish Version
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showVersionHistory && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div>
+                <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
+                  <History className="h-4 w-4 text-orange-500" />
+                  Version History
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Review published versions, compare against the current draft, or restore a version into draft.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowVersionHistory(false)}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[340px_1fr]">
+              <aside className="min-h-0 overflow-y-auto border-b border-slate-200 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-950/20 lg:border-b-0 lg:border-r">
+                {versionHistory.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                    No published versions yet.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {versionHistory.map((version) => (
+                      <button
+                        key={version.version}
+                        type="button"
+                        onClick={() => setSelectedVersionNumber(version.version)}
+                        className={cn(
+                          "w-full rounded-lg border p-3 text-left transition-colors",
+                          selectedVersion?.version === version.version
+                            ? "border-orange-300 bg-orange-50 dark:border-orange-500/40 dark:bg-orange-500/10"
+                            : "border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800"
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-slate-900 dark:text-white">v{version.version}</span>
+                          {draft.publishedVersion === version.version && (
+                            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {new Date(version.publishedAt).toLocaleString()}
+                        </div>
+                        <div className="mt-2 line-clamp-2 text-xs text-slate-600 dark:text-slate-300">
+                          {version.notes || 'No publish notes.'}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </aside>
+
+              <main className="min-h-0 overflow-y-auto p-5">
+                {selectedVersion ? (
+                  <div className="space-y-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h4 className="text-lg font-semibold text-slate-900 dark:text-white">Version v{selectedVersion.version}</h4>
+                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                          Published by {selectedVersion.publishedBy || 'Unknown User'} on {new Date(selectedVersion.publishedAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => rollbackVersionToDraft(selectedVersion)}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-100 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-300 dark:hover:bg-orange-500/20"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                        Restore to Draft
+                      </button>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
+                      {selectedVersion.notes || 'No publish notes.'}
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      {([
+                        ['Nodes', selectedVersion.nodeCount],
+                        ['Triggers', selectedVersion.triggerCount],
+                        ['Conditions', selectedVersion.conditionCount],
+                        ['Actions', selectedVersion.actionCount],
+                      ] as Array<[string, number]>).map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                          <span className="block text-xs text-slate-500 dark:text-slate-400">{label}</span>
+                          <span className="mt-2 block text-lg font-bold text-slate-900 dark:text-white">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <section className="rounded-xl border border-slate-200 dark:border-slate-800">
+                      <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+                        <h5 className="text-sm font-semibold text-slate-900 dark:text-white">Compare Current Draft</h5>
+                      </div>
+                      <div className="grid gap-4 p-4 lg:grid-cols-2">
+                        <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-900/50">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Version v{selectedVersion.version}</div>
+                          <pre className="text-xs text-slate-600 dark:text-slate-300">{formatJson(selectedVersionCompare.version)}</pre>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-900/50">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Draft</div>
+                          <pre className="text-xs text-slate-600 dark:text-slate-300">{formatJson(selectedVersionCompare.draft)}</pre>
+                        </div>
+                      </div>
+                      <div className="grid gap-4 border-t border-slate-200 p-4 dark:border-slate-800 lg:grid-cols-3">
+                        {([
+                          ['Added', selectedVersionCompare.added],
+                          ['Removed', selectedVersionCompare.removed],
+                          ['Changed', selectedVersionCompare.changed],
+                        ] as Array<[string, WorkflowNode[]]>).map(([label, nodes]) => (
+                          <div key={label}>
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                              {label} ({nodes.length})
+                            </div>
+                            <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg bg-slate-50 p-2 dark:bg-slate-900/50">
+                              {nodes.length === 0 ? (
+                                <div className="px-2 py-3 text-xs text-slate-500 dark:text-slate-400">None</div>
+                              ) : (
+                                nodes.map((node) => (
+                                  <div key={`${label}-${node.id}`} className="rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+                                    {formatNodeLabel(node)}
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  </div>
+                ) : (
+                  <div className="flex h-full min-h-[320px] items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    Publish this workflow to create the first version snapshot.
+                  </div>
+                )}
+              </main>
+            </div>
           </div>
         </div>
       )}
