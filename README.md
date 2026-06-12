@@ -101,6 +101,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [ ] 数据导出
 - [x] Device Metrics Mapping：raw telemetry fields 可映射到标准 metrics，并配置显示名、单位、精度和 Primary 标记
 - [x] Device Data Quality：统一判定 Live / Stale / Offline / Never Reported，并在设备列表、详情、总览和 SCADA 中避免把过期数据当实时数据展示
+- [x] Device Ingest Diagnostics：设备详情页可诊断 MQTT/HTTP 绑定、最近 raw telemetry、mapping 覆盖率，并生成测试请求；Raw Data 可显示匹配设备或未匹配原因
 - [ ] SQL-like Query / Metric Builder
 
 ### V4: Control Center
@@ -508,6 +509,18 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 - `Never Reported`：设备还没有任何有效 telemetry。
 
 设备详情页提供 **Data Quality** 面板，可查看最近上报年龄、freshness timeout、offline rule、metric logs 数量、未映射字段和非数字字段。设备列表会显示 `No Live Data`，避免过期读数被误认为当前实时数据。
+
+### Device Ingest Diagnostics
+
+设备详情页提供 **Diagnostics** 面板，用于快速判断真实设备数据卡在哪一步：
+
+- 显示当前设备的 Data Source、External Device ID、HTTP endpoint 和 MQTT topic。
+- 检查后台 MQTT Subscriber 是否有匹配 topic filter，以及对应 channel 是否 connected。
+- 显示最近一次匹配到该设备的 raw telemetry，包括 source、topic 和 received time。
+- 统计 metric mapping 覆盖率，帮助发现 raw fields 尚未映射到标准 metrics。
+- 可一键复制基于当前设备配置生成的 HTTP curl 或 MQTT publish 示例。
+
+**Raw Data Query** 页面会标记每条 telemetry 是否匹配到平台设备；未匹配时会提示常见原因，例如缺少 `device_id`、没有 numeric metrics，或没有设备使用该 ID / External Device ID。
 - 历史回放会基于设备 mapping 将原始 telemetry logs 转换为标准 metric 后再展示。
 
 ### Gateway HTTP Push

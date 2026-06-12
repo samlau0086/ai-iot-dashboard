@@ -52,6 +52,8 @@ export function RawData() {
   const [selected, setSelected] = useState<RawTelemetryMessage | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const getDeviceId = (message: RawTelemetryMessage) => String(message.device_id || message.deviceId || message.id || '');
+  const getReceivedAt = (message: RawTelemetryMessage) => String(message.received_at || message.timestamp || '');
 
   const metricOptions = useMemo(() => {
     const metrics = new Set<string>();
@@ -79,6 +81,30 @@ export function RawData() {
     });
     return map;
   }, [devices]);
+
+  const getMessageMatch = (message: RawTelemetryMessage) => {
+    const rowDeviceId = getDeviceId(message);
+    const metrics = message.metrics || {};
+    const matchedDevice = devices.find((device) => device.id === rowDeviceId || device.config?.externalDeviceId === rowDeviceId);
+
+    if (matchedDevice) {
+      return {
+        status: 'matched' as const,
+        label: matchedDevice.name,
+        detail: `Matched ${matchedDevice.config?.externalDeviceId === rowDeviceId ? 'External Device ID' : 'Device ID'}`,
+      };
+    }
+
+    if (!rowDeviceId) {
+      return { status: 'unmatched' as const, label: 'Unmatched', detail: 'Payload has no device_id, deviceId, or id.' };
+    }
+
+    if (Object.keys(metrics).length === 0) {
+      return { status: 'unmatched' as const, label: 'Unmatched', detail: 'Payload has no numeric metrics.' };
+    }
+
+    return { status: 'unmatched' as const, label: 'Unmatched', detail: `No device uses ID or External Device ID "${rowDeviceId}".` };
+  };
 
   const queryRawData = async () => {
     setIsLoading(true);
@@ -112,9 +138,6 @@ export function RawData() {
   useEffect(() => {
     queryRawData();
   }, []);
-
-  const getDeviceId = (message: RawTelemetryMessage) => String(message.device_id || message.deviceId || message.id || '');
-  const getReceivedAt = (message: RawTelemetryMessage) => String(message.received_at || message.timestamp || '');
 
   return (
     <div className="space-y-6">
@@ -284,6 +307,7 @@ export function RawData() {
                 <tr>
                   <th className="px-4 py-3 font-semibold">Received</th>
                   <th className="px-4 py-3 font-semibold">Device</th>
+                  <th className="px-4 py-3 font-semibold">Match</th>
                   <th className="px-4 py-3 font-semibold">Source</th>
                   <th className="px-4 py-3 font-semibold">Topic</th>
                   <th className="px-4 py-3 font-semibold">Metrics</th>
@@ -294,6 +318,7 @@ export function RawData() {
                   const rowDeviceId = getDeviceId(message);
                   const rowReceivedAt = getReceivedAt(message);
                   const isSelected = selected === message;
+                  const match = getMessageMatch(message);
                   return (
                     <tr
                       key={`${rowReceivedAt}-${rowDeviceId}-${index}`}
@@ -306,6 +331,19 @@ export function RawData() {
                       <td className="px-4 py-3">
                         <div className="font-medium text-slate-900 dark:text-white">{deviceNameById.get(rowDeviceId) || message.name || rowDeviceId || '-'}</div>
                         <div className="font-mono text-xs text-slate-500">{rowDeviceId}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            match.status === 'matched'
+                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                              : 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300'
+                          }`}
+                          title={match.detail}
+                        >
+                          {match.label}
+                        </span>
+                        <div className="mt-1 max-w-[12rem] truncate text-[10px] text-slate-500" title={match.detail}>{match.detail}</div>
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600 dark:text-slate-300">{String(message.source || '-')}</td>
                       <td className="max-w-[14rem] truncate px-4 py-3 font-mono text-xs text-slate-500">{String(message.mqtt_topic || message.topic || '-')}</td>
@@ -328,7 +366,7 @@ export function RawData() {
                 })}
                 {messages.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                    <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
                       No raw telemetry matched the current filters.
                     </td>
                   </tr>
@@ -341,7 +379,9 @@ export function RawData() {
         <div className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
           <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
             <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Payload detail</h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Original JSON as stored by the telemetry ingest path.</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {selected ? getMessageMatch(selected).detail : 'Original JSON as stored by the telemetry ingest path.'}
+            </p>
           </div>
           <pre className="max-h-[34rem] overflow-auto p-4 text-xs leading-5 text-slate-700 dark:text-slate-300">
             {selected ? JSON.stringify(selected, null, 2) : 'Select a telemetry row to inspect the raw payload.'}

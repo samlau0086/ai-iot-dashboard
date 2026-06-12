@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAppStore } from '../lib/store';
 import { getDeviceIcon } from '../lib/icons';
-import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play, Plus, Trash2, X, AlertTriangle, Database, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, HardDrive, Waves, BatteryCharging, Timer, Wind, Droplets, DoorOpen, Radio, Edit2, Play, Plus, Trash2, X, AlertTriangle, Database, RefreshCw, Copy, Wifi, Link as LinkIcon } from 'lucide-react';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { DeviceForm } from '../components/DeviceForm';
@@ -20,6 +20,7 @@ import {
   getPrimaryMappedMetricKeys,
   inferMetricUnit,
 } from '../lib/metricMappings';
+import { buildCurlRequest, buildMqttExample, getMqttTelemetryTopic, getTelemetryEndpoint } from '../lib/deviceTelemetryExamples';
 import type { DeviceMetricMapping } from '../types';
 
 type DeviceMetricLog = {
@@ -33,6 +34,21 @@ type DeviceMetricLog = {
   timestamp?: string;
   metrics?: Record<string, unknown>;
   [key: string]: unknown;
+};
+
+type DataSourceSnapshot = {
+  httpPushChannels?: Array<{ id: string; name: string; enabled: boolean; token?: string }>;
+  mqttChannels?: Array<{ id: string; name: string; enabled: boolean; brokerUrl?: string; topics?: string[] | string }>;
+  mqttStatuses?: Record<string, {
+    state?: string;
+    message?: string;
+    lastMessageAt?: string;
+    lastTopic?: string;
+    receivedCount?: number;
+    acceptedCount?: number;
+    rejectedCount?: number;
+  }>;
+  mqttObservedTopics?: Record<string, string[]>;
 };
 
 const getMetricLogTime = (message: DeviceMetricLog) => String(message.received_at || message.timestamp || '');
@@ -62,6 +78,30 @@ const formatAverageInterval = (messages: DeviceMetricLog[]) => {
   return formatDeviceAge(averageMs).replace(' ago', '');
 };
 
+const normalizeTopicList = (topics?: string[] | string) => (
+  Array.isArray(topics)
+    ? topics
+    : String(topics || '').split(',')
+).map((topic) => topic.trim()).filter(Boolean);
+
+const mqttTopicMatches = (filter: string, topic: string) => {
+  const filterParts = filter.split('/');
+  const topicParts = topic.split('/');
+  for (let index = 0; index < filterParts.length; index += 1) {
+    const filterPart = filterParts[index];
+    const topicPart = topicParts[index];
+    if (filterPart === '#') return true;
+    if (filterPart === '+') {
+      if (topicPart === undefined) return false;
+      continue;
+    }
+    if (filterPart !== topicPart) return false;
+  }
+  return filterParts.length === topicParts.length;
+};
+
+const getDeviceIdFromMetricLog = (message: DeviceMetricLog) => String(message.device_id || message.deviceId || message.id || '');
+
 export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -89,6 +129,8 @@ export function DeviceDetails() {
   const [metricLogLimit, setMetricLogLimit] = useState(50);
   const [metricMappingsDraft, setMetricMappingsDraft] = useState<DeviceMetricMapping[]>([]);
   const [metricMappingMessage, setMetricMappingMessage] = useState('');
+  const [dataSourcesSnapshot, setDataSourcesSnapshot] = useState<DataSourceSnapshot | null>(null);
+  const [diagnosticsMessage, setDiagnosticsMessage] = useState('');
   const controlDefinitions = getDeviceControlDefinitions(device);
   const canControl = currentUser?.role !== 'Demo' && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
 
@@ -149,6 +191,25 @@ export function DeviceDetails() {
     setMetricMappingMessage('');
   }, [storedDevice?.id, device?.id]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadDataSources = async () => {
+      try {
+        const response = await fetch('/api/data-sources');
+        const payload = await response.json();
+        if (!cancelled && response.ok) setDataSourcesSnapshot(payload);
+      } catch (error) {
+        if (!cancelled) setDataSourcesSnapshot(null);
+      }
+    };
+    loadDataSources();
+    const intervalId = window.setInterval(loadDataSources, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   const metricLogOptions = Array.from(new Set([
     ...Object.keys(storedDevice?.metrics || {}),
     ...Object.keys(device?.metrics || {}),
@@ -195,6 +256,30 @@ export function DeviceDetails() {
       : dataQuality.state === 'stale'
         ? 'bg-orange-100 text-orange-700 dark:bg-orange-500/10 dark:text-orange-300'
         : 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400';
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3006';
+  const expectedExternalId = device.config?.externalDeviceId || device.id;
+  const expectedMqttTopic = getMqttTelemetryTopic(device);
+  const expectedHttpEndpoint = getTelemetryEndpoint(device, origin);
+  const latestRawTelemetry = metricLogs[0] || null;
+  const latestRawTopic = String(latestRawTelemetry?.topic || latestRawTelemetry?.mqtt_topic || '');
+  const latestRawSource = String(latestRawTelemetry?.source || '');
+  const mappingCoverage = rawMetricOptions.length === 0 ? 0 : Math.round((mappedRawKeys.size / rawMetricOptions.length) * 100);
+  const matchingMqttChannels = (dataSourcesSnapshot?.mqttChannels || []).filter((channel) => (
+    normalizeTopicList(channel.topics).some((topic) => mqttTopicMatches(topic, expectedMqttTopic) || mqttTopicMatches(topic, latestRawTopic))
+  ));
+  const connectedMatchingMqttChannels = matchingMqttChannels.filter((channel) => dataSourcesSnapshot?.mqttStatuses?.[channel.id]?.state === 'connected');
+  const matchedHttpChannel = (dataSourcesSnapshot?.httpPushChannels || []).find((channel) => latestRawSource.includes(channel.id));
+  const telemetryExample = device.config?.dataSource === 'mqtt' ? buildMqttExample(device) : buildCurlRequest(device, origin);
+
+  const copyDiagnosticsText = async (text: string, successMessage: string) => {
+    setDiagnosticsMessage('');
+    try {
+      await navigator.clipboard.writeText(text);
+      setDiagnosticsMessage(successMessage);
+    } catch (error) {
+      setDiagnosticsMessage('Copy failed. Select the text and copy it manually.');
+    }
+  };
 
   const updateControl = (key: string, value: any) => {
     setControlValues(prev => ({ ...prev, [key]: value }));
@@ -775,6 +860,112 @@ export function DeviceDetails() {
                 )}
               </div>
               <p className="pt-2 text-[11px] leading-relaxed text-slate-500">{dataQuality.description}</p>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-[#1c2128] rounded-lg border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white uppercase tracking-wider text-[11px] font-mono">
+                <Radio className="h-4 w-4" /> Diagnostics
+              </h3>
+              <button
+                type="button"
+                onClick={() => copyDiagnosticsText(telemetryExample, 'Telemetry test example copied.')}
+                className="inline-flex h-8 items-center gap-1.5 rounded border border-slate-300 px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy Test
+              </button>
+            </div>
+
+            {diagnosticsMessage && (
+              <div className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+                {diagnosticsMessage}
+              </div>
+            )}
+
+            <div className="space-y-3 font-mono text-xs">
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Data Source</span>
+                <span className="text-slate-900 dark:text-slate-300">{device.config?.dataSource || 'manual'}</span>
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Binding ID</span>
+                <span className="max-w-[12rem] truncate text-right text-slate-900 dark:text-slate-300" title={expectedExternalId}>{expectedExternalId}</span>
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">HTTP Endpoint</span>
+                <span className="max-w-[12rem] truncate text-right text-slate-900 dark:text-slate-300" title={expectedHttpEndpoint}>{expectedHttpEndpoint}</span>
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">MQTT Topic</span>
+                <span className="max-w-[12rem] truncate text-right text-slate-900 dark:text-slate-300" title={expectedMqttTopic}>{expectedMqttTopic}</span>
+              </div>
+              <div className="pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500">MQTT Match</span>
+                  <span className={cn('text-right', connectedMatchingMqttChannels.length ? 'text-emerald-600 dark:text-emerald-300' : matchingMqttChannels.length ? 'text-amber-600 dark:text-amber-300' : 'text-slate-500')}>
+                    {connectedMatchingMqttChannels.length ? 'Connected' : matchingMqttChannels.length ? 'Configured' : 'No matching subscriber'}
+                  </span>
+                </div>
+                {matchingMqttChannels.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {matchingMqttChannels.slice(0, 3).map((channel) => {
+                      const status = dataSourcesSnapshot?.mqttStatuses?.[channel.id];
+                      return (
+                        <div key={channel.id} className="rounded bg-slate-50 px-2 py-1 text-[10px] text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+                          <Wifi className="mr-1 inline h-3 w-3 text-sky-500" />
+                          {channel.name}: {status?.state || 'unknown'}{status?.lastTopic ? ` / ${status.lastTopic}` : ''}
+                          {(status?.receivedCount || status?.acceptedCount || status?.rejectedCount) ? (
+                            <span className="ml-1 text-slate-400">
+                              R {status.receivedCount || 0} / A {status.acceptedCount || 0} / X {status.rejectedCount || 0}
+                            </span>
+                          ) : null}
+                          {status?.message && <div className="mt-0.5 truncate text-slate-400" title={status.message}>{status.message}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500">Latest Raw Match</span>
+                  <span className={cn('text-right', latestRawTelemetry ? 'text-emerald-600 dark:text-emerald-300' : 'text-red-600 dark:text-red-300')}>
+                    {latestRawTelemetry ? 'Found' : 'None'}
+                  </span>
+                </div>
+                {latestRawTelemetry ? (
+                  <div className="mt-2 rounded bg-slate-50 p-2 text-[10px] text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+                    <div>ID: {getDeviceIdFromMetricLog(latestRawTelemetry)}</div>
+                    <div>Source: {latestRawSource || '-'}</div>
+                    <div className="truncate" title={latestRawTopic}>Topic: {latestRawTopic || '-'}</div>
+                    <div>Received: {getMetricLogTime(latestRawTelemetry) ? new Date(getMetricLogTime(latestRawTelemetry)).toLocaleString() : '-'}</div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                    No accepted raw telemetry matched this device ID or External Device ID. Check payload `device_id`, API Path, MQTT topic, and ingest token.
+                  </p>
+                )}
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">HTTP Channel</span>
+                <span className="text-slate-900 dark:text-slate-300">{matchedHttpChannel?.name || (latestRawSource.startsWith('http:') ? latestRawSource : '-')}</span>
+              </div>
+              <div className="flex justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/50">
+                <span className="text-slate-500">Mapping Coverage</span>
+                <span className={cn(mappingCoverage >= 80 ? 'text-emerald-600 dark:text-emerald-300' : mappingCoverage > 0 ? 'text-amber-600 dark:text-amber-300' : 'text-slate-500')}>
+                  {rawMetricOptions.length ? `${mappingCoverage}% (${mappedRawKeys.size}/${rawMetricOptions.length})` : 'No raw fields'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/raw-data')}
+                className="inline-flex w-full items-center justify-center gap-2 rounded border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <LinkIcon className="h-3.5 w-3.5" />
+                Open Raw Data Query
+              </button>
             </div>
           </div>
         </div>

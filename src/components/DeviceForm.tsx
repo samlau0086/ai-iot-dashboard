@@ -5,6 +5,7 @@ import { Device, DeviceType } from '../types';
 import { IOT_ICONS } from '../lib/icons';
 import { ArrowLeft, Copy, Upload, X } from 'lucide-react';
 import { notifySuccess } from '../lib/toast';
+import { buildCurlRequest as buildDeviceCurlRequest, buildMqttExample as buildDeviceMqttExample } from '../lib/deviceTelemetryExamples';
 
 interface DeviceFormProps {
   deviceId?: string; // If provided, it's edit mode
@@ -286,7 +287,27 @@ MQTT CLI:
 mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.stringify(buildTelemetryPayload())}'`;
   };
 
-  const buildTelemetryExample = () => configData.dataSource === 'mqtt' ? buildMqttExample() : buildCurlRequest();
+  const buildDraftExampleDevice = (): Device => ({
+    id: existingDevice?.id || 'NEW-DEVICE-ID',
+    name: formData.name || existingDevice?.name || 'New Device',
+    type: (formData.type || 'gateway') as DeviceType,
+    siteId: formData.siteId,
+    tenantId: formData.tenantId,
+    tags: formData.tags || ['factory-a'],
+    metrics: Object.keys(existingDevice?.metrics || {}).length ? existingDevice?.metrics || {} : sampleMetricsByType((formData.type || 'gateway') as DeviceType),
+    status: existingDevice?.status || 'online',
+    lastSeen: existingDevice?.lastSeen || new Date().toISOString(),
+    firmwareVersion: existingDevice?.firmwareVersion || 'unknown',
+    icon: formData.icon,
+    scadaIcon: formData.scadaIcon,
+    config: configData,
+  });
+
+  const buildTelemetryExample = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3006';
+    const draftDevice = buildDraftExampleDevice();
+    return configData.dataSource === 'mqtt' ? buildDeviceMqttExample(draftDevice) : buildDeviceCurlRequest(draftDevice, origin);
+  };
   const scadaSvgPreview = formData.scadaIcon?.mode === 'svg' && formData.scadaIcon.svg
     ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(formData.scadaIcon.svg)}`
     : '';
