@@ -14,6 +14,7 @@ export interface User {
   role: string;
   appProfile?: AppProfile;
   siteId: string;
+  customerId?: string;
   status: 'pending' | 'approved' | 'rejected';
   createdAt?: string;
   approvedAt?: string;

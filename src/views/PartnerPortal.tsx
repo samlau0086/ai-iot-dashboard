@@ -9,22 +9,27 @@ import {
   Plus,
   ShieldCheck,
   Trash2,
+  UserPlus,
+  UsersRound,
 } from 'lucide-react';
 import {
   useAppStore,
   type PartnerCustomer,
   type PartnerProject,
+  type User,
   type WhiteLabelConfig,
 } from '../lib/store';
+import { APP_PROFILE_OPTIONS, type AppProfile } from '../lib/featureAccess';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
-import { notifySuccess } from '../lib/toast';
+import { notify, notifySuccess } from '../lib/toast';
 
 const CUSTOMER_STATUSES: PartnerCustomer['status'][] = ['prospect', 'active', 'paused', 'archived'];
 const CUSTOMER_PLANS: PartnerCustomer['plan'][] = ['starter', 'operations', 'automation', 'enterprise'];
 const PROJECT_TYPES: PartnerProject['type'][] = ['deployment', 'maintenance', 'retrofit', 'integration', 'support'];
 const PROJECT_STATUSES: PartnerProject['status'][] = ['draft', 'quoted', 'won', 'in_progress', 'delivered', 'lost'];
 const DOMAIN_STATUSES: WhiteLabelConfig['domainStatus'][] = ['not_configured', 'pending_dns', 'active', 'error'];
+const CUSTOMER_ACCOUNT_ROLES = ['Customer', 'Operator', 'Viewer'] as const;
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -51,9 +56,13 @@ export function PartnerPortal() {
     updatePartnerProject,
     deletePartnerProject,
     updateWhiteLabelConfig,
+    addUser,
+    updateUser,
+    deleteUser,
+    approveUser,
   } = useAppStore();
 
-  const [activeTab, setActiveTab] = useState<'customers' | 'projects' | 'branding' | 'permissions'>('customers');
+  const [activeTab, setActiveTab] = useState<'customers' | 'accounts' | 'projects' | 'branding' | 'permissions'>('customers');
   const [customerDraft, setCustomerDraft] = useState({
     name: '',
     contactName: '',
@@ -77,23 +86,51 @@ export function PartnerPortal() {
     quoteNo: '',
     nextStep: '',
   });
+  const [accountDraft, setAccountDraft] = useState({
+    customerId: partnerCustomers[0]?.id || '',
+    name: '',
+    email: '',
+    password: '',
+    role: 'Customer',
+    appProfile: 'simple' as AppProfile,
+    siteId: partnerCustomers[0]?.siteIds[0] || sites[0]?.id || 'factory-a',
+    status: 'approved' as User['status'],
+  });
   const [brandDraft, setBrandDraft] = useState(whiteLabelConfig);
 
   useEffect(() => {
     setBrandDraft(whiteLabelConfig);
   }, [whiteLabelConfig]);
 
+  useEffect(() => {
+    const customer = partnerCustomers.find((item) => item.id === accountDraft.customerId) || partnerCustomers[0];
+    const fallbackSiteId = customer?.siteIds[0] || sites[0]?.id || 'factory-a';
+    if (!accountDraft.customerId && customer) {
+      setAccountDraft((current) => ({ ...current, customerId: customer.id, siteId: fallbackSiteId }));
+      return;
+    }
+    if (customer && !customer.siteIds.includes(accountDraft.siteId)) {
+      setAccountDraft((current) => ({ ...current, siteId: fallbackSiteId }));
+    }
+  }, [accountDraft.customerId, accountDraft.siteId, partnerCustomers, sites]);
+
   const siteById = useMemo(() => new Map(sites.map((site) => [site.id, site])), [sites]);
   const customerById = useMemo(() => new Map(partnerCustomers.map((customer) => [customer.id, customer])), [partnerCustomers]);
+  const customerSiteIdsById = useMemo(() => new Map(partnerCustomers.map((customer) => [customer.id, new Set(customer.siteIds)])), [partnerCustomers]);
   const activeCustomers = partnerCustomers.filter((customer) => customer.status === 'active').length;
   const projectPipeline = partnerProjects
     .filter((project) => !['lost', 'delivered'].includes(project.status))
     .reduce((sum, project) => sum + (Number(project.value) || 0), 0);
   const managedSiteIds = new Set(partnerCustomers.flatMap((customer) => customer.siteIds));
   const managedDevices = devices.filter((device) => managedSiteIds.has(device.siteId || '')).length;
+  const customerAccounts = users.filter((user) => (
+    Boolean(user.customerId)
+    || partnerCustomers.some((customer) => customer.siteIds.includes(user.siteId) && CUSTOMER_ACCOUNT_ROLES.includes(user.role as typeof CUSTOMER_ACCOUNT_ROLES[number]))
+  ));
 
   const tabs = [
     { id: 'customers', label: 'Customers', icon: Building2 },
+    { id: 'accounts', label: 'Customer Accounts', icon: UsersRound },
     { id: 'projects', label: 'Projects & Quotes', icon: Handshake },
     { id: 'branding', label: 'White Label', icon: Palette },
     { id: 'permissions', label: 'RBAC Matrix', icon: ShieldCheck },
@@ -117,6 +154,42 @@ export function PartnerPortal() {
     });
     setCustomerDraft({ name: '', contactName: '', email: '', phone: '', tenantId: '', status: 'prospect', plan: 'starter', siteIds: '', notes: '' });
     notifySuccess('Customer created successfully.');
+  };
+
+  const handleAddAccount = () => {
+    if (!accountDraft.customerId || !accountDraft.name.trim() || !accountDraft.email.trim()) return;
+    const email = accountDraft.email.trim().toLowerCase();
+    if (users.some((user) => user.email.toLowerCase() === email)) {
+      notify({ level: 'error', title: 'Customer account', message: 'Email already exists. Please use another email.' });
+      return;
+    }
+
+    const customer = customerById.get(accountDraft.customerId);
+    const fallbackSiteId = customer?.siteIds[0] || sites[0]?.id || 'factory-a';
+    const siteId = customer?.siteIds.includes(accountDraft.siteId) ? accountDraft.siteId : fallbackSiteId;
+
+    addUser({
+      id: newId('user'),
+      name: accountDraft.name.trim(),
+      email,
+      password: accountDraft.password || 'password123',
+      role: accountDraft.role,
+      appProfile: accountDraft.appProfile,
+      siteId,
+      customerId: accountDraft.customerId,
+      status: accountDraft.status,
+      createdAt: new Date().toISOString(),
+      approvedAt: accountDraft.status === 'approved' ? new Date().toISOString() : undefined,
+    });
+    setAccountDraft((current) => ({
+      ...current,
+      name: '',
+      email: '',
+      password: '',
+      siteId,
+      status: 'approved',
+    }));
+    notifySuccess('Customer account created successfully.');
   };
 
   const handleAddProject = () => {
@@ -178,10 +251,11 @@ export function PartnerPortal() {
             Manage customer accounts, projects, branding, domains, and delivery permissions for partner-led deployments.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
           {[
             ['Customers', partnerCustomers.length],
             ['Active', activeCustomers],
+            ['Accounts', customerAccounts.length],
             ['Managed Sites', managedSiteIds.size],
             ['Devices', managedDevices],
           ].map(([label, value]) => (
@@ -288,6 +362,122 @@ export function PartnerPortal() {
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'accounts' && (
+            <div className="space-y-6">
+              <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-4">
+                <select
+                  value={accountDraft.customerId}
+                  onChange={(event) => {
+                    const customer = customerById.get(event.target.value);
+                    setAccountDraft((current) => ({
+                      ...current,
+                      customerId: event.target.value,
+                      siteId: customer?.siteIds[0] || sites[0]?.id || current.siteId,
+                    }));
+                  }}
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                >
+                  <option value="">Select customer</option>
+                  {partnerCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+                </select>
+                <input value={accountDraft.name} onChange={(event) => setAccountDraft((current) => ({ ...current, name: event.target.value }))} placeholder="User name" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <input value={accountDraft.email} onChange={(event) => setAccountDraft((current) => ({ ...current, email: event.target.value }))} placeholder="Email" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <input value={accountDraft.password} onChange={(event) => setAccountDraft((current) => ({ ...current, password: event.target.value }))} placeholder="Initial password, default password123" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <select value={accountDraft.siteId} onChange={(event) => setAccountDraft((current) => ({ ...current, siteId: event.target.value }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                  {(customerById.get(accountDraft.customerId)?.siteIds || sites.map((site) => site.id)).map((siteId) => (
+                    <option key={siteId} value={siteId}>{siteById.get(siteId)?.name || siteId}</option>
+                  ))}
+                </select>
+                <select value={accountDraft.role} onChange={(event) => setAccountDraft((current) => ({ ...current, role: event.target.value }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                  {CUSTOMER_ACCOUNT_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                </select>
+                <select value={accountDraft.appProfile} onChange={(event) => setAccountDraft((current) => ({ ...current, appProfile: event.target.value as AppProfile }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                  {APP_PROFILE_OPTIONS.map((profile) => <option key={profile.value} value={profile.value}>{profile.label}</option>)}
+                </select>
+                <select value={accountDraft.status} onChange={(event) => setAccountDraft((current) => ({ ...current, status: event.target.value as User['status'] }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                  {['approved', 'pending', 'rejected'].map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+                <button type="button" onClick={handleAddAccount} className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500 lg:col-span-4">
+                  <UserPlus className="h-4 w-4" />
+                  Add Customer Account
+                </button>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3">Account</th>
+                      <th className="px-4 py-3">Customer</th>
+                      <th className="px-4 py-3">Site</th>
+                      <th className="px-4 py-3">Role / Profile</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {customerAccounts.map((user) => {
+                      const inferredCustomer = user.customerId
+                        ? customerById.get(user.customerId)
+                        : partnerCustomers.find((customer) => customer.siteIds.includes(user.siteId));
+                      const allowedSiteIds = inferredCustomer?.siteIds || sites.map((site) => site.id);
+                      return (
+                        <tr key={user.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                          <td className="px-4 py-3">
+                            <input value={user.name} onChange={(event) => updateUser(user.id, { name: event.target.value })} className="block w-52 rounded border-0 bg-transparent px-2 py-1 font-semibold text-slate-900 ring-1 ring-transparent focus:ring-orange-500 dark:text-white" />
+                            <input value={user.email} onChange={(event) => updateUser(user.id, { email: event.target.value })} className="mt-1 block w-52 rounded border-0 bg-transparent px-2 py-1 text-xs text-slate-500 ring-1 ring-transparent focus:ring-orange-500" />
+                          </td>
+                          <td className="px-4 py-3">
+                            <select value={user.customerId || inferredCustomer?.id || ''} onChange={(event) => {
+                              const nextCustomer = customerById.get(event.target.value);
+                              updateUser(user.id, {
+                                customerId: event.target.value || undefined,
+                                siteId: nextCustomer?.siteIds[0] || user.siteId,
+                              });
+                            }} className="rounded-md border-0 bg-transparent px-2 py-1 ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
+                              <option value="">Unassigned</option>
+                              {partnerCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-4 py-3">
+                            <select value={user.siteId} onChange={(event) => updateUser(user.id, { siteId: event.target.value })} className="rounded-md border-0 bg-transparent px-2 py-1 ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
+                              {allowedSiteIds.map((siteId) => <option key={siteId} value={siteId}>{siteById.get(siteId)?.name || siteId}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-4 py-3">
+                            <select value={user.role} onChange={(event) => updateUser(user.id, { role: event.target.value })} className="block rounded-md border-0 bg-transparent px-2 py-1 ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
+                              {CUSTOMER_ACCOUNT_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                            </select>
+                            <select value={user.appProfile || 'simple'} onChange={(event) => updateUser(user.id, { appProfile: event.target.value as AppProfile })} className="mt-2 block rounded-md border-0 bg-transparent px-2 py-1 text-xs ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
+                              {APP_PROFILE_OPTIONS.map((profile) => <option key={profile.value} value={profile.value}>{profile.label}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-4 py-3">
+                            <select value={user.status} onChange={(event) => updateUser(user.id, { status: event.target.value as User['status'] })} className="rounded-md border-0 bg-transparent px-2 py-1 ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
+                              {['approved', 'pending', 'rejected'].map((status) => <option key={status} value={status}>{status}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {user.status !== 'approved' && (
+                              <button type="button" onClick={() => approveUser(user.id, user.role, user.siteId, user.appProfile)} className="mr-2 rounded px-2 py-1 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10">
+                                Approve
+                              </button>
+                            )}
+                            <button type="button" onClick={async () => {
+                              if (await confirmDelete({ title: 'Delete customer account', itemName: user.email, description: 'This login account will be removed. Customer, site, and device data are not deleted.' })) deleteUser(user.id);
+                            }} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

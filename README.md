@@ -43,7 +43,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 原始数据查询已完成：支持按设备、metric、来源、时间范围和 limit 查询遥测原始 payload，并支持 JSON 导出。
 - [x] 工作流条件节点已调整为 IF / ELIF / ELSE 分支语义；多个 Trigger 采用任一触发即可进入后续流程。
 - [x] AI Copilot 基础闭环已完成：支持基于当前 Site / 设备 / 告警 / 工作流 / 图表上下文进行自然语言查询、异常解释、建议动作、CSV 报表生成和工作流草稿生成。
-- [x] Partner / White Label 基础闭环已完成：支持客户管理、项目/报价记录、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
+- [x] Partner / White Label 基础闭环已完成：支持客户管理、客户子账号、项目/报价记录、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
 - [ ] 下一阶段重点：指标筛选、时间范围分析、设备对比、控制连接器、AI Copilot 外部大模型接入、Partner 计费与更细粒度 RBAC。
 
 ### V1: Energy Monitoring MVP
@@ -459,6 +459,7 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 进入 **Partner** 页面 `/partner` 后，可以管理面向系统集成商、代理商或多客户交付场景的基础运营数据：
 
 - **Customers**：添加、编辑、删除客户，配置客户联系人、Tenant ID、套餐、状态和绑定的 Site IDs。
+- **Customer Accounts**：为客户直接创建登录子账号，设置角色、App Profile、站点范围和审核状态；旧用户如果绑定到客户 Site，也会自动出现在对应账号列表中。
 - **Projects & Quotes**：记录客户项目、报价编号、项目类型、交付状态、金额、负责人、关联站点和下一步跟进事项。
 - **White Label**：配置产品名称、公司名称、Logo URL、主色、支持邮箱、自定义域名和域名状态。保存后侧边栏、移动端标题和登录页会使用新的系统标题和 Logo。
 - **RBAC Matrix**：查看不同角色与 App Profile 的推荐组合，例如 Partner 使用 Full Platform，Customer 使用 Simple Device App。
