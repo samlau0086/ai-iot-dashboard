@@ -887,6 +887,8 @@ export function DeviceDetails() {
   };
 
   if (isSimpleProfile) {
+    const routeState = (location.state as { from?: string; justClaimed?: boolean } | null);
+    const justClaimed = Boolean(routeState?.justClaimed);
     const hasLiveMetrics = Object.keys(device.metrics || {}).length > 0;
     const visiblePrimaryMetrics = primaryMetrics.length
       ? primaryMetrics
@@ -918,6 +920,15 @@ export function DeviceDetails() {
             </button>
           )}
         </div>
+
+        {justClaimed && (
+          <div className="rounded-3xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 shadow-sm dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
+            <p className="font-semibold">Device added successfully.</p>
+            <p className="mt-1 text-emerald-700/80 dark:text-emerald-200/80">
+              You can operate it here. If data is not visible yet, power on the device and make sure it is connected to the network.
+            </p>
+          </div>
+        )}
 
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
@@ -951,7 +962,8 @@ export function DeviceDetails() {
             </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-[#1c2128]">
-              No live telemetry has been received for this device yet.
+              <p className="font-semibold text-slate-700 dark:text-slate-200">Waiting for device data</p>
+              <p className="mt-1">Power on the device and confirm it is connected. The status will update after the first telemetry message arrives.</p>
             </div>
           )}
         </section>

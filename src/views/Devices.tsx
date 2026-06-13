@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { MoreVertical, Edit2, Trash2 } from 'lucide-react';
+import { ArrowRight, MoreVertical, Edit2, PackageCheck, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { DeviceForm } from '../components/DeviceForm';
 import { DeviceConfirmDelete } from '../components/DeviceConfirmDelete';
 import { getDeviceIcon } from '../lib/icons';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { Device } from '../types';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
@@ -46,6 +46,7 @@ const qualityDot = (state: string) => (
 );
 
 export function Devices() {
+  const navigate = useNavigate();
   const { language, devices: storedDevices, sites, activeSiteId, setActiveSite, currentUser } = useAppStore();
   const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
@@ -92,6 +93,10 @@ export function Devices() {
   }, [activeSiteId, isSimpleProfile, selectedSiteId, userSiteId]);
 
   const handleCreate = () => {
+    if (isSimpleProfile) {
+      navigate('/claim');
+      return;
+    }
     setEditingDeviceId(undefined);
     setActiveView('form');
   };
@@ -114,6 +119,122 @@ export function Devices() {
 
   if (activeView === 'form') {
     return <DeviceForm deviceId={editingDeviceId} onClose={closeForm} />;
+  }
+
+  if (isSimpleProfile) {
+    const siteName = userSiteOption.name || 'My Site';
+    const qualityByDevice = new Map(filteredDevices.map((device) => [
+      device.id,
+      getDeviceDataQuality(storedDevices.find((item) => item.id === device.id) || device),
+    ]));
+    const onlineCount = filteredDevices.filter((device) => qualityByDevice.get(device.id)?.state === 'online').length;
+    const attentionCount = filteredDevices.filter((device) => {
+      const state = qualityByDevice.get(device.id)?.state;
+      return state === 'warning' || state === 'stale' || state === 'offline';
+    }).length;
+
+    return (
+      <div className="mx-auto max-w-4xl space-y-5 pb-10">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{siteName}</p>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">My Devices</h1>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Open a device to view status and operate it.</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleCreate}
+            className="inline-flex h-11 shrink-0 items-center gap-2 rounded-2xl bg-orange-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
+          >
+            <Plus className="h-4 w-4" />
+            Add
+          </button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-center shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+            <p className="text-2xl font-bold text-slate-900 dark:text-white">{filteredDevices.length}</p>
+            <p className="mt-1 text-xs text-slate-500">Total</p>
+          </div>
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-center shadow-sm dark:border-emerald-500/30 dark:bg-emerald-500/10">
+            <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{onlineCount}</p>
+            <p className="mt-1 text-xs text-emerald-700/80 dark:text-emerald-300/80">Online</p>
+          </div>
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center shadow-sm dark:border-amber-500/30 dark:bg-amber-500/10">
+            <p className="text-2xl font-bold text-amber-700 dark:text-amber-300">{attentionCount}</p>
+            <p className="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">Attention</p>
+          </div>
+        </div>
+
+        {filteredDevices.length === 0 ? (
+          <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm dark:border-slate-700 dark:bg-[#1c2128]">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-300">
+              <PackageCheck className="h-8 w-8" />
+            </div>
+            <h2 className="mt-4 text-lg font-bold text-slate-900 dark:text-white">Add your first device</h2>
+            <p className="mx-auto mt-2 max-w-sm text-sm text-slate-500 dark:text-slate-400">
+              Scan or enter the MAC, IMEI, or Serial Number on your device label to finish setup.
+            </p>
+            <button
+              type="button"
+              onClick={handleCreate}
+              className="mt-5 inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-orange-600 px-5 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
+            >
+              <Plus className="h-4 w-4" />
+              Add Device
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredDevices.map((device) => {
+              const IconComp = getDeviceIcon(device.icon);
+              const quality = qualityByDevice.get(device.id) || getDeviceDataQuality(device);
+              const keyMetric = quality.hasLiveData ? getDeviceKeyMetric(device) : 'No Live Data';
+
+              return (
+                <Link
+                  key={device.id}
+                  to={`/devices/${device.id}`}
+                  className="block rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md dark:border-slate-800 dark:bg-[#1c2128] dark:hover:border-orange-500/40"
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-orange-50 text-orange-600 ring-1 ring-orange-100 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/20">
+                      <IconComp className="h-7 w-7" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-base font-bold text-slate-900 dark:text-white">{device.name}</p>
+                          <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{device.id}</p>
+                        </div>
+                        <span className={cn(
+                          'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase',
+                          qualityTone(quality.state)
+                        )}>
+                          <span className={cn('h-1.5 w-1.5 rounded-full', qualityDot(quality.state))} />
+                          {quality.label}
+                        </span>
+                      </div>
+                      <div className="mt-4 grid grid-cols-[1fr_auto] items-end gap-3">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Current</p>
+                          <p className="mt-1 truncate font-mono text-lg font-bold text-slate-900 dark:text-white">{keyMetric}</p>
+                          <p className="mt-1 text-xs text-slate-500">Last seen {formatDeviceAge(quality.ageMs)}</p>
+                        </div>
+                        <span className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">
+                          Operate
+                          <ArrowRight className="h-4 w-4" />
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
