@@ -102,6 +102,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Device Metrics Mapping：raw telemetry fields 可映射到标准 metrics，并配置显示名、单位、精度和 Primary 标记
 - [x] Device Data Quality：统一判定 Live / Stale / Offline / Never Reported，并在设备列表、详情、总览和 SCADA 中避免把过期数据当实时数据展示
 - [x] Device Ingest Diagnostics：设备详情页可诊断 MQTT/HTTP 绑定、最近 raw telemetry、mapping 覆盖率，并生成测试请求；Raw Data 可显示匹配设备或未匹配原因
+- [x] Device Provisioning：支持设备型号模板、生产设备库存、CSV 批量导入、Claim Code 安全认领、撤销认领和审计日志，以及在添加设备时通过 MAC / IMEI / Serial Number 自动配置设备
 - [ ] SQL-like Query / Metric Builder
 
 ### V4: Control Center
@@ -521,6 +522,26 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 - 可一键复制基于当前设备配置生成的 HTTP curl 或 MQTT publish 示例。
 
 **Raw Data Query** 页面会标记每条 telemetry 是否匹配到平台设备；未匹配时会提示常见原因，例如缺少 `device_id`、没有 numeric metrics，或没有设备使用该 ID / External Device ID。
+
+### Device Provisioning
+
+生产设备可以先在 **Settings -> Provisioning** 中登记：
+
+1. 建立 **Device Model**，定义型号、设备类型、默认数据源、MQTT topic 模板、HTTP API path 模板、metric mappings、控制项等。
+2. 录入或 CSV 批量导入 **Manufactured Devices**，字段包括 `serialNumber`、`mac`、`imei`、`modelNo/modelId`、`batchNo`、`firmwareVersion`。系统会为每台库存设备生成 `Claim Code`，也可以在库存表中重新生成或复制。
+3. 用户添加设备时，在 **Auto Provision by MAC / IMEI / Serial Number** 输入设备身份，并填写对应 `Claim Code`。校验通过后系统会匹配库存和型号模板，并填充设备类型、External Device ID、topic/API path、mapping、控制项、SCADA 图标等配置。
+4. 保存后库存设备会被标记为 `claimed`，并记录对应的平台 Device ID，避免重复绑定。管理员可以在库存表中 Revoke Claim，让该生产设备重新进入可认领状态。
+5. Provisioning 页面会记录 Claim Audit Log，包括成功认领、失败尝试、撤销认领和 Claim Code 重新生成，方便追踪批量出货和客户自助绑定过程。
+
+模板支持占位符：
+
+- `{identity}`：优先使用 Serial Number，其次 IMEI / MAC。
+- `{serial}` / `{serialNumber}`
+- `{mac}`
+- `{imei}`
+- `{batch}` / `{batchNo}`
+
+例如 MQTT topic 模板可设置为 `devices/{identity}/telemetry`，命令 topic 可设置为 `devices/{identity}/command`。
 - 历史回放会基于设备 mapping 将原始 telemetry logs 转换为标准 metric 后再展示。
 
 ### Gateway HTTP Push

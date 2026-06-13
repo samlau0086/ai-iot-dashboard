@@ -66,6 +66,64 @@ export interface NotificationChannel {
   lastTestMessage?: string;
 }
 
+export interface DeviceModelTemplate {
+  id: string;
+  name: string;
+  modelNo: string;
+  deviceType: Device['type'];
+  icon?: string;
+  dataSource: 'api' | 'mqtt' | 'manual';
+  protocol?: string;
+  mqttTopicTemplate?: string;
+  mqttCommandTopicTemplate?: string;
+  apiPathTemplate?: string;
+  metricMappings?: NonNullable<Device['config']>['metricMappings'];
+  controlDefinitions?: NonNullable<Device['config']>['controlDefinitions'];
+  scadaIcon?: Device['scadaIcon'];
+  defaultTags?: string[];
+  offlineDetectionEnabled?: boolean;
+  offlineTimeoutSeconds?: number;
+  firmwareVersion?: string;
+  description?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface ManufacturedDevice {
+  id: string;
+  modelId: string;
+  serialNumber: string;
+  mac?: string;
+  imei?: string;
+  claimCode?: string;
+  batchNo?: string;
+  firmwareVersion?: string;
+  status: 'in_stock' | 'shipped' | 'claimed' | 'disabled';
+  claimedDeviceId?: string;
+  claimedBy?: string;
+  claimedAt?: string;
+  revokedAt?: string;
+  revokedBy?: string;
+  siteId?: string;
+  tenantId?: string;
+  note?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface ProvisioningAuditLog {
+  id: string;
+  manufacturedDeviceId?: string;
+  identity: string;
+  action: 'claim_success' | 'claim_failed' | 'claim_revoked' | 'claim_code_regenerated';
+  result: 'success' | 'failed';
+  reason: string;
+  platformDeviceId?: string;
+  userId?: string;
+  userName?: string;
+  createdAt: string;
+}
+
 export interface AccessDefinition {
   id: string;
   name: string;
@@ -823,6 +881,21 @@ interface AppState {
   setDeviceDataSourceStatus: (status: 'mock' | 'api' | 'mqtt' | 'error') => void;
   updateDevice: (id: string, device: Partial<Device>) => void;
   deleteDevice: (id: string) => void;
+  // Device Provisioning
+  deviceModels: DeviceModelTemplate[];
+  manufacturedDevices: ManufacturedDevice[];
+  provisioningAuditLogs: ProvisioningAuditLog[];
+  addDeviceModel: (model: DeviceModelTemplate) => void;
+  updateDeviceModel: (id: string, model: Partial<DeviceModelTemplate>) => void;
+  deleteDeviceModel: (id: string) => void;
+  addManufacturedDevice: (device: ManufacturedDevice) => void;
+  updateManufacturedDevice: (id: string, device: Partial<ManufacturedDevice>) => void;
+  deleteManufacturedDevice: (id: string) => void;
+  bulkImportManufacturedDevices: (devices: ManufacturedDevice[]) => void;
+  claimManufacturedDevice: (manufacturedId: string, platformDeviceId: string, siteId?: string, tenantId?: string, claimedBy?: string) => void;
+  revokeManufacturedDeviceClaim: (manufacturedId: string, revokedBy?: string) => void;
+  regenerateManufacturedDeviceClaimCode: (manufacturedId: string, claimCode: string, user?: Pick<User, 'id' | 'name'> | null) => void;
+  addProvisioningAuditLog: (log: ProvisioningAuditLog) => void;
   // Sites / Tenants
   sites: SiteTenant[];
   activeSiteId: string;
@@ -899,6 +972,9 @@ type BackendState = Partial<Pick<AppState,
   | 'notificationChannels'
   | 'devices'
   | 'deviceDataSourceStatus'
+  | 'deviceModels'
+  | 'manufacturedDevices'
+  | 'provisioningAuditLogs'
   | 'sites'
   | 'activeSiteId'
   | 'users'
@@ -963,6 +1039,9 @@ const pickBackendState = (state: AppState): BackendState => ({
   notificationChannels: state.notificationChannels,
   devices: state.devices,
   deviceDataSourceStatus: state.deviceDataSourceStatus,
+  deviceModels: state.deviceModels,
+  manufacturedDevices: state.manufacturedDevices,
+  provisioningAuditLogs: state.provisioningAuditLogs,
   sites: state.sites,
   activeSiteId: state.activeSiteId,
   users: state.users,
@@ -1037,6 +1116,9 @@ export const useAppStore = create<AppState>()(
           set({
             ...(state || {}),
             devices: mergeDefaultDevices(state?.devices),
+            deviceModels: Array.isArray(state?.deviceModels) ? state.deviceModels : [],
+            manufacturedDevices: Array.isArray(state?.manufacturedDevices) ? state.manufacturedDevices : [],
+            provisioningAuditLogs: Array.isArray(state?.provisioningAuditLogs) ? state.provisioningAuditLogs : [],
             sites,
             activeSiteId,
             charts: mergeDefaultCharts(state?.charts),
@@ -1166,6 +1248,90 @@ export const useAppStore = create<AppState>()(
       })),
       deleteDevice: (id) => set((state) => ({
         devices: state.devices.filter(d => d.id !== id)
+      })),
+
+      deviceModels: [],
+      manufacturedDevices: [],
+      provisioningAuditLogs: [],
+      addDeviceModel: (model) => set((state) => ({
+        deviceModels: [...state.deviceModels, model],
+      })),
+      updateDeviceModel: (id, model) => set((state) => ({
+        deviceModels: state.deviceModels.map((item) => item.id === id ? { ...item, ...model, updatedAt: new Date().toISOString() } : item),
+      })),
+      deleteDeviceModel: (id) => set((state) => ({
+        deviceModels: state.deviceModels.filter((item) => item.id !== id),
+        manufacturedDevices: state.manufacturedDevices.map((item) => item.modelId === id ? { ...item, modelId: '', updatedAt: new Date().toISOString() } : item),
+      })),
+      addManufacturedDevice: (manufacturedDevice) => set((state) => ({
+        manufacturedDevices: [...state.manufacturedDevices, manufacturedDevice],
+      })),
+      updateManufacturedDevice: (id, manufacturedDevice) => set((state) => ({
+        manufacturedDevices: state.manufacturedDevices.map((item) => item.id === id ? { ...item, ...manufacturedDevice, updatedAt: new Date().toISOString() } : item),
+      })),
+      deleteManufacturedDevice: (id) => set((state) => ({
+        manufacturedDevices: state.manufacturedDevices.filter((item) => item.id !== id),
+      })),
+      bulkImportManufacturedDevices: (manufacturedDevices) => set((state) => {
+        const byIdentity = new Map(state.manufacturedDevices.map((item) => [
+          [item.serialNumber, item.mac, item.imei].filter(Boolean).join('|').toLowerCase(),
+          item,
+        ]));
+        manufacturedDevices.forEach((item) => {
+          const key = [item.serialNumber, item.mac, item.imei].filter(Boolean).join('|').toLowerCase();
+          byIdentity.set(key, { ...byIdentity.get(key), ...item });
+        });
+        return { manufacturedDevices: Array.from(byIdentity.values()) };
+      }),
+      claimManufacturedDevice: (manufacturedId, platformDeviceId, siteId, tenantId, claimedBy) => set((state) => ({
+        manufacturedDevices: state.manufacturedDevices.map((item) => item.id === manufacturedId ? {
+          ...item,
+          status: 'claimed',
+          claimedDeviceId: platformDeviceId,
+          claimedBy,
+          claimedAt: new Date().toISOString(),
+          revokedAt: undefined,
+          revokedBy: undefined,
+          siteId: siteId || item.siteId,
+          tenantId: tenantId || item.tenantId,
+          updatedAt: new Date().toISOString(),
+        } : item),
+      })),
+      revokeManufacturedDeviceClaim: (manufacturedId, revokedBy) => set((state) => ({
+        manufacturedDevices: state.manufacturedDevices.map((item) => item.id === manufacturedId ? {
+          ...item,
+          status: item.status === 'claimed' ? 'shipped' : item.status,
+          claimedDeviceId: undefined,
+          claimedBy: undefined,
+          claimedAt: undefined,
+          revokedAt: new Date().toISOString(),
+          revokedBy,
+          updatedAt: new Date().toISOString(),
+        } : item),
+      })),
+      regenerateManufacturedDeviceClaimCode: (manufacturedId, claimCode, user) => set((state) => ({
+        manufacturedDevices: state.manufacturedDevices.map((item) => item.id === manufacturedId ? {
+          ...item,
+          claimCode,
+          updatedAt: new Date().toISOString(),
+        } : item),
+        provisioningAuditLogs: [
+          {
+            id: `provision-log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            manufacturedDeviceId: manufacturedId,
+            identity: state.manufacturedDevices.find((item) => item.id === manufacturedId)?.serialNumber || manufacturedId,
+            action: 'claim_code_regenerated',
+            result: 'success',
+            reason: 'Claim code regenerated by admin.',
+            userId: user?.id,
+            userName: user?.name,
+            createdAt: new Date().toISOString(),
+          },
+          ...state.provisioningAuditLogs,
+        ].slice(0, 500),
+      })),
+      addProvisioningAuditLog: (log) => set((state) => ({
+        provisioningAuditLogs: [log, ...state.provisioningAuditLogs].slice(0, 500),
       })),
 
       sites: DEFAULT_SITES,

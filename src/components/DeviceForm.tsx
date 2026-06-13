@@ -6,6 +6,7 @@ import { IOT_ICONS } from '../lib/icons';
 import { ArrowLeft, Copy, Upload, X } from 'lucide-react';
 import { notifySuccess } from '../lib/toast';
 import { buildCurlRequest as buildDeviceCurlRequest, buildMqttExample as buildDeviceMqttExample } from '../lib/deviceTelemetryExamples';
+import { buildProvisionedDevice, findManufacturedDeviceByIdentity, isClaimCodeValid } from '../lib/deviceProvisioning';
 
 interface DeviceFormProps {
   deviceId?: string; // If provided, it's edit mode
@@ -73,7 +74,7 @@ const SCADA_ICON_MODES = [
 ] as const;
 
 export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
-  const { language, devices, addDevice, updateDevice, currentUser, sites, activeSiteId } = useAppStore();
+  const { language, devices, addDevice, updateDevice, currentUser, sites, activeSiteId, deviceModels, manufacturedDevices, claimManufacturedDevice, addProvisioningAuditLog } = useAppStore();
   const t = translations[language].devices.form;
   const typesT = translations[language].devices.types;
   const isAdmin = currentUser?.role === 'Admin';
@@ -104,6 +105,32 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
   const [tagInput, setTagInput] = useState('');
   const [copyMessage, setCopyMessage] = useState('');
   const [scadaIconMessage, setScadaIconMessage] = useState('');
+  const [provisionIdentity, setProvisionIdentity] = useState('');
+  const [provisionClaimCode, setProvisionClaimCode] = useState('');
+  const [matchedManufacturedId, setMatchedManufacturedId] = useState('');
+  const [provisionMessage, setProvisionMessage] = useState('');
+
+  const writeProvisioningAudit = (
+    action: 'claim_success' | 'claim_failed',
+    result: 'success' | 'failed',
+    reason: string,
+    identity: string,
+    manufacturedDeviceId?: string,
+    platformDeviceId?: string
+  ) => {
+    addProvisioningAuditLog({
+      id: `provision-log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      manufacturedDeviceId,
+      identity: identity.trim() || '-',
+      action,
+      result,
+      reason,
+      platformDeviceId,
+      userId: currentUser?.id,
+      userName: currentUser?.name,
+      createdAt: new Date().toISOString(),
+    });
+  };
 
   const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === 'Tab') {
@@ -122,6 +149,62 @@ export function DeviceForm({ deviceId, onClose }: DeviceFormProps) {
 
   const removeTag = (tagToRemove: string) => {
     setFormData(prev => ({ ...prev, tags: prev.tags?.filter(t => t !== tagToRemove) }));
+  };
+
+  const applyProvisioningIdentity = (identityValue = provisionIdentity) => {
+    setProvisionMessage('');
+    const identity = identityValue.trim();
+    const manufacturedDevice = findManufacturedDeviceByIdentity(manufacturedDevices, identityValue);
+    if (!manufacturedDevice) {
+      setMatchedManufacturedId('');
+      setProvisionMessage('No manufactured device matched this MAC / IMEI / Serial Number.');
+      writeProvisioningAudit('claim_failed', 'failed', 'No manufactured device matched this MAC / IMEI / Serial Number.', identity);
+      return;
+    }
+    const model = deviceModels.find((item) => item.id === manufacturedDevice.modelId);
+    if (!model) {
+      setMatchedManufacturedId('');
+      setProvisionMessage('Matched inventory record, but its Device Model is missing.');
+      writeProvisioningAudit('claim_failed', 'failed', 'Matched inventory record, but its Device Model is missing.', identity, manufacturedDevice.id);
+      return;
+    }
+    if (manufacturedDevice.status === 'disabled') {
+      setMatchedManufacturedId('');
+      setProvisionMessage('This manufactured device is disabled and cannot be claimed.');
+      writeProvisioningAudit('claim_failed', 'failed', 'This manufactured device is disabled and cannot be claimed.', identity, manufacturedDevice.id);
+      return;
+    }
+    if (manufacturedDevice.status === 'claimed' && manufacturedDevice.claimedDeviceId && manufacturedDevice.claimedDeviceId !== existingDevice?.id) {
+      setMatchedManufacturedId('');
+      setProvisionMessage(`Already claimed by ${manufacturedDevice.claimedDeviceId}.`);
+      writeProvisioningAudit('claim_failed', 'failed', `Already claimed by ${manufacturedDevice.claimedDeviceId}.`, identity, manufacturedDevice.id, manufacturedDevice.claimedDeviceId);
+      return;
+    }
+    if (!isClaimCodeValid(manufacturedDevice.claimCode, provisionClaimCode)) {
+      setMatchedManufacturedId('');
+      setProvisionMessage('Invalid claim code. Enter the Claim Code from the manufactured device inventory.');
+      writeProvisioningAudit('claim_failed', 'failed', 'Invalid claim code.', identity, manufacturedDevice.id);
+      return;
+    }
+
+    const selectedSite = sites.find((site) => site.id === (formData.siteId || activeSiteId)) || sites[0];
+    const provisionedDevice = buildProvisionedDevice(manufacturedDevice, model, selectedSite);
+    setMatchedManufacturedId(manufacturedDevice.id);
+    setFormData((prev) => ({
+      ...prev,
+      name: provisionedDevice.name,
+      type: provisionedDevice.type,
+      siteId: provisionedDevice.siteId,
+      tenantId: provisionedDevice.tenantId,
+      tags: provisionedDevice.tags,
+      icon: provisionedDevice.icon,
+      scadaIcon: provisionedDevice.scadaIcon,
+    }));
+    setConfigData((prev: any) => ({
+      ...prev,
+      ...(provisionedDevice.config || {}),
+    }));
+    setProvisionMessage(`Matched ${model.name} / ${manufacturedDevice.serialNumber || manufacturedDevice.mac || manufacturedDevice.imei}. Device configuration filled.`);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -385,6 +468,17 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
     } else {
       addDevice(newDevice);
     }
+    if (matchedManufacturedId) {
+      claimManufacturedDevice(matchedManufacturedId, newDevice.id, newDevice.siteId, newDevice.tenantId, currentUser?.id);
+      writeProvisioningAudit(
+        'claim_success',
+        'success',
+        'Claimed through DeviceForm auto provisioning.',
+        provisionIdentity,
+        matchedManufacturedId,
+        newDevice.id
+      );
+    }
     notifySuccess('Device saved successfully.');
     onClose();
   };
@@ -590,6 +684,60 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
         </div>
       </div>
       <div className="px-4 py-5 sm:p-6 space-y-6">
+        <div className="rounded-lg border border-orange-200 bg-orange-50/80 p-4 dark:border-orange-500/30 dark:bg-orange-500/10">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+            <div className="flex-1">
+              <label className="block text-sm font-semibold text-slate-800 dark:text-slate-100">Auto Provision by MAC / IMEI / Serial Number</label>
+              <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                Enter a manufactured device identity to fill model, data source, topic/API path, mappings, controls, and SCADA icon automatically.
+              </p>
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Device Identity</label>
+                  <input
+                    value={provisionIdentity}
+                    onChange={(event) => setProvisionIdentity(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        applyProvisioningIdentity();
+                      }
+                    }}
+                    placeholder="MAC / IMEI / SN, e.g. SN202606130001"
+                    className="mt-1 block w-full rounded-md border-slate-300 bg-white text-sm text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Claim Code</label>
+                  <input
+                    value={provisionClaimCode}
+                    onChange={(event) => setProvisionClaimCode(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        applyProvisioningIdentity();
+                      }
+                    }}
+                    placeholder="CLM-XXXX-XXXX"
+                    className="mt-1 block w-full rounded-md border-slate-300 bg-white font-mono text-sm uppercase text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  />
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => applyProvisioningIdentity()}
+              className="inline-flex h-10 items-center justify-center rounded-md bg-orange-600 px-4 text-sm font-semibold text-white hover:bg-orange-500"
+            >
+              Auto Configure
+            </button>
+          </div>
+          {provisionMessage && (
+            <div className="mt-3 rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+              {provisionMessage}
+            </div>
+          )}
+        </div>
         
         {/* Basic Info */}
         <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">

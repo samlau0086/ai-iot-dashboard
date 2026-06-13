@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, Building2, CheckCircle2, Copy, Database, KeyRound, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
-import { useAppStore, type NotificationChannel, type SiteTenant } from '../lib/store';
+import { Bell, Building2, CheckCircle2, Copy, Database, KeyRound, Package, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
+import { useAppStore, type DeviceModelTemplate, type ManufacturedDevice, type NotificationChannel, type SiteTenant } from '../lib/store';
+import type { DeviceType } from '../types';
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
+import { generateClaimCode } from '../lib/deviceProvisioning';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
 const SITE_TYPES: SiteTenant['type'][] = ['factory', 'solar', 'cold_storage', 'pump_station', 'compressed_air', 'other'];
+const PROVISION_DEVICE_TYPES: DeviceType[] = ['gateway', 'dtu', 'rtu', 'lora_gateway', 'plc', 'io_module', 'relay_module', 'energy_meter', 'temperature_sensor', 'pressure_sensor', 'flow_meter', 'pump_controller', 'valve_controller', 'air_compressor', 'vfd', 'solar_inverter', 'battery_bms', 'ups', 'sensor'];
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -151,10 +154,23 @@ export function Settings() {
     addSite,
     updateSite,
     deleteSite,
+    deviceModels,
+    manufacturedDevices,
+    provisioningAuditLogs,
+    addDeviceModel,
+    updateDeviceModel,
+    deleteDeviceModel,
+    addManufacturedDevice,
+    updateManufacturedDevice,
+    deleteManufacturedDevice,
+    bulkImportManufacturedDevices,
+    revokeManufacturedDeviceClaim,
+    regenerateManufacturedDeviceClaimCode,
+    addProvisioningAuditLog,
   } = useAppStore();
   const t = translations[language];
   const isDemoUser = currentUser?.role === 'Demo';
-  const [activeTab, setActiveTab] = useState<'general' | 'sites' | 'data' | 'tokens' | 'notifications' | 'users'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'sites' | 'data' | 'tokens' | 'provisioning' | 'notifications' | 'users'>('general');
   const [httpPushChannels, setHttpPushChannels] = useState<HttpPushChannel[]>([]);
   const [mqttChannels, setMqttChannels] = useState<MqttChannel[]>([]);
   const [mqttStatuses, setMqttStatuses] = useState<Record<string, MqttStatus>>({});
@@ -187,12 +203,39 @@ export function Settings() {
     location: '',
     timezone: 'Asia/Shanghai',
   });
+  const [modelDraft, setModelDraft] = useState({
+    name: '4G IoT Gateway',
+    modelNo: 'IOT-GW-4G-01',
+    deviceType: 'gateway' as DeviceType,
+    dataSource: 'mqtt' as 'api' | 'mqtt' | 'manual',
+    protocol: 'MQTT',
+    mqttTopicTemplate: 'devices/{identity}/telemetry',
+    mqttCommandTopicTemplate: 'devices/{identity}/command',
+    apiPathTemplate: '/api/telemetry',
+    defaultTags: 'gateway,4g',
+    firmwareVersion: 'v1.0.0',
+    metricMappingsJson: '[]',
+    controlDefinitionsJson: '[]',
+  });
+  const [manufacturedDraft, setManufacturedDraft] = useState({
+    modelId: '',
+    serialNumber: '',
+    mac: '',
+    imei: '',
+    batchNo: '',
+    firmwareVersion: '',
+    status: 'in_stock' as ManufacturedDevice['status'],
+    note: '',
+  });
+  const [manufacturedCsv, setManufacturedCsv] = useState('serialNumber,mac,imei,modelNo,batchNo,firmwareVersion\nSN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3');
+  const [provisioningMessage, setProvisioningMessage] = useState('');
 
   const tabs = [
     { id: 'general', name: t.settings.tabs.general, icon: SettingsIcon },
     { id: 'sites', name: 'Sites', icon: Building2 },
     { id: 'data', name: 'Data Sources', icon: Database },
     { id: 'tokens', name: 'Ingest Tokens', icon: KeyRound },
+    { id: 'provisioning', name: 'Provisioning', icon: Package },
     { id: 'notifications', name: t.settings.tabs.notifications, icon: Bell },
     { id: 'users', name: t.settings.tabs.users, icon: Users },
   ];
@@ -332,6 +375,150 @@ export function Settings() {
       location: '',
       timezone: 'Asia/Shanghai',
     });
+  };
+
+  const parseJsonArray = (value: string, label: string) => {
+    try {
+      const parsed = JSON.parse(value || '[]');
+      if (!Array.isArray(parsed)) throw new Error(`${label} must be a JSON array.`);
+      return parsed;
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : `${label} JSON is invalid.`);
+    }
+  };
+
+  const handleAddDeviceModel = () => {
+    setProvisioningMessage('');
+    if (!modelDraft.name.trim() || !modelDraft.modelNo.trim()) {
+      setProvisioningMessage('Model name and model number are required.');
+      return;
+    }
+    try {
+      const model: DeviceModelTemplate = {
+        id: newId('model'),
+        name: modelDraft.name.trim(),
+        modelNo: modelDraft.modelNo.trim(),
+        deviceType: modelDraft.deviceType,
+        dataSource: modelDraft.dataSource,
+        protocol: modelDraft.protocol.trim() || (modelDraft.dataSource === 'mqtt' ? 'MQTT' : 'HTTP Push'),
+        mqttTopicTemplate: modelDraft.mqttTopicTemplate.trim(),
+        mqttCommandTopicTemplate: modelDraft.mqttCommandTopicTemplate.trim(),
+        apiPathTemplate: modelDraft.apiPathTemplate.trim(),
+        defaultTags: modelDraft.defaultTags.split(',').map((tag) => tag.trim()).filter(Boolean),
+        firmwareVersion: modelDraft.firmwareVersion.trim(),
+        metricMappings: parseJsonArray(modelDraft.metricMappingsJson, 'Metric mappings'),
+        controlDefinitions: parseJsonArray(modelDraft.controlDefinitionsJson, 'Control definitions'),
+        offlineDetectionEnabled: false,
+        offlineTimeoutSeconds: 120,
+        createdAt: new Date().toISOString(),
+      };
+      addDeviceModel(model);
+      setManufacturedDraft((current) => ({ ...current, modelId: current.modelId || model.id }));
+      setProvisioningMessage(`Device model ${model.modelNo} added.`);
+    } catch (error) {
+      setProvisioningMessage(error instanceof Error ? error.message : 'Failed to add device model.');
+    }
+  };
+
+  const handleAddManufacturedDevice = () => {
+    setProvisioningMessage('');
+    if (!manufacturedDraft.modelId || !manufacturedDraft.serialNumber.trim()) {
+      setProvisioningMessage('Model and Serial Number are required.');
+      return;
+    }
+    addManufacturedDevice({
+      id: newId('mfg'),
+      modelId: manufacturedDraft.modelId,
+      serialNumber: manufacturedDraft.serialNumber.trim(),
+      mac: manufacturedDraft.mac.trim(),
+      imei: manufacturedDraft.imei.trim(),
+      claimCode: generateClaimCode(),
+      batchNo: manufacturedDraft.batchNo.trim(),
+      firmwareVersion: manufacturedDraft.firmwareVersion.trim(),
+      status: manufacturedDraft.status,
+      note: manufacturedDraft.note.trim(),
+      createdAt: new Date().toISOString(),
+    });
+    setManufacturedDraft((current) => ({
+      ...current,
+      serialNumber: '',
+      mac: '',
+      imei: '',
+      note: '',
+    }));
+    setProvisioningMessage('Manufactured device added.');
+  };
+
+  const handleImportManufacturedCsv = () => {
+    setProvisioningMessage('');
+    const lines = manufacturedCsv.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      setProvisioningMessage('CSV requires a header row and at least one device row.');
+      return;
+    }
+    const headers = lines[0].split(',').map((header) => header.trim());
+    const modelByNo = new Map(deviceModels.map((model) => [model.modelNo, model.id]));
+    const imported = lines.slice(1).map((line) => {
+      const cells = line.split(',').map((cell) => cell.trim());
+      const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] || ''])) as Record<string, string>;
+      const modelId = row.modelId || modelByNo.get(row.modelNo || '') || manufacturedDraft.modelId;
+      return {
+        id: newId('mfg'),
+        modelId,
+        serialNumber: row.serialNumber || row.serial || row.sn || '',
+        mac: row.mac || '',
+        imei: row.imei || '',
+        claimCode: row.claimCode || generateClaimCode(),
+        batchNo: row.batchNo || row.batch || '',
+        firmwareVersion: row.firmwareVersion || row.firmware || '',
+        status: (row.status || 'in_stock') as ManufacturedDevice['status'],
+        note: row.note || '',
+        createdAt: new Date().toISOString(),
+      };
+    }).filter((item) => item.modelId && item.serialNumber);
+    if (imported.length === 0) {
+      setProvisioningMessage('No valid rows imported. Check modelNo/modelId and serialNumber.');
+      return;
+    }
+    bulkImportManufacturedDevices(imported);
+    setProvisioningMessage(`${imported.length} manufactured devices imported.`);
+  };
+
+  const copyClaimCode = async (item: ManufacturedDevice) => {
+    const claimCode = item.claimCode || '';
+    if (!claimCode) {
+      setProvisioningMessage('No claim code yet. Regenerate one first.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(claimCode);
+      setProvisioningMessage(`Claim code copied for ${item.serialNumber}.`);
+    } catch {
+      setProvisioningMessage('Copy failed. Select the claim code manually.');
+    }
+  };
+
+  const handleRegenerateClaimCode = (item: ManufacturedDevice) => {
+    regenerateManufacturedDeviceClaimCode(item.id, generateClaimCode(), currentUser);
+    setProvisioningMessage(`Claim code regenerated for ${item.serialNumber}.`);
+  };
+
+  const handleRevokeClaim = async (item: ManufacturedDevice) => {
+    if (!(await confirmDelete({ title: 'Revoke device claim', itemName: item.serialNumber, description: 'The inventory record will become available for a new claim. Existing platform device is not deleted.' }))) return;
+    revokeManufacturedDeviceClaim(item.id, currentUser?.id);
+    addProvisioningAuditLog({
+      id: newId('provision-log'),
+      manufacturedDeviceId: item.id,
+      identity: item.serialNumber || item.mac || item.imei || item.id,
+      action: 'claim_revoked',
+      result: 'success',
+      reason: `Claim revoked from ${item.claimedDeviceId || 'unknown device'}.`,
+      platformDeviceId: item.claimedDeviceId,
+      userId: currentUser?.id,
+      userName: currentUser?.name,
+      createdAt: new Date().toISOString(),
+    });
+    setProvisioningMessage(`Claim revoked for ${item.serialNumber}.`);
   };
 
   const handleAddHttpPushChannel = () => {
@@ -537,7 +724,7 @@ export function Settings() {
             {tabs.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as 'general' | 'sites' | 'data' | 'tokens' | 'notifications' | 'users')}
+                onClick={() => setActiveTab(tab.id as 'general' | 'sites' | 'data' | 'tokens' | 'provisioning' | 'notifications' | 'users')}
                 className={cn(
                   activeTab === tab.id
                     ? 'border-orange-500 text-orange-600 dark:text-orange-500'
@@ -747,6 +934,7 @@ export function Settings() {
                   </tbody>
                 </table>
               </div>
+
             </div>
           )}
 
@@ -1142,6 +1330,224 @@ export function Settings() {
                         <td colSpan={5} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
                           No ingest tokens yet. Generate one for your device gateway before enabling token-protected telemetry.
                         </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+            </div>
+          )}
+
+          {activeTab === 'provisioning' && (
+            <div className="space-y-6">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold leading-7 text-slate-900 dark:text-white">
+                    Device Provisioning
+                  </h2>
+                  <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    Register product models and manufactured device identities so users can auto-configure devices by MAC, IMEI, or Serial Number.
+                  </p>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Models: {deviceModels.length} / Inventory: {manufacturedDevices.length}
+                </div>
+              </div>
+
+              {provisioningMessage && (
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                  {provisioningMessage}
+                </div>
+              )}
+
+              <div className="grid gap-4 xl:grid-cols-2">
+                <section className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Device Models</h3>
+                    <Package className="h-4 w-4 text-orange-500" />
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    <input value={modelDraft.name} onChange={(event) => setModelDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Model name" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <input value={modelDraft.modelNo} onChange={(event) => setModelDraft((current) => ({ ...current, modelNo: event.target.value }))} placeholder="Model No" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <select value={modelDraft.deviceType} onChange={(event) => setModelDraft((current) => ({ ...current, deviceType: event.target.value as DeviceType }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                      {PROVISION_DEVICE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                    </select>
+                    <select value={modelDraft.dataSource} onChange={(event) => setModelDraft((current) => ({ ...current, dataSource: event.target.value as 'api' | 'mqtt' | 'manual' }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                      <option value="mqtt">MQTT</option>
+                      <option value="api">HTTP Push</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                    <input value={modelDraft.mqttTopicTemplate} onChange={(event) => setModelDraft((current) => ({ ...current, mqttTopicTemplate: event.target.value }))} placeholder="MQTT topic template" className="rounded-md border-0 bg-white px-3 py-2 font-mono text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <input value={modelDraft.mqttCommandTopicTemplate} onChange={(event) => setModelDraft((current) => ({ ...current, mqttCommandTopicTemplate: event.target.value }))} placeholder="Command topic template" className="rounded-md border-0 bg-white px-3 py-2 font-mono text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <input value={modelDraft.apiPathTemplate} onChange={(event) => setModelDraft((current) => ({ ...current, apiPathTemplate: event.target.value }))} placeholder="API path template" className="rounded-md border-0 bg-white px-3 py-2 font-mono text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <input value={modelDraft.defaultTags} onChange={(event) => setModelDraft((current) => ({ ...current, defaultTags: event.target.value }))} placeholder="Default tags, comma separated" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <textarea value={modelDraft.metricMappingsJson} onChange={(event) => setModelDraft((current) => ({ ...current, metricMappingsJson: event.target.value }))} placeholder="Metric mappings JSON array" rows={4} className="lg:col-span-2 rounded-md border-0 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <textarea value={modelDraft.controlDefinitionsJson} onChange={(event) => setModelDraft((current) => ({ ...current, controlDefinitionsJson: event.target.value }))} placeholder="Control definitions JSON array" rows={4} className="lg:col-span-2 rounded-md border-0 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <button type="button" onClick={handleAddDeviceModel} className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500 lg:col-span-2">
+                      <Plus className="h-4 w-4" />
+                      Add Model
+                    </button>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    {deviceModels.map((model) => (
+                      <div key={model.id} className="flex items-start justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950">
+                        <div className="grid flex-1 grid-cols-1 gap-2 lg:grid-cols-2">
+                          <input value={model.name} onChange={(event) => updateDeviceModel(model.id, { name: event.target.value })} className="rounded border-0 bg-transparent px-2 py-1 font-semibold text-slate-900 ring-1 ring-slate-200 focus:ring-orange-500 dark:text-white dark:ring-slate-800" />
+                          <input value={model.modelNo} onChange={(event) => updateDeviceModel(model.id, { modelNo: event.target.value })} className="rounded border-0 bg-transparent px-2 py-1 font-mono text-xs text-slate-600 ring-1 ring-slate-200 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-800" />
+                          <select value={model.dataSource} onChange={(event) => updateDeviceModel(model.id, { dataSource: event.target.value as 'api' | 'mqtt' | 'manual' })} className="rounded border-0 bg-transparent px-2 py-1 text-xs text-slate-600 ring-1 ring-slate-200 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-800">
+                            <option value="mqtt">MQTT</option>
+                            <option value="api">HTTP Push</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                          <input value={model.mqttTopicTemplate || ''} onChange={(event) => updateDeviceModel(model.id, { mqttTopicTemplate: event.target.value })} className="rounded border-0 bg-transparent px-2 py-1 font-mono text-xs text-slate-600 ring-1 ring-slate-200 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-800" />
+                        </div>
+                        <button type="button" onClick={async () => {
+                          if (await confirmDelete({ title: 'Delete device model', itemName: model.name, description: 'Manufactured devices using this model will lose their model link.' })) deleteDeviceModel(model.id);
+                        }} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Manufactured Devices</h3>
+                    <Database className="h-4 w-4 text-orange-500" />
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    <select value={manufacturedDraft.modelId} onChange={(event) => setManufacturedDraft((current) => ({ ...current, modelId: event.target.value }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                      <option value="">Select model</option>
+                      {deviceModels.map((model) => <option key={model.id} value={model.id}>{model.modelNo} / {model.name}</option>)}
+                    </select>
+                    <input value={manufacturedDraft.serialNumber} onChange={(event) => setManufacturedDraft((current) => ({ ...current, serialNumber: event.target.value }))} placeholder="Serial Number" className="rounded-md border-0 bg-white px-3 py-2 font-mono text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <input value={manufacturedDraft.mac} onChange={(event) => setManufacturedDraft((current) => ({ ...current, mac: event.target.value }))} placeholder="MAC" className="rounded-md border-0 bg-white px-3 py-2 font-mono text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <input value={manufacturedDraft.imei} onChange={(event) => setManufacturedDraft((current) => ({ ...current, imei: event.target.value }))} placeholder="IMEI" className="rounded-md border-0 bg-white px-3 py-2 font-mono text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <input value={manufacturedDraft.batchNo} onChange={(event) => setManufacturedDraft((current) => ({ ...current, batchNo: event.target.value }))} placeholder="Batch No" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <input value={manufacturedDraft.firmwareVersion} onChange={(event) => setManufacturedDraft((current) => ({ ...current, firmwareVersion: event.target.value }))} placeholder="Firmware" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <button type="button" onClick={handleAddManufacturedDevice} className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500 lg:col-span-2">
+                      <Plus className="h-4 w-4" />
+                      Add Manufactured Device
+                    </button>
+                  </div>
+
+                  <div className="mt-5">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">CSV Import</label>
+                    <textarea value={manufacturedCsv} onChange={(event) => setManufacturedCsv(event.target.value)} rows={6} className="mt-2 w-full rounded-md border-0 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                    <button type="button" onClick={handleImportManufacturedCsv} className="mt-2 inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                      Import CSV
+                    </button>
+                  </div>
+                </section>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Serial / MAC / IMEI</th>
+                      <th className="px-4 py-3 font-semibold">Model</th>
+                      <th className="px-4 py-3 font-semibold">Batch</th>
+                      <th className="px-4 py-3 font-semibold">Claim Code</th>
+                      <th className="px-4 py-3 font-semibold">Status</th>
+                      <th className="px-4 py-3 font-semibold">Claimed Device</th>
+                      <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+                    {manufacturedDevices.map((item) => {
+                      const model = deviceModels.find((candidate) => candidate.id === item.modelId);
+                      return (
+                        <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                          <td className="px-4 py-3 font-mono text-xs">
+                            <div>{item.serialNumber}</div>
+                            <div className="text-slate-500">{item.mac || '-'} / {item.imei || '-'}</div>
+                          </td>
+                          <td className="px-4 py-3">{model ? `${model.modelNo} / ${model.name}` : <span className="text-red-500">Missing model</span>}</td>
+                          <td className="px-4 py-3">{item.batchNo || '-'}</td>
+                          <td className="px-4 py-3 font-mono text-xs">
+                            <button type="button" onClick={() => item.claimCode ? copyClaimCode(item) : handleRegenerateClaimCode(item)} className="rounded bg-slate-100 px-2 py-1 text-slate-700 hover:bg-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">
+                              {item.claimCode || 'Generate'}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3">
+                            <select value={item.status} onChange={(event) => updateManufacturedDevice(item.id, { status: event.target.value as ManufacturedDevice['status'] })} className="rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700">
+                              <option value="in_stock">in_stock</option>
+                              <option value="shipped">shipped</option>
+                              <option value="claimed">claimed</option>
+                              <option value="disabled">disabled</option>
+                            </select>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs">
+                            <div>{item.claimedDeviceId || '-'}</div>
+                            {item.claimedAt && <div className="text-slate-500">{new Date(item.claimedAt).toLocaleString()}</div>}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button type="button" onClick={() => handleRegenerateClaimCode(item)} className="mr-1 rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100 hover:text-orange-600 dark:hover:bg-slate-800">
+                              Regen
+                            </button>
+                            {item.status === 'claimed' && (
+                              <button type="button" onClick={() => handleRevokeClaim(item)} className="mr-1 rounded px-2 py-1 text-xs text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-500/10">
+                                Revoke
+                              </button>
+                            )}
+                            <button type="button" onClick={async () => {
+                              if (await confirmDelete({ title: 'Delete manufactured device', itemName: item.serialNumber, description: 'This inventory record will be removed. Existing platform devices are not deleted.' })) deleteManufacturedDevice(item.id);
+                            }} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {manufacturedDevices.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
+                          No manufactured devices registered yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Claim Audit Log</h3>
+                  <p className="text-xs text-slate-500">Successful claims, failed attempts, revoke operations, and claim-code regeneration.</p>
+                </div>
+                <table className="min-w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Time</th>
+                      <th className="px-4 py-3 font-semibold">Action</th>
+                      <th className="px-4 py-3 font-semibold">Identity</th>
+                      <th className="px-4 py-3 font-semibold">Result</th>
+                      <th className="px-4 py-3 font-semibold">Reason</th>
+                      <th className="px-4 py-3 font-semibold">User</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+                    {provisioningAuditLogs.slice(0, 50).map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                        <td className="px-4 py-3 text-xs text-slate-500">{new Date(log.createdAt).toLocaleString()}</td>
+                        <td className="px-4 py-3 font-mono text-xs">{log.action}</td>
+                        <td className="px-4 py-3 font-mono text-xs">{log.identity}</td>
+                        <td className="px-4 py-3">
+                          <span className={cn('rounded px-2 py-1 text-xs font-semibold', log.result === 'success' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300')}>
+                            {log.result}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 max-w-md truncate text-slate-600 dark:text-slate-300" title={log.reason}>{log.reason}</td>
+                        <td className="px-4 py-3 text-slate-500">{log.userName || log.userId || '-'}</td>
+                      </tr>
+                    ))}
+                    {provisioningAuditLogs.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">No claim audit logs yet.</td>
                       </tr>
                     )}
                   </tbody>
