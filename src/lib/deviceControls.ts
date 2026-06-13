@@ -19,6 +19,7 @@ export type DeviceControlDefinition = {
   description: string;
   icon?: any;
   iconId?: string;
+  requiresConfirmation?: boolean;
   valueType: DeviceControlValueType;
   parameterKey?: string;
   defaultValue?: string | number | boolean;
@@ -190,6 +191,19 @@ export const getDeviceControlDefinitions = (device?: Pick<Device, 'type'> | null
 };
 
 export const isDeviceControllable = (device?: Pick<Device, 'type'> | null) => getDeviceControlDefinitions(device).length > 0;
+
+export const requiresControlConfirmation = (definition: DeviceControlDefinition) => {
+  if (definition.requiresConfirmation !== undefined) return definition.requiresConfirmation;
+
+  const actionText = `${definition.id} ${definition.label} ${definition.description} ${definition.parameterKey || ''}`.toLowerCase();
+  const highRiskPattern = /unlock|open|start|enable|power_on|power off|power_off|restart|reset|stop|shutdown|close|lock|relay|output|valve|motor|pump|drain|pulse|frequency|pressure|speed|position|write/;
+
+  if (definition.valueType === 'toggle' || definition.valueType === 'none' || definition.valueType === 'parameter_group') {
+    return highRiskPattern.test(actionText);
+  }
+
+  return /set_|write|mode|frequency|pressure|speed|position/.test(actionText);
+};
 
 export const buildControlParameters = (
   definition: DeviceControlDefinition,

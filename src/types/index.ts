@@ -41,6 +41,7 @@ export interface DeviceConfig {
     label: string;
     description: string;
     iconId?: string;
+    requiresConfirmation?: boolean;
     valueType: 'none' | 'toggle' | 'select' | 'slider' | 'range' | 'number' | 'text' | 'parameter_group';
     parameterKey?: string;
     defaultValue?: string | number | boolean;

@@ -15,8 +15,10 @@ import {
   buildControlParameters,
   buildControlStatePatch,
   getDeviceControlDefinitions,
+  requiresControlConfirmation,
   type DeviceControlDefinition,
 } from '../lib/deviceControls';
+import { confirmDelete } from '../lib/confirm';
 
 const getDeviceKeyMetric = (device: Device) => {
   const metrics = device.metrics || {};
@@ -68,6 +70,7 @@ export function Devices() {
   const [selectedTag, setSelectedTag] = useState<string>('All');
   const [submittingQuickAction, setSubmittingQuickAction] = useState('');
   const [quickActionMessages, setQuickActionMessages] = useState<Record<string, string>>({});
+  const [quickActionCooldowns, setQuickActionCooldowns] = useState<Record<string, number>>({});
 
   const userSiteOption = sites.find((site) => site.id === userSiteId) || { id: userSiteId, name: userSiteId, tenantName: 'Assigned Site' };
   const siteOptions = isSimpleProfile
@@ -153,6 +156,22 @@ export function Devices() {
     }
 
     const actionKey = `${device.id}:${control.id}`;
+    if ((quickActionCooldowns[actionKey] || 0) > Date.now()) {
+      setQuickActionMessages((current) => ({ ...current, [device.id]: 'Command already queued. Please wait a moment.' }));
+      return;
+    }
+
+    const actionLabel = getQuickActionLabel(device, control);
+    if (requiresControlConfirmation(control)) {
+      const confirmed = await confirmDelete({
+        title: 'Confirm Device Action',
+        itemName: device.name,
+        description: `This will send "${actionLabel}" to ${device.name}. Continue only if you are sure this action is safe right now.`,
+        confirmLabel: actionLabel,
+      });
+      if (!confirmed) return;
+    }
+
     setSubmittingQuickAction(actionKey);
     setQuickActionMessages((current) => ({ ...current, [device.id]: '' }));
 
@@ -196,6 +215,14 @@ export function Devices() {
         ...current,
         [device.id]: `${payload.command?.status || 'queued'}: ${payload.command?.result || 'Command recorded.'}`,
       }));
+      setQuickActionCooldowns((current) => ({ ...current, [actionKey]: Date.now() + 3000 }));
+      window.setTimeout(() => {
+        setQuickActionCooldowns((current) => {
+          const next = { ...current };
+          delete next[actionKey];
+          return next;
+        });
+      }, 3000);
     } catch (error) {
       setQuickActionMessages((current) => ({ ...current, [device.id]: 'Failed to submit command.' }));
     } finally {
@@ -284,6 +311,7 @@ export function Devices() {
               const primaryControl = getPrimaryControl(device);
               const primaryActionKey = primaryControl ? `${device.id}:${primaryControl.id}` : '';
               const quickActionMessage = quickActionMessages[device.id];
+              const isPrimaryCoolingDown = Boolean(primaryActionKey && (quickActionCooldowns[primaryActionKey] || 0) > Date.now());
 
               return (
                 <div
@@ -336,10 +364,10 @@ export function Devices() {
                       <button
                         type="button"
                         onClick={(event) => submitQuickAction(event, device, primaryControl)}
-                        disabled={submittingQuickAction === primaryActionKey || currentUser?.role === 'Demo'}
+                        disabled={submittingQuickAction === primaryActionKey || isPrimaryCoolingDown || currentUser?.role === 'Demo'}
                         className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-orange-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
                       >
-                        {submittingQuickAction === primaryActionKey ? 'Sending...' : getQuickActionLabel(device, primaryControl)}
+                        {submittingQuickAction === primaryActionKey ? 'Sending...' : isPrimaryCoolingDown ? 'Queued' : getQuickActionLabel(device, primaryControl)}
                       </button>
                       <Link
                         to={`/devices/${device.id}`}

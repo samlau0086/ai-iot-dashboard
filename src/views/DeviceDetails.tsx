@@ -6,7 +6,7 @@ import { ArrowLeft, Activity, Info, Settings, Zap, Thermometer, Gauge, Cpu, Hard
 import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { DeviceForm } from '../components/DeviceForm';
-import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, sanitizeControlDefinition, type DeviceControlDefinition, type DeviceControlValueType } from '../lib/deviceControls';
+import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, requiresControlConfirmation, sanitizeControlDefinition, type DeviceControlDefinition, type DeviceControlValueType } from '../lib/deviceControls';
 import { confirmDelete } from '../lib/confirm';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
@@ -122,6 +122,7 @@ export function DeviceDetails() {
   const [parameterNames, setParameterNames] = useState<Record<string, string>>({});
   const [controlMessage, setControlMessage] = useState('');
   const [submittingControlId, setSubmittingControlId] = useState('');
+  const [controlCooldowns, setControlCooldowns] = useState<Record<string, number>>({});
   const [editingControl, setEditingControl] = useState<DeviceControlDefinition | null>(null);
   const [controlDraft, setControlDraft] = useState<DeviceControlDefinition | null>(null);
   const [controlOptionsDraft, setControlOptionsDraft] = useState('');
@@ -308,7 +309,7 @@ export function DeviceDetails() {
 
   const submitDeviceControl = async (controlId: string, nextControlValues = controlValues) => {
     const definition = controlDefinitions.find((control) => control.id === controlId);
-    if (!definition || !canControl) return;
+    if (!definition || !canControl) return false;
 
     setSubmittingControlId(controlId);
     setControlMessage('');
@@ -330,7 +331,7 @@ export function DeviceDetails() {
 
       if (!response.ok) {
         setControlMessage(payload.error || 'Control command rejected.');
-        return;
+        return false;
       }
 
       updateDevice(device.id, {
@@ -343,8 +344,10 @@ export function DeviceDetails() {
         },
       });
       setControlMessage(`${definition.label}: ${payload.command?.status || 'queued'} - ${payload.command?.result || 'Command recorded.'}`);
+      return true;
     } catch (error) {
       setControlMessage('Failed to submit control command.');
+      return false;
     } finally {
       setSubmittingControlId('');
     }
@@ -740,11 +743,52 @@ export function DeviceDetails() {
     );
   };
 
+  const getSimpleControlActionLabel = (control: DeviceControlDefinition, nextControlValues = controlValues) => {
+    if (control.valueType !== 'toggle') return control.label;
+    const isTurningOn = Boolean(nextControlValues[control.id]);
+    const actionText = `${control.id} ${control.label}`.toLowerCase();
+    if (/lock|door|open|unlock/.test(actionText)) return isTurningOn ? 'Unlock' : 'Lock';
+    if (/power|start|enable/.test(actionText)) return isTurningOn ? 'Turn On' : 'Turn Off';
+    return isTurningOn ? 'Enable' : 'Disable';
+  };
+
+  const confirmAndSubmitSimpleControl = async (control: DeviceControlDefinition, nextControlValues = controlValues) => {
+    if ((controlCooldowns[control.id] || 0) > Date.now()) {
+      setControlMessage('Command already queued. Please wait a moment.');
+      return false;
+    }
+
+    const actionLabel = getSimpleControlActionLabel(control, nextControlValues);
+    if (requiresControlConfirmation(control)) {
+      const confirmed = await confirmDelete({
+        title: 'Confirm Device Action',
+        itemName: device.name,
+        description: `This will send "${actionLabel}" to ${device.name}. Continue only if you are sure this action is safe right now.`,
+        confirmLabel: actionLabel,
+      });
+      if (!confirmed) return false;
+    }
+
+    const submitted = await submitDeviceControl(control.id, nextControlValues);
+    if (submitted) {
+      setControlCooldowns((current) => ({ ...current, [control.id]: Date.now() + 3000 }));
+      window.setTimeout(() => {
+        setControlCooldowns((current) => {
+          const next = { ...current };
+          delete next[control.id];
+          return next;
+        });
+      }, 3000);
+    }
+    return submitted;
+  };
+
   const renderSimpleControlCard = (control: DeviceControlDefinition) => {
     const Icon = control.icon || Play;
     const currentValue = controlValues[control.id] ?? control.defaultValue ?? '';
     const isSubmitting = submittingControlId === control.id;
-    const isDisabled = !canControl || isSubmitting;
+    const isCoolingDown = Boolean((controlCooldowns[control.id] || 0) > Date.now());
+    const isDisabled = !canControl || isSubmitting || isCoolingDown;
 
     return (
       <div key={control.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
@@ -762,11 +806,11 @@ export function DeviceDetails() {
           <button
             type="button"
             disabled={isDisabled}
-            onClick={() => {
+            onClick={async () => {
               const nextValue = !Boolean(controlValues[control.id]);
               const nextControlValues = { ...controlValues, [control.id]: nextValue };
-              setControlValues(nextControlValues);
-              submitDeviceControl(control.id, nextControlValues);
+              const submitted = await confirmAndSubmitSimpleControl(control, nextControlValues);
+              if (submitted) setControlValues(nextControlValues);
             }}
             className={cn(
               'relative mt-5 flex h-16 w-full items-center overflow-hidden rounded-full border-2 px-2 text-lg font-black tracking-wide transition-all disabled:cursor-not-allowed disabled:opacity-60',
@@ -886,12 +930,12 @@ export function DeviceDetails() {
         {control.valueType !== 'toggle' && (
           <button
             type="button"
-            onClick={() => submitDeviceControl(control.id)}
+            onClick={() => confirmAndSubmitSimpleControl(control)}
             disabled={isDisabled}
             className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
           >
             <Play className="h-4 w-4" />
-            {isSubmitting ? 'Sending...' : 'Send Command'}
+            {isSubmitting ? 'Sending...' : isCoolingDown ? 'Queued' : 'Send Command'}
           </button>
         )}
       </div>
