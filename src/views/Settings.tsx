@@ -8,7 +8,7 @@ import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 import { generateClaimCode, generateClaimToken } from '../lib/deviceProvisioning';
-import { APP_PROFILE_OPTIONS, getUserAppProfile, type AppProfile } from '../lib/featureAccess';
+import { APP_PROFILE_OPTIONS, FEATURE_ACCESS_OPTIONS, getUserAppProfile, getUserFeatureAccess, type AppProfile, type FeatureNavKey } from '../lib/featureAccess';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
@@ -426,6 +426,21 @@ export function Settings() {
       approvedAt: new Date().toISOString(),
     });
     setUserDraft({ name: '', email: '', password: '', role: 'Operator', appProfile: 'operations', siteId: sites[0]?.id || 'factory-a' });
+  };
+
+  const handleUserFeatureAccessChange = (userId: string, key: FeatureNavKey, enabled: boolean) => {
+    const user = users.find((item) => item.id === userId);
+    if (!user) return;
+    updateUser(userId, {
+      featureAccess: {
+        ...(user.featureAccess || {}),
+        [key]: enabled,
+      },
+    });
+  };
+
+  const handleResetUserFeatureAccess = (userId: string) => {
+    updateUser(userId, { featureAccess: undefined });
   };
 
   const handleAddSite = () => {
@@ -2205,6 +2220,31 @@ export function Settings() {
                           <p className="mt-1 max-w-48 whitespace-normal text-[10px] leading-4 text-slate-400">
                             {APP_PROFILE_OPTIONS.find((profile) => profile.value === getUserAppProfile(user))?.description}
                           </p>
+                          <details className="mt-2 max-w-72 rounded-md border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-950/40">
+                            <summary className="cursor-pointer text-xs font-semibold text-slate-600 dark:text-slate-300">
+                              Module access
+                            </summary>
+                            <div className="mt-2 grid grid-cols-2 gap-1">
+                              {FEATURE_ACCESS_OPTIONS.filter((option) => option.key !== 'profile').map((option) => (
+                                <label key={option.key} className="flex items-center gap-1.5 rounded px-1 py-0.5 text-[10px] text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-900">
+                                  <input
+                                    type="checkbox"
+                                    checked={getUserFeatureAccess(user)[option.key]}
+                                    onChange={(event) => handleUserFeatureAccessChange(user.id, option.key, event.target.checked)}
+                                    className="h-3 w-3 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                                  />
+                                  <span className="truncate" title={option.description}>{option.label}</span>
+                                </label>
+                              ))}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleResetUserFeatureAccess(user.id)}
+                              className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
+                            >
+                              Reset to profile defaults
+                            </button>
+                          </details>
                         </td>
                         <td className="px-4 py-3">
                           <select

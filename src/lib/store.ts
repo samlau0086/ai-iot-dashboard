@@ -4,7 +4,7 @@ import { Device } from '../types';
 import { mockDevices } from './mockData';
 import { mergeTelemetryIntoDevices } from './deviceData';
 import type { DeviceTelemetryMessage } from '../types';
-import type { AppProfile } from './featureAccess';
+import type { AppProfile, FeatureAccessMap } from './featureAccess';
 
 export interface User {
   id: string;
@@ -13,6 +13,7 @@ export interface User {
   password?: string;
   role: string;
   appProfile?: AppProfile;
+  featureAccess?: FeatureAccessMap;
   siteId: string;
   customerId?: string;
   status: 'pending' | 'approved' | 'rejected';

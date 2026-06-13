@@ -198,7 +198,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 基础角色权限：Owner、Admin、Engineer、Operator、Viewer、Demo、Partner、Customer
 - [x] Demo 账户本地演示模式：允许体验界面和配置流程，但不持久化到后端、不影响设备
 - [x] 基础 RBAC 权限矩阵说明：角色、App Profile、站点绑定和客户账号使用方式
-- [ ] 更细粒度 RBAC：菜单、站点、设备、控制动作、数据源、Token 权限矩阵
+- [x] 菜单级 / 模块级 RBAC：App Profile 默认权限 + 用户级 Feature Access 覆盖
+- [ ] 更细粒度 RBAC：设备、控制动作、数据源、Token 权限矩阵
 
 ### 技术演进方向
 

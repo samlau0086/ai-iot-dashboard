@@ -19,7 +19,7 @@ import {
   type User,
   type WhiteLabelConfig,
 } from '../lib/store';
-import { APP_PROFILE_OPTIONS, type AppProfile } from '../lib/featureAccess';
+import { APP_PROFILE_OPTIONS, FEATURE_ACCESS_OPTIONS, getUserFeatureAccess, type AppProfile, type FeatureNavKey } from '../lib/featureAccess';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notify, notifySuccess } from '../lib/toast';
@@ -190,6 +190,19 @@ export function PartnerPortal() {
       status: 'approved',
     }));
     notifySuccess('Customer account created successfully.');
+  };
+
+  const handleAccountFeatureAccessChange = (user: User, key: FeatureNavKey, enabled: boolean) => {
+    updateUser(user.id, {
+      featureAccess: {
+        ...(user.featureAccess || {}),
+        [key]: enabled,
+      },
+    });
+  };
+
+  const resetAccountFeatureAccess = (userId: string) => {
+    updateUser(userId, { featureAccess: undefined });
   };
 
   const handleAddProject = () => {
@@ -457,6 +470,31 @@ export function PartnerPortal() {
                             <select value={user.appProfile || 'simple'} onChange={(event) => updateUser(user.id, { appProfile: event.target.value as AppProfile })} className="mt-2 block rounded-md border-0 bg-transparent px-2 py-1 text-xs ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
                               {APP_PROFILE_OPTIONS.map((profile) => <option key={profile.value} value={profile.value}>{profile.label}</option>)}
                             </select>
+                            <details className="mt-2 w-72 rounded-md border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-950/40">
+                              <summary className="cursor-pointer text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                Module access
+                              </summary>
+                              <div className="mt-2 grid grid-cols-2 gap-1">
+                                {FEATURE_ACCESS_OPTIONS.filter((option) => option.key !== 'profile').map((option) => (
+                                  <label key={option.key} className="flex items-center gap-1.5 rounded px-1 py-0.5 text-[10px] text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-900">
+                                    <input
+                                      type="checkbox"
+                                      checked={getUserFeatureAccess(user)[option.key]}
+                                      onChange={(event) => handleAccountFeatureAccessChange(user, option.key, event.target.checked)}
+                                      className="h-3 w-3 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                                    />
+                                    <span className="truncate" title={option.description}>{option.label}</span>
+                                  </label>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => resetAccountFeatureAccess(user.id)}
+                                className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
+                              >
+                                Reset to profile defaults
+                              </button>
+                            </details>
                           </td>
                           <td className="px-4 py-3">
                             <select value={user.status} onChange={(event) => updateUser(user.id, { status: event.target.value as User['status'] })} className="rounded-md border-0 bg-transparent px-2 py-1 ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
@@ -626,7 +664,7 @@ export function PartnerPortal() {
           {activeTab === 'permissions' && (
             <div className="space-y-4">
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/30 dark:text-slate-300">
-                Partner / White Label uses the existing role and App Profile model. Use Settings {'->'} Users to assign Partner, Customer, or Admin roles, and bind each user to the correct Site.
+                Partner / White Label uses the existing role and App Profile model. Use Customer Accounts or Settings {'->'} Users to assign roles, bind Sites, and override module access per user.
               </div>
               <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
                 <table className="min-w-full text-left text-sm">
