@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal, Play, Pause, History, RotateCcw, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Activity, Server, Zap, AlertTriangle, BrainCircuit, Plus, GripHorizontal, Save, Pencil, Trash2, X, Sun, BatteryCharging, Thermometer, Droplets, DoorOpen, Gauge, Waves, Timer, Wind, SlidersHorizontal, Play, Pause, History, RotateCcw, Calendar, ChevronLeft, ChevronRight, LayoutDashboard } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { useAppStore } from '../lib/store';
 import type { OverviewKpiKey, OverviewWidget } from '../lib/store';
@@ -30,6 +30,11 @@ type SnapGuide = {
 
 type WidgetDisplayMode = NonNullable<OverviewWidget['displayMode']>;
 type WidgetRuleState = 'normal' | 'warning' | 'critical' | 'noData';
+type WidgetDataIssue = {
+  title: string;
+  detail: string;
+  tone: 'config' | 'offline' | 'noData';
+};
 type OverviewTelemetryMessage = {
   device_id?: string;
   deviceId?: string;
@@ -1131,6 +1136,93 @@ export function Overview() {
     return scopedDevices;
   };
 
+  const getWidgetDataIssue = (
+    widget: OverviewWidget,
+    targetDevices: Device[],
+    metricKey: string,
+    hasMetricValues: boolean
+  ): WidgetDataIssue | null => {
+    if (!metricKey) {
+      return {
+        title: 'Metric not configured',
+        detail: 'Open widget settings and select a metric to display.',
+        tone: 'config',
+      };
+    }
+
+    if (widget.deviceIds?.length && targetDevices.length === 0) {
+      return {
+        title: 'Bound device missing',
+        detail: 'The selected devices no longer exist or are outside this site.',
+        tone: 'config',
+      };
+    }
+
+    if (targetDevices.length === 0) {
+      return {
+        title: 'No site devices',
+        detail: 'Add devices to this Site or bind this widget to specific devices.',
+        tone: 'config',
+      };
+    }
+
+    if (historyMode) {
+      return hasMetricValues ? null : {
+        title: 'No historical data',
+        detail: `No ${metricKey} telemetry exists before the current playback time.`,
+        tone: 'noData',
+      };
+    }
+
+    const qualities = targetDevices.map((device) => getDeviceDataQuality(device, Date.now()));
+    const hasLiveData = qualities.some((quality) => quality.hasLiveData);
+    if (!hasLiveData) {
+      const allNeverReported = qualities.every((quality) => quality.state === 'never_reported');
+      const allOffline = qualities.every((quality) => quality.state === 'offline' || quality.state === 'never_reported');
+      return {
+        title: allNeverReported ? 'Never reported' : allOffline ? 'Device offline' : 'No live data',
+        detail: allNeverReported
+          ? 'No telemetry has been received from the bound devices yet.'
+          : allOffline
+            ? 'Bound devices are offline or past the offline timeout.'
+            : 'Latest telemetry is stale, so this widget is not using old values.',
+        tone: allOffline ? 'offline' : 'noData',
+      };
+    }
+
+    if (!hasMetricValues) {
+      return {
+        title: 'Metric has no data',
+        detail: `Live telemetry exists, but none contains numeric ${metricKey}.`,
+        tone: 'noData',
+      };
+    }
+
+    return null;
+  };
+
+  const renderWidgetDataIssue = (issue: WidgetDataIssue | null) => {
+    if (!issue) return null;
+
+    const toneClass = issue.tone === 'config'
+      ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+      : issue.tone === 'offline'
+        ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200'
+        : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/90 dark:text-slate-200';
+
+    return (
+      <div className={cn('pointer-events-none absolute inset-x-3 bottom-3 z-20 rounded border px-3 py-2 shadow-sm backdrop-blur', toneClass)}>
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold">{issue.title}</p>
+            <p className="mt-0.5 text-[10px] opacity-80">{issue.detail}</p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const getWidgetDefaultTitle = (widget: OverviewWidget) => {
     if (widget.type === 'kpi' && widget.kpiKey) return stats[widget.kpiKey].name;
     if (widget.type === 'trend') return t.overview.realtimeTrend;
@@ -1504,11 +1596,12 @@ export function Overview() {
 
   const renderCustomWidget = (widget: OverviewWidget) => {
     const targetDevices = getWidgetDevices(widget);
-    const metricKey = widget.metricKey || 'power';
+    const metricKey = widget.metricKey || '';
     const title = getWidgetTitle(widget);
     const Icon = IOT_ICONS[widget.iconId || 'activity'] || Activity;
     const displayMode = widget.displayMode || 'number';
     const hasMetricValues = targetDevices.some((device) => Number.isFinite(Number(device.metrics?.[metricKey])));
+    const dataIssue = getWidgetDataIssue(widget, targetDevices, metricKey, hasMetricValues);
     const value = hasMetricValues ? sumMetric(targetDevices, metricKey) : Number.NaN;
     const averageValue = hasMetricValues ? averageMetric(targetDevices, metricKey) : Number.NaN;
     const displayValue = displayMode === 'number' || displayMode === 'bar' || displayMode === 'donut' ? value : averageValue;
@@ -1550,6 +1643,7 @@ export function Overview() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
+          {renderWidgetDataIssue(dataIssue)}
         </div>
       );
     }
@@ -1575,6 +1669,7 @@ export function Overview() {
               </BarChart>
             </ResponsiveContainer>
           </div>
+          {renderWidgetDataIssue(dataIssue)}
         </div>
       );
     }
@@ -1601,6 +1696,7 @@ export function Overview() {
               </PieChart>
             </ResponsiveContainer>
           </div>
+          {renderWidgetDataIssue(dataIssue)}
         </div>
       );
     }
@@ -1623,6 +1719,7 @@ export function Overview() {
               </div>
             </div>
           </div>
+          {renderWidgetDataIssue(dataIssue)}
         </div>
       );
     }
@@ -1641,6 +1738,7 @@ export function Overview() {
             </div>
             <span className="h-4 w-4 shrink-0 rounded-full" style={{ backgroundColor: statusColor }} />
           </div>
+          {renderWidgetDataIssue(dataIssue)}
         </div>
       );
     }
@@ -1663,6 +1761,7 @@ export function Overview() {
             <Icon className="h-5 w-5 xl:h-6 xl:w-6" aria-hidden="true" />
           </div>
         </div>
+        {renderWidgetDataIssue(dataIssue)}
       </div>
     );
   };
@@ -1918,6 +2017,28 @@ export function Overview() {
           </div>
         )}
       </div>
+
+      {selectedSiteId !== 'All' && scopedDevices.length === 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-semibold">No devices in this Site</p>
+                <p className="mt-0.5 text-xs opacity-80">Widgets can be added now, but live values will show configuration or no-data states until devices are assigned to this Site.</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => openWidgetBuilder()}
+              className="inline-flex h-8 items-center justify-center gap-2 rounded border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-slate-950 dark:text-amber-200 dark:hover:bg-amber-500/10"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add Widget
+            </button>
+          </div>
+        </div>
+      )}
 
       {showWidgetBuilder && (
         <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#1c2128] p-4 shadow-sm">
@@ -2361,61 +2482,90 @@ export function Overview() {
             />
           )}
         </div>
-        <ResponsiveGridLayout
-          className={cn("layout", !isLayoutEditable && "overview-readonly-layout", !isDesktopGrid && "overview-mobile-layout")}
-          layouts={gridLayouts}
-          breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
-          cols={GRID_COLS_BY_BREAKPOINT}
-          rowHeight={GRID_ROW_HEIGHT}
-          onBreakpointChange={(breakpoint) => {
-            setCurrentBreakpoint((breakpoint as keyof typeof GRID_COLS_BY_BREAKPOINT) || 'lg');
-            clearSnapGuide();
-          }}
-          onLayoutChange={onLayoutChange}
-          onDragStart={handleDragStart}
-          onDrag={handleDrag}
-          onDragStop={handleDragStop}
-          onResizeStart={handleResizeStart}
-          onResizeStop={handleResizeStop}
-          {...({ draggableHandle: ".draggable-handle" } as any)}
-          isResizable={isLayoutEditable}
-          isDraggable={isLayoutEditable}
-          resizeHandles={['se']}
-          preventCollision={true}
-          compactType={null}
-          margin={GRID_MARGIN}
-        >
-          {overviewWidgets.map(widget => (
-            <div key={widget.id} className="relative">
-              <div className="absolute right-2 top-2 z-30 flex gap-1">
-                <button
-                  type="button"
-                  onClick={() => setConfigWidgetId(widget.id)}
-                  className={cn(
-                    "inline-flex h-7 w-7 items-center justify-center rounded border shadow-sm",
-                    configWidgetId === widget.id
-                      ? "border-orange-500 bg-orange-500 text-white"
-                      : "border-slate-200 bg-white text-slate-500 hover:text-orange-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
-                  )}
-                >
-                  <SlidersHorizontal className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (!(await confirmDelete({ title: 'Remove dashboard widget', itemName: getWidgetTitle(widget), description: 'The widget will be removed from this site dashboard.' }))) return;
-                    removeOverviewWidget(widget.id, selectedSiteId);
-                    if (configWidgetId === widget.id) setConfigWidgetId(null);
-                  }}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 shadow-sm hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-red-500/50 dark:hover:text-red-400"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+        {overviewWidgets.length === 0 ? (
+          <div className="flex min-h-[320px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center dark:border-slate-700 dark:bg-[#1c2128]">
+            <div className="max-w-md">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-md bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400">
+                <LayoutDashboard className="h-6 w-6" />
               </div>
-              {renderWidgetBody(widget)}
+              <h3 className="mt-4 text-base font-semibold text-slate-900 dark:text-white">No widgets in this dashboard</h3>
+              <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                Add widgets from the builder or drag available widgets here. New widgets can bind to Site devices and metrics.
+              </p>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openWidgetBuilder()}
+                  className="inline-flex h-9 items-center gap-2 rounded bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-500"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Widget
+                </button>
+                {overviewWidgetLibrary.length > 0 && (
+                  <span className="inline-flex h-9 items-center rounded border border-slate-300 px-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    {overviewWidgetLibrary.length} available widgets
+                  </span>
+                )}
+              </div>
             </div>
-          ))}
-        </ResponsiveGridLayout>
+          </div>
+        ) : (
+          <ResponsiveGridLayout
+            className={cn("layout", !isLayoutEditable && "overview-readonly-layout", !isDesktopGrid && "overview-mobile-layout")}
+            layouts={gridLayouts}
+            breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
+            cols={GRID_COLS_BY_BREAKPOINT}
+            rowHeight={GRID_ROW_HEIGHT}
+            onBreakpointChange={(breakpoint) => {
+              setCurrentBreakpoint((breakpoint as keyof typeof GRID_COLS_BY_BREAKPOINT) || 'lg');
+              clearSnapGuide();
+            }}
+            onLayoutChange={onLayoutChange}
+            onDragStart={handleDragStart}
+            onDrag={handleDrag}
+            onDragStop={handleDragStop}
+            onResizeStart={handleResizeStart}
+            onResizeStop={handleResizeStop}
+            {...({ draggableHandle: ".draggable-handle" } as any)}
+            isResizable={isLayoutEditable}
+            isDraggable={isLayoutEditable}
+            resizeHandles={['se']}
+            preventCollision={true}
+            compactType={null}
+            margin={GRID_MARGIN}
+          >
+            {overviewWidgets.map(widget => (
+              <div key={widget.id} className="relative">
+                <div className="absolute right-2 top-2 z-30 flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setConfigWidgetId(widget.id)}
+                    className={cn(
+                      "inline-flex h-7 w-7 items-center justify-center rounded border shadow-sm",
+                      configWidgetId === widget.id
+                        ? "border-orange-500 bg-orange-500 text-white"
+                        : "border-slate-200 bg-white text-slate-500 hover:text-orange-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
+                    )}
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!(await confirmDelete({ title: 'Remove dashboard widget', itemName: getWidgetTitle(widget), description: 'The widget will be removed from this site dashboard.' }))) return;
+                      removeOverviewWidget(widget.id, selectedSiteId);
+                      if (configWidgetId === widget.id) setConfigWidgetId(null);
+                    }}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 shadow-sm hover:border-red-300 hover:text-red-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-red-500/50 dark:hover:text-red-400"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {renderWidgetBody(widget)}
+              </div>
+            ))}
+          </ResponsiveGridLayout>
+        )}
       </div>
 
     </div>
