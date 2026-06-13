@@ -533,6 +533,8 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 4. 保存后库存设备会被标记为 `claimed`，并记录对应的平台 Device ID，避免重复绑定。管理员可以在库存表中 Revoke Claim，让该生产设备重新进入可认领状态。
 5. Provisioning 页面会记录 Claim Audit Log，包括成功认领、失败尝试、撤销认领和 Claim Code 重新生成，方便追踪批量出货和客户自助绑定过程。
 
+批量导入支持下载 CSV 模板、导入前预检、错误行提示、新增/覆盖统计，以及按 `batchNo` 筛选库存设备。
+
 模板支持占位符：
 
 - `{identity}`：优先使用 Serial Number，其次 IMEI / MAC。

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, Building2, CheckCircle2, Copy, Database, KeyRound, Package, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
 import { useAppStore, type DeviceModelTemplate, type ManufacturedDevice, type NotificationChannel, type SiteTenant } from '../lib/store';
 import type { DeviceType } from '../types';
@@ -15,6 +15,54 @@ const SITE_TYPES: SiteTenant['type'][] = ['factory', 'solar', 'cold_storage', 'p
 const PROVISION_DEVICE_TYPES: DeviceType[] = ['gateway', 'dtu', 'rtu', 'lora_gateway', 'plc', 'io_module', 'relay_module', 'energy_meter', 'temperature_sensor', 'pressure_sensor', 'flow_meter', 'pump_controller', 'valve_controller', 'air_compressor', 'vfd', 'solar_inverter', 'battery_bms', 'ups', 'sensor'];
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+type CsvPreviewRow = {
+  lineNumber: number;
+  row: Record<string, string>;
+  action: 'create' | 'overwrite' | 'skip';
+  errors: string[];
+  item?: ManufacturedDevice;
+};
+
+type CsvPreview = {
+  rows: CsvPreviewRow[];
+  validItems: ManufacturedDevice[];
+  createCount: number;
+  overwriteCount: number;
+  errorCount: number;
+  skippedCount: number;
+};
+
+const manufacturedIdentityKey = (item: Pick<ManufacturedDevice, 'serialNumber' | 'mac' | 'imei'>) => (
+  [item.serialNumber, item.mac, item.imei].filter(Boolean).join('|').toLowerCase()
+);
+
+const parseCsvLine = (line: string) => {
+  const cells: string[] = [];
+  let current = '';
+  let quoted = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      current += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+};
+
+const isValidMac = (value: string) => !value || /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(value) || /^[0-9a-f]{12}$/i.test(value);
+const isValidImei = (value: string) => !value || /^\d{14,17}$/.test(value);
 
 const DEFAULT_NOTIFICATION_CONFIG: Record<NotificationChannel['type'], Record<string, string>> = {
   email: { recipients: '', subjectPrefix: '[IoT Alert]' },
@@ -227,7 +275,9 @@ export function Settings() {
     status: 'in_stock' as ManufacturedDevice['status'],
     note: '',
   });
-  const [manufacturedCsv, setManufacturedCsv] = useState('serialNumber,mac,imei,modelNo,batchNo,firmwareVersion\nSN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3');
+  const [manufacturedCsv, setManufacturedCsv] = useState('serialNumber,mac,imei,modelNo,batchNo,firmwareVersion,claimCode,status,note\nSN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3,,in_stock,');
+  const [manufacturedCsvPreview, setManufacturedCsvPreview] = useState<CsvPreview | null>(null);
+  const [manufacturedBatchFilter, setManufacturedBatchFilter] = useState('all');
   const [provisioningMessage, setProvisioningMessage] = useState('');
 
   const tabs = [
@@ -387,6 +437,103 @@ export function Settings() {
     }
   };
 
+  const buildManufacturedCsvPreview = (): CsvPreview => {
+    const lines = manufacturedCsv.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      return {
+        rows: [{
+          lineNumber: 1,
+          row: {},
+          action: 'skip',
+          errors: ['CSV requires a header row and at least one device row.'],
+        }],
+        validItems: [],
+        createCount: 0,
+        overwriteCount: 0,
+        errorCount: 1,
+        skippedCount: 1,
+      };
+    }
+
+    const headers = parseCsvLine(lines[0]).map((header) => header.trim());
+    const modelByNo = new Map(deviceModels.map((model) => [model.modelNo.toLowerCase(), model.id]));
+    const existingKeys = new Set(manufacturedDevices.map(manufacturedIdentityKey));
+    const seenKeys = new Set<string>();
+    const rows = lines.slice(1).map((line, index): CsvPreviewRow => {
+      const cells = parseCsvLine(line);
+      const row = Object.fromEntries(headers.map((header, cellIndex) => [header, cells[cellIndex] || ''])) as Record<string, string>;
+      const serialNumber = row.serialNumber || row.serial || row.sn || '';
+      const mac = row.mac || '';
+      const imei = row.imei || '';
+      const modelId = row.modelId || modelByNo.get((row.modelNo || '').toLowerCase()) || manufacturedDraft.modelId;
+      const status = (row.status || 'in_stock') as ManufacturedDevice['status'];
+      const errors: string[] = [];
+
+      if (!serialNumber) errors.push('serialNumber is required.');
+      if (!modelId) errors.push('modelNo/modelId was not found.');
+      if (mac && !isValidMac(mac)) errors.push('MAC format is invalid. Use AA:BB:CC:11:22:33 or AABBCC112233.');
+      if (imei && !isValidImei(imei)) errors.push('IMEI format is invalid. Use 14-17 digits.');
+      if (!['in_stock', 'shipped', 'claimed', 'disabled'].includes(status)) errors.push('status must be in_stock, shipped, claimed, or disabled.');
+
+      const item: ManufacturedDevice = {
+        id: newId('mfg'),
+        modelId,
+        serialNumber,
+        mac,
+        imei,
+        claimCode: row.claimCode || generateClaimCode(),
+        batchNo: row.batchNo || row.batch || '',
+        firmwareVersion: row.firmwareVersion || row.firmware || '',
+        status,
+        note: row.note || '',
+        createdAt: new Date().toISOString(),
+      };
+      const identityKey = manufacturedIdentityKey(item);
+      if (identityKey && seenKeys.has(identityKey)) errors.push('Duplicate identity in this CSV.');
+      if (identityKey) seenKeys.add(identityKey);
+
+      const action = errors.length > 0 ? 'skip' : existingKeys.has(identityKey) ? 'overwrite' : 'create';
+      return {
+        lineNumber: index + 2,
+        row,
+        action,
+        errors,
+        item: errors.length > 0 ? undefined : item,
+      };
+    });
+
+    const validItems = rows.map((row) => row.item).filter(Boolean) as ManufacturedDevice[];
+    return {
+      rows,
+      validItems,
+      createCount: rows.filter((row) => row.action === 'create').length,
+      overwriteCount: rows.filter((row) => row.action === 'overwrite').length,
+      errorCount: rows.filter((row) => row.errors.length > 0).length,
+      skippedCount: rows.filter((row) => row.action === 'skip').length,
+    };
+  };
+
+  const handlePreviewManufacturedCsv = () => {
+    const preview = buildManufacturedCsvPreview();
+    setManufacturedCsvPreview(preview);
+    setProvisioningMessage(`CSV preview: ${preview.createCount} new, ${preview.overwriteCount} overwrite, ${preview.errorCount} error rows.`);
+  };
+
+  const handleDownloadManufacturedCsvTemplate = () => {
+    const template = [
+      'serialNumber,mac,imei,modelNo,batchNo,firmwareVersion,claimCode,status,note',
+      'SN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3,,in_stock,Installed at customer site A',
+    ].join('\n');
+    const blob = new Blob([template], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'manufactured-devices-template.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+    setProvisioningMessage('CSV template downloaded.');
+  };
+
   const handleAddDeviceModel = () => {
     setProvisioningMessage('');
     if (!modelDraft.name.trim() || !modelDraft.modelNo.trim()) {
@@ -451,37 +598,14 @@ export function Settings() {
 
   const handleImportManufacturedCsv = () => {
     setProvisioningMessage('');
-    const lines = manufacturedCsv.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (lines.length < 2) {
-      setProvisioningMessage('CSV requires a header row and at least one device row.');
+    const preview = manufacturedCsvPreview || buildManufacturedCsvPreview();
+    setManufacturedCsvPreview(preview);
+    if (preview.validItems.length === 0) {
+      setProvisioningMessage(`No valid rows imported. ${preview.errorCount} row(s) need fixes.`);
       return;
     }
-    const headers = lines[0].split(',').map((header) => header.trim());
-    const modelByNo = new Map(deviceModels.map((model) => [model.modelNo, model.id]));
-    const imported = lines.slice(1).map((line) => {
-      const cells = line.split(',').map((cell) => cell.trim());
-      const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] || ''])) as Record<string, string>;
-      const modelId = row.modelId || modelByNo.get(row.modelNo || '') || manufacturedDraft.modelId;
-      return {
-        id: newId('mfg'),
-        modelId,
-        serialNumber: row.serialNumber || row.serial || row.sn || '',
-        mac: row.mac || '',
-        imei: row.imei || '',
-        claimCode: row.claimCode || generateClaimCode(),
-        batchNo: row.batchNo || row.batch || '',
-        firmwareVersion: row.firmwareVersion || row.firmware || '',
-        status: (row.status || 'in_stock') as ManufacturedDevice['status'],
-        note: row.note || '',
-        createdAt: new Date().toISOString(),
-      };
-    }).filter((item) => item.modelId && item.serialNumber);
-    if (imported.length === 0) {
-      setProvisioningMessage('No valid rows imported. Check modelNo/modelId and serialNumber.');
-      return;
-    }
-    bulkImportManufacturedDevices(imported);
-    setProvisioningMessage(`${imported.length} manufactured devices imported.`);
+    bulkImportManufacturedDevices(preview.validItems);
+    setProvisioningMessage(`${preview.validItems.length} rows imported: ${preview.createCount} new, ${preview.overwriteCount} overwritten, ${preview.errorCount} skipped with errors.`);
   };
 
   const copyClaimCode = async (item: ManufacturedDevice) => {
@@ -520,6 +644,14 @@ export function Settings() {
     });
     setProvisioningMessage(`Claim revoked for ${item.serialNumber}.`);
   };
+
+  const manufacturedBatchOptions = useMemo(() => (
+    Array.from(new Set(manufacturedDevices.map((item) => item.batchNo).filter(Boolean) as string[])).sort()
+  ), [manufacturedDevices]);
+
+  const visibleManufacturedDevices = useMemo(() => (
+    manufacturedDevices.filter((item) => manufacturedBatchFilter === 'all' || (item.batchNo || '') === manufacturedBatchFilter)
+  ), [manufacturedBatchFilter, manufacturedDevices]);
 
   const handleAddHttpPushChannel = () => {
     setHttpPushChannels((current) => [
@@ -1436,15 +1568,57 @@ export function Settings() {
 
                   <div className="mt-5">
                     <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">CSV Import</label>
-                    <textarea value={manufacturedCsv} onChange={(event) => setManufacturedCsv(event.target.value)} rows={6} className="mt-2 w-full rounded-md border-0 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
-                    <button type="button" onClick={handleImportManufacturedCsv} className="mt-2 inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
-                      Import CSV
-                    </button>
+                    <textarea
+                      value={manufacturedCsv}
+                      onChange={(event) => {
+                        setManufacturedCsv(event.target.value);
+                        setManufacturedCsvPreview(null);
+                      }}
+                      rows={6}
+                      className="mt-2 w-full rounded-md border-0 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                    />
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button type="button" onClick={handleDownloadManufacturedCsvTemplate} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                        Download Template
+                      </button>
+                      <button type="button" onClick={handlePreviewManufacturedCsv} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                        Preview CSV
+                      </button>
+                      <button type="button" onClick={handleImportManufacturedCsv} className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500">
+                        Import Valid Rows
+                      </button>
+                    </div>
+                    {manufacturedCsvPreview && (
+                      <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-xs dark:border-slate-800 dark:bg-slate-950">
+                        <div className="flex flex-wrap gap-2">
+                          <span className="rounded bg-emerald-50 px-2 py-1 font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{manufacturedCsvPreview.createCount} new</span>
+                          <span className="rounded bg-blue-50 px-2 py-1 font-semibold text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">{manufacturedCsvPreview.overwriteCount} overwrite</span>
+                          <span className="rounded bg-red-50 px-2 py-1 font-semibold text-red-700 dark:bg-red-500/10 dark:text-red-300">{manufacturedCsvPreview.errorCount} error</span>
+                        </div>
+                        {manufacturedCsvPreview.rows.filter((row) => row.errors.length > 0).slice(0, 6).map((row) => (
+                          <div key={row.lineNumber} className="mt-2 text-red-600 dark:text-red-300">
+                            Line {row.lineNumber}: {row.errors.join(' ')}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </section>
               </div>
 
               <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Manufactured Inventory</h3>
+                    <p className="text-xs text-slate-500">Filter by production batch to inspect imported devices.</p>
+                  </div>
+                  <select value={manufacturedBatchFilter} onChange={(event) => setManufacturedBatchFilter(event.target.value)} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                    <option value="all">All batches ({manufacturedDevices.length})</option>
+                    {manufacturedBatchOptions.map((batch) => (
+                      <option key={batch} value={batch}>{batch} ({manufacturedDevices.filter((item) => item.batchNo === batch).length})</option>
+                    ))}
+                  </select>
+                </div>
                 <table className="min-w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
                     <tr>
@@ -1458,7 +1632,7 @@ export function Settings() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
-                    {manufacturedDevices.map((item) => {
+                    {visibleManufacturedDevices.map((item) => {
                       const model = deviceModels.find((candidate) => candidate.id === item.modelId);
                       return (
                         <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
@@ -1503,10 +1677,10 @@ export function Settings() {
                         </tr>
                       );
                     })}
-                    {manufacturedDevices.length === 0 && (
+                    {visibleManufacturedDevices.length === 0 && (
                       <tr>
                         <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
-                          No manufactured devices registered yet.
+                          {manufacturedDevices.length === 0 ? 'No manufactured devices registered yet.' : 'No manufactured devices match this batch filter.'}
                         </td>
                       </tr>
                     )}
