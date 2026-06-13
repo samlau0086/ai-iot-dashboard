@@ -539,6 +539,8 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 
 管理员也可以在 Provisioning 库存表中生成并复制 **Claim Link**，链接格式为 `/claim/{token}`。该 token 为随机字符串，不包含 Serial Number、MAC、IMEI、型号或设备名称；用户打开 Claim Link 后页面会自动识别对应库存设备，只需要填写 Claim Code 并确认 Site。
 
+库存表中的 **Label** 按钮可打开 Claim QR / Label 预览，显示二维码、型号、Serial Number、Batch 和 Claim Code，并支持复制链接或打印单台设备标签。
+
 模板支持占位符：
 
 - `{identity}`：优先使用 Serial Number，其次 IMEI / MAC。

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bell, Building2, CheckCircle2, Copy, Database, KeyRound, Package, Plus, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi } from 'lucide-react';
+import { Bell, Building2, CheckCircle2, Copy, Database, KeyRound, Package, Plus, Printer, QrCode, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi, X } from 'lucide-react';
 import { useAppStore, type DeviceModelTemplate, type ManufacturedDevice, type NotificationChannel, type SiteTenant } from '../lib/store';
 import type { DeviceType } from '../types';
 import { translations } from '../lib/i18n';
@@ -63,6 +63,12 @@ const parseCsvLine = (line: string) => {
 
 const isValidMac = (value: string) => !value || /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(value) || /^[0-9a-f]{12}$/i.test(value);
 const isValidImei = (value: string) => !value || /^\d{14,17}$/.test(value);
+const escapeHtml = (value: string) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;');
 
 const DEFAULT_NOTIFICATION_CONFIG: Record<NotificationChannel['type'], Record<string, string>> = {
   email: { recipients: '', subjectPrefix: '[IoT Alert]' },
@@ -278,6 +284,7 @@ export function Settings() {
   const [manufacturedCsv, setManufacturedCsv] = useState('serialNumber,mac,imei,modelNo,batchNo,firmwareVersion,claimCode,claimToken,status,note\nSN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3,,,in_stock,');
   const [manufacturedCsvPreview, setManufacturedCsvPreview] = useState<CsvPreview | null>(null);
   const [manufacturedBatchFilter, setManufacturedBatchFilter] = useState('all');
+  const [claimLabelModal, setClaimLabelModal] = useState<{ item: ManufacturedDevice; claimLink: string } | null>(null);
   const [provisioningMessage, setProvisioningMessage] = useState('');
 
   const tabs = [
@@ -624,19 +631,86 @@ export function Settings() {
     }
   };
 
-  const copyClaimLink = async (item: ManufacturedDevice) => {
+  const buildClaimLink = (claimToken: string) => {
+    const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    return `${baseUrl}/claim/${claimToken}`;
+  };
+
+  const ensureClaimToken = (item: ManufacturedDevice) => {
     const claimToken = item.claimToken || generateClaimToken();
     if (!item.claimToken) {
       updateManufacturedDevice(item.id, { claimToken });
     }
-    const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
-    const claimLink = `${baseUrl}/claim/${claimToken}`;
+    return {
+      item: { ...item, claimToken },
+      claimLink: buildClaimLink(claimToken),
+    };
+  };
+
+  const copyClaimLink = async (item: ManufacturedDevice) => {
+    const { claimLink } = ensureClaimToken(item);
     try {
       await navigator.clipboard.writeText(claimLink);
       setProvisioningMessage(`Claim link copied for ${item.serialNumber}.`);
     } catch {
       setProvisioningMessage(`Copy failed. Claim link: ${claimLink}`);
     }
+  };
+
+  const openClaimLabelModal = (item: ManufacturedDevice) => {
+    setClaimLabelModal(ensureClaimToken(item));
+  };
+
+  const printClaimLabel = () => {
+    if (!claimLabelModal) return;
+    const model = deviceModels.find((candidate) => candidate.id === claimLabelModal.item.modelId);
+    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(claimLabelModal.claimLink)}`;
+    const popup = window.open('', '_blank', 'width=720,height=760');
+    if (!popup) {
+      setProvisioningMessage('Print window was blocked. Allow popups and try again.');
+      return;
+    }
+    popup.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <title>Device Claim Label</title>
+          <style>
+            * { box-sizing: border-box; }
+            body { margin: 0; padding: 24px; font-family: Arial, sans-serif; color: #0f172a; background: #f8fafc; }
+            .label { width: 420px; min-height: 560px; margin: 0 auto; padding: 24px; border: 2px solid #0f172a; border-radius: 12px; background: white; }
+            .title { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+            .sub { color: #64748b; font-size: 12px; margin-bottom: 18px; }
+            .qr { display: block; width: 260px; height: 260px; margin: 0 auto 18px; }
+            .row { margin: 12px 0; }
+            .key { display: block; color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+            .value { display: block; margin-top: 4px; font-size: 16px; font-weight: 700; word-break: break-word; }
+            .mono { font-family: Consolas, monospace; }
+            .link { margin-top: 18px; padding-top: 12px; border-top: 1px solid #e2e8f0; color: #475569; font-size: 10px; word-break: break-all; }
+            @media print { body { background: white; padding: 0; } .label { border-color: #000; box-shadow: none; } }
+          </style>
+        </head>
+        <body>
+          <div class="label">
+            <div class="title">Device Claim Label</div>
+            <div class="sub">Scan QR, enter Claim Code, bind device to your Site.</div>
+            <img class="qr" src="${qrSrc}" alt="Claim QR" />
+            <div class="row"><span class="key">Model</span><span class="value">${escapeHtml(model ? `${model.modelNo} / ${model.name}` : 'Unknown Model')}</span></div>
+            <div class="row"><span class="key">Serial Number</span><span class="value mono">${escapeHtml(claimLabelModal.item.serialNumber || '-')}</span></div>
+            <div class="row"><span class="key">Batch</span><span class="value mono">${escapeHtml(claimLabelModal.item.batchNo || '-')}</span></div>
+            <div class="row"><span class="key">Claim Code</span><span class="value mono">${escapeHtml(claimLabelModal.item.claimCode || '-')}</span></div>
+            <div class="link">${escapeHtml(claimLabelModal.claimLink)}</div>
+          </div>
+          <script>
+            window.onload = () => {
+              window.focus();
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    popup.document.close();
   };
 
   const handleRegenerateClaimCode = (item: ManufacturedDevice) => {
@@ -856,6 +930,13 @@ export function Settings() {
       ))}
     </div>
   );
+
+  const claimLabelModel = claimLabelModal
+    ? deviceModels.find((candidate) => candidate.id === claimLabelModal.item.modelId)
+    : null;
+  const claimLabelQrSrc = claimLabelModal
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(claimLabelModal.claimLink)}`
+    : '';
 
   return (
     <div className="space-y-6">
@@ -1666,9 +1747,15 @@ export function Settings() {
                             </button>
                           </td>
                           <td className="px-4 py-3 font-mono text-xs">
-                            <button type="button" onClick={() => copyClaimLink(item)} className="rounded bg-slate-100 px-2 py-1 text-slate-700 hover:bg-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">
-                              {item.claimToken ? 'Copy Link' : 'Generate Link'}
-                            </button>
+                            <div className="flex gap-1">
+                              <button type="button" onClick={() => copyClaimLink(item)} className="rounded bg-slate-100 px-2 py-1 text-slate-700 hover:bg-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">
+                                {item.claimToken ? 'Copy Link' : 'Generate Link'}
+                              </button>
+                              <button type="button" onClick={() => openClaimLabelModal(item)} className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-700 hover:bg-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">
+                                <QrCode className="h-3.5 w-3.5" />
+                                Label
+                              </button>
+                            </div>
                           </td>
                           <td className="px-4 py-3">
                             <select value={item.status} onChange={(event) => updateManufacturedDevice(item.id, { status: event.target.value as ManufacturedDevice['status'] })} className="rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700">
@@ -2075,6 +2162,85 @@ export function Settings() {
           </button>
         </div>
       </div>
+
+      {claimLabelModal && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-3xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900 dark:text-white">Claim QR / Label</h3>
+                <p className="text-xs text-slate-500">Preview the claim QR and print a device label.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClaimLabelModal(null)}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white"
+                title="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="grid gap-5 p-5 lg:grid-cols-[18rem_1fr]">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center dark:border-slate-800 dark:bg-slate-950">
+                <img
+                  src={claimLabelQrSrc}
+                  alt="Claim QR code"
+                  className="mx-auto h-64 w-64 rounded bg-white p-3"
+                />
+                <p className="mt-3 break-all font-mono text-xs text-slate-500">{claimLabelModal.claimLink}</p>
+              </div>
+
+              <div className="space-y-3">
+                <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Label Fields</p>
+                  <div className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                    <div>
+                      <span className="block text-xs text-slate-500">Model</span>
+                      <span className="font-semibold text-slate-900 dark:text-white">{claimLabelModel ? `${claimLabelModel.modelNo} / ${claimLabelModel.name}` : 'Unknown Model'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-xs text-slate-500">Serial Number</span>
+                      <span className="font-mono font-semibold text-slate-900 dark:text-white">{claimLabelModal.item.serialNumber || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-xs text-slate-500">Batch</span>
+                      <span className="font-mono font-semibold text-slate-900 dark:text-white">{claimLabelModal.item.batchNo || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-xs text-slate-500">Claim Code</span>
+                      <span className="font-mono font-semibold text-slate-900 dark:text-white">{claimLabelModal.item.claimCode || '-'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-200">
+                  The QR token is random and does not expose MAC, IMEI, Serial Number, model, or device name. Users still need the Claim Code to bind the device.
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => copyClaimLink(claimLabelModal.item)}
+                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy Link
+                  </button>
+                  <button
+                    type="button"
+                    onClick={printClaimLabel}
+                    className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500"
+                  >
+                    <Printer className="h-4 w-4" />
+                    Print Label
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
