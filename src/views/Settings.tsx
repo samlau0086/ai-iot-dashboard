@@ -7,7 +7,7 @@ import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
-import { generateClaimCode } from '../lib/deviceProvisioning';
+import { generateClaimCode, generateClaimToken } from '../lib/deviceProvisioning';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
@@ -275,7 +275,7 @@ export function Settings() {
     status: 'in_stock' as ManufacturedDevice['status'],
     note: '',
   });
-  const [manufacturedCsv, setManufacturedCsv] = useState('serialNumber,mac,imei,modelNo,batchNo,firmwareVersion,claimCode,status,note\nSN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3,,in_stock,');
+  const [manufacturedCsv, setManufacturedCsv] = useState('serialNumber,mac,imei,modelNo,batchNo,firmwareVersion,claimCode,claimToken,status,note\nSN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3,,,in_stock,');
   const [manufacturedCsvPreview, setManufacturedCsvPreview] = useState<CsvPreview | null>(null);
   const [manufacturedBatchFilter, setManufacturedBatchFilter] = useState('all');
   const [provisioningMessage, setProvisioningMessage] = useState('');
@@ -482,6 +482,7 @@ export function Settings() {
         mac,
         imei,
         claimCode: row.claimCode || generateClaimCode(),
+        claimToken: row.claimToken || '',
         batchNo: row.batchNo || row.batch || '',
         firmwareVersion: row.firmwareVersion || row.firmware || '',
         status,
@@ -521,8 +522,8 @@ export function Settings() {
 
   const handleDownloadManufacturedCsvTemplate = () => {
     const template = [
-      'serialNumber,mac,imei,modelNo,batchNo,firmwareVersion,claimCode,status,note',
-      'SN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3,,in_stock,Installed at customer site A',
+      'serialNumber,mac,imei,modelNo,batchNo,firmwareVersion,claimCode,claimToken,status,note',
+      'SN202606130001,AA:BB:CC:11:22:33,860000000000001,IOT-GW-4G-01,BATCH-202606,1.0.3,,,in_stock,Installed at customer site A',
     ].join('\n');
     const blob = new Blob([template], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -580,6 +581,7 @@ export function Settings() {
       mac: manufacturedDraft.mac.trim(),
       imei: manufacturedDraft.imei.trim(),
       claimCode: generateClaimCode(),
+      claimToken: generateClaimToken(),
       batchNo: manufacturedDraft.batchNo.trim(),
       firmwareVersion: manufacturedDraft.firmwareVersion.trim(),
       status: manufacturedDraft.status,
@@ -619,6 +621,21 @@ export function Settings() {
       setProvisioningMessage(`Claim code copied for ${item.serialNumber}.`);
     } catch {
       setProvisioningMessage('Copy failed. Select the claim code manually.');
+    }
+  };
+
+  const copyClaimLink = async (item: ManufacturedDevice) => {
+    const claimToken = item.claimToken || generateClaimToken();
+    if (!item.claimToken) {
+      updateManufacturedDevice(item.id, { claimToken });
+    }
+    const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    const claimLink = `${baseUrl}/claim/${claimToken}`;
+    try {
+      await navigator.clipboard.writeText(claimLink);
+      setProvisioningMessage(`Claim link copied for ${item.serialNumber}.`);
+    } catch {
+      setProvisioningMessage(`Copy failed. Claim link: ${claimLink}`);
     }
   };
 
@@ -1626,6 +1643,7 @@ export function Settings() {
                       <th className="px-4 py-3 font-semibold">Model</th>
                       <th className="px-4 py-3 font-semibold">Batch</th>
                       <th className="px-4 py-3 font-semibold">Claim Code</th>
+                      <th className="px-4 py-3 font-semibold">Claim Link</th>
                       <th className="px-4 py-3 font-semibold">Status</th>
                       <th className="px-4 py-3 font-semibold">Claimed Device</th>
                       <th className="px-4 py-3 text-right font-semibold">Actions</th>
@@ -1645,6 +1663,11 @@ export function Settings() {
                           <td className="px-4 py-3 font-mono text-xs">
                             <button type="button" onClick={() => item.claimCode ? copyClaimCode(item) : handleRegenerateClaimCode(item)} className="rounded bg-slate-100 px-2 py-1 text-slate-700 hover:bg-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">
                               {item.claimCode || 'Generate'}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs">
+                            <button type="button" onClick={() => copyClaimLink(item)} className="rounded bg-slate-100 px-2 py-1 text-slate-700 hover:bg-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800">
+                              {item.claimToken ? 'Copy Link' : 'Generate Link'}
                             </button>
                           </td>
                           <td className="px-4 py-3">
@@ -1679,7 +1702,7 @@ export function Settings() {
                     })}
                     {visibleManufacturedDevices.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
+                        <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
                           {manufacturedDevices.length === 0 ? 'No manufactured devices registered yet.' : 'No manufactured devices match this batch filter.'}
                         </td>
                       </tr>

@@ -537,6 +537,8 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 
 现场或客户自助绑定可使用 **Claim Device** 页面 `/claim`。登录用户输入 MAC / IMEI / Serial Number 与 Claim Code 后，系统会按型号模板自动创建平台设备，并绑定到当前用户可访问的 Site；Admin / Owner 可选择目标 Site。
 
+管理员也可以在 Provisioning 库存表中生成并复制 **Claim Link**，链接格式为 `/claim/{token}`。该 token 为随机字符串，不包含 Serial Number、MAC、IMEI、型号或设备名称；用户打开 Claim Link 后页面会自动识别对应库存设备，只需要填写 Claim Code 并确认 Site。
+
 模板支持占位符：
 
 - `{identity}`：优先使用 Serial Number，其次 IMEI / MAC。

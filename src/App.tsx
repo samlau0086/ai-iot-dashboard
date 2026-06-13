@@ -80,6 +80,7 @@ export default function App() {
             <Route path="devices" element={<Devices />} />
             <Route path="devices/:id" element={<DeviceDetails />} />
             <Route path="claim" element={<ClaimDevice />} />
+            <Route path="claim/:token" element={<ClaimDevice />} />
             <Route path="workflows" element={<Workflows />} />
             <Route path="control" element={<ControlCenter />} />
             <Route path="scada" element={<ScadaView />} />

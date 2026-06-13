@@ -7,6 +7,12 @@ export const generateClaimCode = () => (
   `CLM-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
 );
 
+export const generateClaimToken = () => {
+  const first = Math.random().toString(36).slice(2);
+  const second = Math.random().toString(36).slice(2);
+  return `${first}${second}`.slice(0, 32);
+};
+
 export const normalizeClaimCode = (value: string) => value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 export const isClaimCodeValid = (expected: string | undefined, provided: string) => (
@@ -21,6 +27,12 @@ export const findManufacturedDeviceByIdentity = (manufacturedDevices: Manufactur
     || normalizeDeviceIdentity(item.mac || '') === normalized
     || normalizeDeviceIdentity(item.imei || '') === normalized
   )) || null;
+};
+
+export const findManufacturedDeviceByClaimToken = (manufacturedDevices: ManufacturedDevice[], token: string | undefined) => {
+  const normalized = String(token || '').trim();
+  if (!normalized) return null;
+  return manufacturedDevices.find((item) => item.claimToken === normalized) || null;
 };
 
 export const renderProvisioningTemplate = (template: string | undefined, manufacturedDevice: ManufacturedDevice) => {

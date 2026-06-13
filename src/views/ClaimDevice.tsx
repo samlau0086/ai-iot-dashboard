@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, CheckCircle2, KeyRound, PackageCheck, ShieldCheck } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { buildProvisionedDevice, findManufacturedDeviceByIdentity, isClaimCodeValid } from '../lib/deviceProvisioning';
+import { useNavigate, useParams } from 'react-router-dom';
+import { buildProvisionedDevice, findManufacturedDeviceByClaimToken, findManufacturedDeviceByIdentity, isClaimCodeValid } from '../lib/deviceProvisioning';
 import { useAppStore, type ProvisioningAuditLog } from '../lib/store';
 import { notifySuccess } from '../lib/toast';
 
@@ -9,6 +9,7 @@ const provisionLogId = () => `provision-log-${Date.now()}-${Math.random().toStri
 
 export function ClaimDevice() {
   const navigate = useNavigate();
+  const { token } = useParams();
   const {
     addDevice,
     addProvisioningAuditLog,
@@ -26,12 +27,21 @@ export function ClaimDevice() {
     isPrivileged ? sites : sites.filter((site) => site.id === currentUser?.siteId)
   ), [currentUser?.siteId, isPrivileged, sites]);
   const defaultSiteId = (isPrivileged ? activeSiteId : currentUser?.siteId) || availableSites[0]?.id || sites[0]?.id || 'factory-a';
+  const tokenManufacturedDevice = useMemo(
+    () => findManufacturedDeviceByClaimToken(manufacturedDevices, token),
+    [manufacturedDevices, token]
+  );
 
   const [identity, setIdentity] = useState('');
   const [claimCode, setClaimCode] = useState('');
   const [siteId, setSiteId] = useState(defaultSiteId);
   const [message, setMessage] = useState('');
   const [claimedDeviceId, setClaimedDeviceId] = useState('');
+
+  useEffect(() => {
+    if (!tokenManufacturedDevice) return;
+    setIdentity(tokenManufacturedDevice.serialNumber || tokenManufacturedDevice.imei || tokenManufacturedDevice.mac || '');
+  }, [tokenManufacturedDevice]);
 
   const writeAudit = (
     action: ProvisioningAuditLog['action'],
@@ -58,15 +68,15 @@ export function ClaimDevice() {
     setMessage('');
     setClaimedDeviceId('');
     const trimmedIdentity = identity.trim();
-    if (!trimmedIdentity || !claimCode.trim()) {
-      setMessage('Enter both MAC / IMEI / Serial Number and Claim Code.');
+    if (!claimCode.trim() || (!tokenManufacturedDevice && !trimmedIdentity)) {
+      setMessage(token ? 'Enter the Claim Code for this claim link.' : 'Enter both MAC / IMEI / Serial Number and Claim Code.');
       return;
     }
 
-    const manufacturedDevice = findManufacturedDeviceByIdentity(manufacturedDevices, trimmedIdentity);
+    const manufacturedDevice = tokenManufacturedDevice || findManufacturedDeviceByIdentity(manufacturedDevices, trimmedIdentity);
     if (!manufacturedDevice) {
-      setMessage('No manufactured device matched this identity.');
-      writeAudit('claim_failed', 'failed', 'No manufactured device matched this identity.');
+      setMessage(token ? 'This claim link is invalid or has been regenerated.' : 'No manufactured device matched this identity.');
+      writeAudit('claim_failed', 'failed', token ? 'Invalid claim token.' : 'No manufactured device matched this identity.');
       return;
     }
 
@@ -131,7 +141,7 @@ export function ClaimDevice() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Claim Device</h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Bind a manufactured device to this dashboard by MAC, IMEI, or Serial Number.</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Bind a manufactured device to this dashboard by Claim Link or MAC, IMEI, Serial Number.</p>
           </div>
         </div>
       </div>
@@ -149,9 +159,15 @@ export function ClaimDevice() {
               <input
                 value={identity}
                 onChange={(event) => setIdentity(event.target.value)}
+                readOnly={Boolean(tokenManufacturedDevice)}
                 placeholder="SN202606130001"
-                className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 read-only:cursor-not-allowed read-only:opacity-70 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
               />
+              {token && (
+                <p className="mt-1 text-xs text-slate-500">
+                  {tokenManufacturedDevice ? 'Loaded from Claim Link. Verify the Claim Code to continue.' : 'Claim Link token was not found.'}
+                </p>
+              )}
             </div>
 
             <div>
@@ -212,7 +228,7 @@ export function ClaimDevice() {
             Claim Flow
           </div>
           <div className="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
-            <div className="rounded-md bg-white p-3 dark:bg-slate-950">1. Match inventory by MAC, IMEI, or Serial Number.</div>
+            <div className="rounded-md bg-white p-3 dark:bg-slate-950">1. Match inventory by Claim Link token, MAC, IMEI, or Serial Number.</div>
             <div className="rounded-md bg-white p-3 dark:bg-slate-950">2. Verify the Claim Code generated in Settings -> Provisioning.</div>
             <div className="rounded-md bg-white p-3 dark:bg-slate-950">3. Create the platform device from the model template.</div>
             <div className="rounded-md bg-white p-3 dark:bg-slate-950">4. Mark inventory as claimed and write an audit log.</div>

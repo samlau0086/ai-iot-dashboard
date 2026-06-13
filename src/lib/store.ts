@@ -96,6 +96,7 @@ export interface ManufacturedDevice {
   mac?: string;
   imei?: string;
   claimCode?: string;
+  claimToken?: string;
   batchNo?: string;
   firmwareVersion?: string;
   status: 'in_stock' | 'shipped' | 'claimed' | 'disabled';
