@@ -10,7 +10,7 @@ import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, g
 import { confirmDelete } from '../lib/confirm';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
-import { getUserAppProfile } from '../lib/featureAccess';
+import { canIssueControlCommand, getUserAppProfile } from '../lib/featureAccess';
 import {
   STANDARD_METRIC_OPTIONS,
   applyMetricMappingsToMetrics,
@@ -138,7 +138,7 @@ export function DeviceDetails() {
   const [diagnosticsMessage, setDiagnosticsMessage] = useState('');
   const controlDefinitions = getDeviceControlDefinitions(device);
   const canEditDevice = currentUser?.role !== 'Demo' && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
-  const canControl = currentUser?.role !== 'Demo' && (isSimpleProfile || ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || ''));
+  const canControl = canIssueControlCommand(currentUser, device.id);
 
   useEffect(() => {
     if (!device) return;
@@ -309,7 +309,10 @@ export function DeviceDetails() {
 
   const submitDeviceControl = async (controlId: string, nextControlValues = controlValues) => {
     const definition = controlDefinitions.find((control) => control.id === controlId);
-    if (!definition || !canControl) return false;
+    if (!definition || !canIssueControlCommand(currentUser, device.id, definition.id)) {
+      setControlMessage('Current user is not allowed to issue this control action.');
+      return false;
+    }
 
     setSubmittingControlId(controlId);
     setControlMessage('');
@@ -788,7 +791,8 @@ export function DeviceDetails() {
     const currentValue = controlValues[control.id] ?? control.defaultValue ?? '';
     const isSubmitting = submittingControlId === control.id;
     const isCoolingDown = Boolean((controlCooldowns[control.id] || 0) > Date.now());
-    const isDisabled = !canControl || isSubmitting || isCoolingDown;
+    const canUseControl = canIssueControlCommand(currentUser, device.id, control.id);
+    const isDisabled = !canUseControl || isSubmitting || isCoolingDown;
 
     return (
       <div key={control.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
@@ -1653,6 +1657,7 @@ export function DeviceDetails() {
                 {controlDefinitions.map((control) => {
                   const Icon = control.icon;
                   const currentValue = controlValues[control.id] ?? control.defaultValue ?? '';
+                  const canUseControl = canIssueControlCommand(currentUser, device.id, control.id);
 
                   return (
                     <div key={control.id} className="group relative rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800/50 dark:bg-slate-900">
@@ -1701,7 +1706,7 @@ export function DeviceDetails() {
                           <span className="text-slate-600 dark:text-slate-300">{control.parameterKey || control.id}</span>
                           <button
                             type="button"
-                            disabled={!canControl || submittingControlId === control.id}
+                            disabled={!canUseControl || submittingControlId === control.id}
                             onClick={() => {
                               const nextValue = !Boolean(controlValues[control.id]);
                               const nextControlValues = { ...controlValues, [control.id]: nextValue };
@@ -1811,7 +1816,7 @@ export function DeviceDetails() {
                         <button
                           type="button"
                           onClick={() => submitDeviceControl(control.id)}
-                          disabled={!canControl || submittingControlId === control.id}
+                          disabled={!canUseControl || submittingControlId === control.id}
                           className="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded bg-orange-600 px-3 text-xs font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
                         >
                           <Play className="h-3.5 w-3.5" />

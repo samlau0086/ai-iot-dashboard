@@ -5,6 +5,7 @@ import { cn } from '../lib/utils';
 import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, isDeviceControllable } from '../lib/deviceControls';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
+import { canIssueControlCommand } from '../lib/featureAccess';
 
 type ControlCommand = {
   id: string;
@@ -35,16 +36,18 @@ export function ControlCenter() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isDemoUser = currentUser?.role === 'Demo';
-  const canControl = !isDemoUser && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
+  const canControl = canIssueControlCommand(currentUser);
   const siteOptions = [{ id: 'All', name: 'All Sites' }, ...sites];
   const scopedDevices = useMemo(() => {
     return devices.filter((device) => {
       const inSite = selectedSiteId === 'All' || device.siteId === selectedSiteId;
-      return inSite && isDeviceControllable(device);
+      return inSite && isDeviceControllable(device) && canIssueControlCommand(currentUser, device.id);
     });
-  }, [devices, selectedSiteId]);
+  }, [currentUser, devices, selectedSiteId]);
   const selectedDevice = scopedDevices.find((device) => device.id === selectedDeviceId) || scopedDevices[0] || null;
-  const commandOptions = getDeviceControlDefinitions(selectedDevice);
+  const commandOptions = getDeviceControlDefinitions(selectedDevice).filter((control) => (
+    canIssueControlCommand(currentUser, selectedDevice?.id, control.id)
+  ));
 
   useEffect(() => {
     if (!selectedDeviceId && selectedDevice) {
@@ -82,6 +85,10 @@ export function ControlCenter() {
   const submitCommand = async (nextControlValues = controlValues, forceSubmit = false) => {
     if (!selectedDevice || !canControl || (!confirmChecked && !forceSubmit)) return;
     const definition = commandOptions.find((option) => option.id === selectedCommand);
+    if (!canIssueControlCommand(currentUser, selectedDevice.id, definition?.id)) {
+      setMessage('Current user is not allowed to issue this control action.');
+      return;
+    }
     if (!definition) return;
     const parameters = buildControlParameters(definition, nextControlValues, parameterName);
 

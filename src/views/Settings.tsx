@@ -16,6 +16,7 @@ const SITE_TYPES: SiteTenant['type'][] = ['factory', 'solar', 'cold_storage', 'p
 const PROVISION_DEVICE_TYPES: DeviceType[] = ['gateway', 'dtu', 'rtu', 'lora_gateway', 'plc', 'io_module', 'relay_module', 'energy_meter', 'temperature_sensor', 'pressure_sensor', 'flow_meter', 'pump_controller', 'valve_controller', 'air_compressor', 'vfd', 'solar_inverter', 'battery_bms', 'ups', 'sensor'];
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const splitCsv = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
 
 type CsvPreviewRow = {
   lineNumber: number;
@@ -224,6 +225,7 @@ export function Settings() {
     addProvisioningAuditLog,
     whiteLabelConfig,
     updateWhiteLabelConfig,
+    devices,
   } = useAppStore();
   const t = translations[language];
   const isDemoUser = currentUser?.role === 'Demo';
@@ -441,6 +443,21 @@ export function Settings() {
 
   const handleResetUserFeatureAccess = (userId: string) => {
     updateUser(userId, { featureAccess: undefined });
+  };
+
+  const handleUserControlAccessChange = (userId: string, patch: NonNullable<typeof users[number]['controlAccess']>) => {
+    const user = users.find((item) => item.id === userId);
+    if (!user) return;
+    updateUser(userId, {
+      controlAccess: {
+        ...(user.controlAccess || {}),
+        ...patch,
+      },
+    });
+  };
+
+  const handleResetUserControlAccess = (userId: string) => {
+    updateUser(userId, { controlAccess: undefined });
   };
 
   const handleAddSite = () => {
@@ -2243,6 +2260,45 @@ export function Settings() {
                               className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
                             >
                               Reset to profile defaults
+                            </button>
+                          </details>
+                          <details className="mt-2 max-w-72 rounded-md border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-950/40">
+                            <summary className="cursor-pointer text-xs font-semibold text-slate-600 dark:text-slate-300">
+                              Control access
+                            </summary>
+                            <label className="mt-2 flex items-center gap-2 text-[10px] text-slate-600 dark:text-slate-300">
+                              <input
+                                type="checkbox"
+                                checked={user.controlAccess?.enabled !== false}
+                                onChange={(event) => handleUserControlAccessChange(user.id, { enabled: event.target.checked })}
+                                className="h-3 w-3 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                              />
+                              Allow control commands
+                            </label>
+                            <label className="mt-2 block text-[10px] text-slate-500">
+                              Allowed Device IDs
+                              <input
+                                value={(user.controlAccess?.deviceIds || []).join(', ')}
+                                onChange={(event) => handleUserControlAccessChange(user.id, { deviceIds: splitCsv(event.target.value) })}
+                                placeholder={devices.slice(0, 3).map((device) => device.id).join(', ') || 'empty = all devices'}
+                                className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                              />
+                            </label>
+                            <label className="mt-2 block text-[10px] text-slate-500">
+                              Allowed Action IDs
+                              <input
+                                value={(user.controlAccess?.actionIds || []).join(', ')}
+                                onChange={(event) => handleUserControlAccessChange(user.id, { actionIds: splitCsv(event.target.value) })}
+                                placeholder="power_on, power_off, set_mode"
+                                className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleResetUserControlAccess(user.id)}
+                              className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
+                            >
+                              Reset control access
                             </button>
                           </details>
                         </td>

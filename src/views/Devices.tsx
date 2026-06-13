@@ -10,7 +10,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { Device } from '../types';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
-import { getUserAppProfile } from '../lib/featureAccess';
+import { canIssueControlCommand, getUserAppProfile } from '../lib/featureAccess';
 import {
   buildControlParameters,
   buildControlStatePatch,
@@ -150,8 +150,8 @@ export function Devices() {
   const submitQuickAction = async (event: React.MouseEvent, device: Device, control: DeviceControlDefinition) => {
     event.preventDefault();
     event.stopPropagation();
-    if (currentUser?.role === 'Demo') {
-      setQuickActionMessages((current) => ({ ...current, [device.id]: 'Demo account cannot affect devices.' }));
+    if (!canIssueControlCommand(currentUser, device.id, control.id)) {
+      setQuickActionMessages((current) => ({ ...current, [device.id]: 'Current user is not allowed to issue this action.' }));
       return;
     }
 
@@ -312,6 +312,7 @@ export function Devices() {
               const primaryActionKey = primaryControl ? `${device.id}:${primaryControl.id}` : '';
               const quickActionMessage = quickActionMessages[device.id];
               const isPrimaryCoolingDown = Boolean(primaryActionKey && (quickActionCooldowns[primaryActionKey] || 0) > Date.now());
+              const canUsePrimaryControl = primaryControl ? canIssueControlCommand(currentUser, device.id, primaryControl.id) : false;
 
               return (
                 <div
@@ -364,7 +365,7 @@ export function Devices() {
                       <button
                         type="button"
                         onClick={(event) => submitQuickAction(event, device, primaryControl)}
-                        disabled={submittingQuickAction === primaryActionKey || isPrimaryCoolingDown || currentUser?.role === 'Demo'}
+                        disabled={submittingQuickAction === primaryActionKey || isPrimaryCoolingDown || !canUsePrimaryControl}
                         className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-orange-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
                       >
                         {submittingQuickAction === primaryActionKey ? 'Sending...' : isPrimaryCoolingDown ? 'Queued' : getQuickActionLabel(device, primaryControl)}

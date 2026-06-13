@@ -205,6 +205,19 @@ export function PartnerPortal() {
     updateUser(userId, { featureAccess: undefined });
   };
 
+  const handleAccountControlAccessChange = (user: User, patch: NonNullable<User['controlAccess']>) => {
+    updateUser(user.id, {
+      controlAccess: {
+        ...(user.controlAccess || {}),
+        ...patch,
+      },
+    });
+  };
+
+  const resetAccountControlAccess = (userId: string) => {
+    updateUser(userId, { controlAccess: undefined });
+  };
+
   const handleAddProject = () => {
     if (!projectDraft.name.trim()) return;
     addPartnerProject({
@@ -493,6 +506,45 @@ export function PartnerPortal() {
                                 className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
                               >
                                 Reset to profile defaults
+                              </button>
+                            </details>
+                            <details className="mt-2 w-72 rounded-md border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-950/40">
+                              <summary className="cursor-pointer text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                Control access
+                              </summary>
+                              <label className="mt-2 flex items-center gap-2 text-[10px] text-slate-600 dark:text-slate-300">
+                                <input
+                                  type="checkbox"
+                                  checked={user.controlAccess?.enabled !== false}
+                                  onChange={(event) => handleAccountControlAccessChange(user, { enabled: event.target.checked })}
+                                  className="h-3 w-3 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                                />
+                                Allow control commands
+                              </label>
+                              <label className="mt-2 block text-[10px] text-slate-500">
+                                Allowed Device IDs
+                                <input
+                                  value={(user.controlAccess?.deviceIds || []).join(', ')}
+                                  onChange={(event) => handleAccountControlAccessChange(user, { deviceIds: splitCsv(event.target.value) })}
+                                  placeholder={devices.filter((device) => allowedSiteIds.includes(device.siteId || '')).slice(0, 3).map((device) => device.id).join(', ') || 'empty = all devices'}
+                                  className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                                />
+                              </label>
+                              <label className="mt-2 block text-[10px] text-slate-500">
+                                Allowed Action IDs
+                                <input
+                                  value={(user.controlAccess?.actionIds || []).join(', ')}
+                                  onChange={(event) => handleAccountControlAccessChange(user, { actionIds: splitCsv(event.target.value) })}
+                                  placeholder="power_on, power_off, set_relay"
+                                  className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => resetAccountControlAccess(user.id)}
+                                className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
+                              >
+                                Reset control access
                               </button>
                             </details>
                           </td>

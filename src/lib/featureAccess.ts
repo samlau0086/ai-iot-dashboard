@@ -1,5 +1,3 @@
-import type { User } from './store';
-
 export type AppProfile = 'simple' | 'operations' | 'automation' | 'full';
 
 export type FeatureNavKey =
@@ -20,6 +18,19 @@ export type FeatureNavKey =
   | 'profile';
 
 export type FeatureAccessMap = Partial<Record<FeatureNavKey, boolean>>;
+
+export type ControlAccessConfig = {
+  enabled?: boolean;
+  deviceIds?: string[];
+  actionIds?: string[];
+};
+
+type AccessUser = {
+  role?: string;
+  appProfile?: AppProfile;
+  featureAccess?: FeatureAccessMap;
+  controlAccess?: ControlAccessConfig;
+};
 
 export const FEATURE_ACCESS_OPTIONS: Array<{ key: FeatureNavKey; label: string; description: string }> = [
   { key: 'overview', label: 'Overview', description: 'Operations dashboard and site-level widgets.' },
@@ -87,7 +98,7 @@ const DEFAULT_ROUTE_PRIORITY: Array<{ key: FeatureNavKey; to: string }> = [
   { key: 'profile', to: '/profile' },
 ];
 
-export const getUserAppProfile = (user?: Pick<User, 'role' | 'appProfile'> | null): AppProfile => {
+export const getUserAppProfile = (user?: AccessUser | null): AppProfile => {
   if (user?.appProfile) return user.appProfile;
   if (user?.role === 'Partner') return 'full';
   if (user?.role === 'Customer') return 'simple';
@@ -95,7 +106,7 @@ export const getUserAppProfile = (user?: Pick<User, 'role' | 'appProfile'> | nul
   return 'full';
 };
 
-export const getUserFeatureAccess = (user?: Pick<User, 'role' | 'appProfile' | 'featureAccess'> | null) => {
+export const getUserFeatureAccess = (user?: AccessUser | null) => {
   const profileFeatures = PROFILE_FEATURES[getUserAppProfile(user)];
   const access = FEATURE_ACCESS_OPTIONS.reduce((current, option) => ({
     ...current,
@@ -112,11 +123,27 @@ export const getUserFeatureAccess = (user?: Pick<User, 'role' | 'appProfile' | '
   return access;
 };
 
-export const canAccessFeature = (user: Pick<User, 'role' | 'appProfile' | 'featureAccess'> | null | undefined, feature: FeatureNavKey) => (
+export const canAccessFeature = (user: AccessUser | null | undefined, feature: FeatureNavKey) => (
   Boolean(getUserFeatureAccess(user)[feature])
 );
 
-export const getDefaultRouteForUser = (user: Pick<User, 'role' | 'appProfile' | 'featureAccess'> | null | undefined) => {
+export const canIssueControlCommand = (
+  user: AccessUser | null | undefined,
+  deviceId?: string,
+  actionId?: string
+) => {
+  if (!user || user.role === 'Demo') return false;
+  if (!['Owner', 'Admin', 'Engineer', 'Operator', 'Customer'].includes(user.role)) return false;
+
+  const config = user.controlAccess;
+  if (config?.enabled === false) return false;
+  if (config?.deviceIds?.length && deviceId && !config.deviceIds.includes(deviceId)) return false;
+  if (config?.actionIds?.length && actionId && !config.actionIds.includes(actionId)) return false;
+
+  return true;
+};
+
+export const getDefaultRouteForUser = (user: AccessUser | null | undefined) => {
   const access = getUserFeatureAccess(user);
   return DEFAULT_ROUTE_PRIORITY.find((route) => access[route.key])?.to || '/profile';
 };
@@ -140,6 +167,6 @@ export const getFeatureForPath = (pathname: string): FeatureNavKey => {
   return 'overview';
 };
 
-export const canAccessPath = (user: Pick<User, 'role' | 'appProfile' | 'featureAccess'> | null | undefined, pathname: string) => (
+export const canAccessPath = (user: AccessUser | null | undefined, pathname: string) => (
   canAccessFeature(user, getFeatureForPath(pathname))
 );
