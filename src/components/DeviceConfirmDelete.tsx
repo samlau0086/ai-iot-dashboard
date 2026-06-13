@@ -7,9 +7,13 @@ interface DeviceConfirmDeleteProps {
   deviceId: string;
   onClose: () => void;
   onConfirm: () => void;
+  title?: string;
+  description?: string;
+  confirmLabel?: string;
+  tone?: 'danger' | 'warning';
 }
 
-export function DeviceConfirmDelete({ deviceId, onClose, onConfirm }: DeviceConfirmDeleteProps) {
+export function DeviceConfirmDelete({ deviceId, onClose, onConfirm, title, description, confirmLabel, tone = 'danger' }: DeviceConfirmDeleteProps) {
   const { language, devices } = useAppStore();
   const t = translations[language].devices;
   const device = devices.find(d => d.id === deviceId);
@@ -28,16 +32,19 @@ export function DeviceConfirmDelete({ deviceId, onClose, onConfirm }: DeviceConf
         <div className="inline-block align-bottom bg-white dark:bg-[#1c2128] rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full border border-slate-200 dark:border-slate-800 relative z-[110]">
           <div className="px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
             <div className="sm:flex sm:items-start">
-              <div className="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-500/10 sm:mx-0 sm:h-10 sm:w-10">
-                <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-500" aria-hidden="true" />
+              <div className={tone === 'danger'
+                ? 'mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-500/10 sm:mx-0 sm:h-10 sm:w-10'
+                : 'mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-amber-100 dark:bg-amber-500/10 sm:mx-0 sm:h-10 sm:w-10'
+              }>
+                <AlertTriangle className={tone === 'danger' ? 'h-6 w-6 text-red-600 dark:text-red-500' : 'h-6 w-6 text-amber-600 dark:text-amber-400'} aria-hidden="true" />
               </div>
               <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
                 <h3 className="text-lg leading-6 font-medium text-slate-900 dark:text-white" id="modal-title">
-                  {t.deleteConfirmTitle}
+                  {title || t.deleteConfirmTitle}
                 </h3>
                 <div className="mt-2">
                   <p className="text-sm text-slate-500 dark:text-slate-400">
-                    {t.deleteConfirmDesc}
+                    {description || t.deleteConfirmDesc}
                   </p>
                   <div className="mt-4 p-3 bg-slate-50 dark:bg-slate-900/50 rounded-md border border-slate-200 dark:border-slate-700">
                     <p className="text-sm font-medium text-slate-900 dark:text-slate-300">{device.name}</p>
@@ -50,10 +57,13 @@ export function DeviceConfirmDelete({ deviceId, onClose, onConfirm }: DeviceConf
           <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 sm:px-6 sm:flex sm:flex-row-reverse border-t border-slate-200 dark:border-slate-800">
             <button
               type="button"
-              className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm"
+              className={tone === 'danger'
+                ? 'w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm'
+                : 'w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-orange-600 text-base font-medium text-white hover:bg-orange-500 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm'
+              }
               onClick={onConfirm}
             >
-              {t.form.delete}
+              {confirmLabel || t.form.delete}
             </button>
             <button
               type="button"

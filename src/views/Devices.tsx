@@ -56,6 +56,7 @@ export function Devices() {
   const [activeView, setActiveView] = useState<'list' | 'form'>('list');
   const [editingDeviceId, setEditingDeviceId] = useState<string | undefined>(undefined);
   const [deletingDeviceId, setDeletingDeviceId] = useState<string | null>(null);
+  const [deviceConfirmMode, setDeviceConfirmMode] = useState<'delete' | 'remove'>('delete');
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [selectedSiteId, setSelectedSiteId] = useState<string>(isSimpleProfile ? userSiteId : activeSiteId || 'All');
   const [selectedTag, setSelectedTag] = useState<string>('All');
@@ -108,6 +109,13 @@ export function Devices() {
   };
 
   const handleDelete = (id: string) => {
+    setDeviceConfirmMode('delete');
+    setDeletingDeviceId(id);
+    setOpenDropdown(null);
+  };
+
+  const handleRemoveFromMyDevices = (id: string) => {
+    setDeviceConfirmMode('remove');
     setDeletingDeviceId(id);
     setOpenDropdown(null);
   };
@@ -192,43 +200,52 @@ export function Devices() {
               const keyMetric = quality.hasLiveData ? getDeviceKeyMetric(device) : 'No Live Data';
 
               return (
-                <Link
+                <div
                   key={device.id}
-                  to={`/devices/${device.id}`}
-                  className="block rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md dark:border-slate-800 dark:bg-[#1c2128] dark:hover:border-orange-500/40"
+                  className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md dark:border-slate-800 dark:bg-[#1c2128] dark:hover:border-orange-500/40"
                 >
                   <div className="flex items-start gap-4">
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-orange-50 text-orange-600 ring-1 ring-orange-100 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/20">
-                      <IconComp className="h-7 w-7" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-base font-bold text-slate-900 dark:text-white">{device.name}</p>
-                          <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{device.id}</p>
-                        </div>
-                        <span className={cn(
-                          'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase',
-                          qualityTone(quality.state)
-                        )}>
-                          <span className={cn('h-1.5 w-1.5 rounded-full', qualityDot(quality.state))} />
-                          {quality.label}
-                        </span>
+                    <Link to={`/devices/${device.id}`} className="flex min-w-0 flex-1 items-start gap-4">
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-orange-50 text-orange-600 ring-1 ring-orange-100 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/20">
+                        <IconComp className="h-7 w-7" />
                       </div>
-                      <div className="mt-4 grid grid-cols-[1fr_auto] items-end gap-3">
-                        <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Current</p>
-                          <p className="mt-1 truncate font-mono text-lg font-bold text-slate-900 dark:text-white">{keyMetric}</p>
-                          <p className="mt-1 text-xs text-slate-500">Last seen {formatDeviceAge(quality.ageMs)}</p>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-base font-bold text-slate-900 dark:text-white">{device.name}</p>
+                            <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{device.id}</p>
+                          </div>
+                          <span className={cn(
+                            'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase',
+                            qualityTone(quality.state)
+                          )}>
+                            <span className={cn('h-1.5 w-1.5 rounded-full', qualityDot(quality.state))} />
+                            {quality.label}
+                          </span>
                         </div>
-                        <span className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">
-                          Operate
-                          <ArrowRight className="h-4 w-4" />
-                        </span>
+                        <div className="mt-4 grid grid-cols-[1fr_auto] items-end gap-3">
+                          <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Current</p>
+                            <p className="mt-1 truncate font-mono text-lg font-bold text-slate-900 dark:text-white">{keyMetric}</p>
+                            <p className="mt-1 text-xs text-slate-500">Last seen {formatDeviceAge(quality.ageMs)}</p>
+                          </div>
+                          <span className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">
+                            Operate
+                            <ArrowRight className="h-4 w-4" />
+                          </span>
+                        </div>
                       </div>
-                    </div>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveFromMyDevices(device.id)}
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-500/10 dark:hover:text-amber-300"
+                      title="Remove from my devices"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
-                </Link>
+                </div>
               );
             })}
           </div>
@@ -491,9 +508,19 @@ export function Devices() {
       {deletingDeviceId && (
         <DeviceConfirmDelete 
           deviceId={deletingDeviceId} 
+          title={deviceConfirmMode === 'remove' ? 'Remove from My Devices' : undefined}
+          description={deviceConfirmMode === 'remove'
+            ? 'This removes the device from your My Devices list and releases its claim so it can be bound again. It does not delete device models, inventory records, or historical telemetry.'
+            : undefined}
+          confirmLabel={deviceConfirmMode === 'remove' ? 'Remove Device' : undefined}
+          tone={deviceConfirmMode === 'remove' ? 'warning' : 'danger'}
           onClose={() => setDeletingDeviceId(null)}
           onConfirm={() => {
-            useAppStore.getState().deleteDevice(deletingDeviceId);
+            if (deviceConfirmMode === 'remove') {
+              useAppStore.getState().removeDeviceFromMyDevices(deletingDeviceId, currentUser);
+            } else {
+              useAppStore.getState().deleteDevice(deletingDeviceId);
+            }
             setDeletingDeviceId(null);
           }}
         />

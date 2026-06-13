@@ -107,7 +107,7 @@ export function DeviceDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { devices: storedDevices, language, updateDevice, currentUser } = useAppStore();
+  const { devices: storedDevices, language, updateDevice, removeDeviceFromMyDevices, currentUser } = useAppStore();
   const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
 
@@ -699,6 +699,18 @@ export function DeviceDetails() {
     setMetricMappingMessage('Metric mappings saved. New telemetry will populate mapped standard metrics automatically.');
   };
 
+  const handleRemoveSimpleDevice = async () => {
+    if (!(await confirmDelete({
+      title: 'Remove from My Devices',
+      itemName: device.name,
+      description: 'This removes the device from your My Devices list and releases its claim so it can be bound again. It does not delete device models, inventory records, or historical telemetry.',
+      confirmLabel: 'Remove Device',
+    }))) return;
+
+    removeDeviceFromMyDevices(device.id, currentUser);
+    navigate('/devices');
+  };
+
   const renderMetricCard = (metric: { key: string; label: string; icon: any }) => {
     const value = metricValue(metric.key);
     const max = metricMax(metric.key, value);
@@ -919,6 +931,14 @@ export function DeviceDetails() {
               Edit
             </button>
           )}
+          <button
+            type="button"
+            onClick={handleRemoveSimpleDevice}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-700 shadow-sm hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+            title="Remove from my devices"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
         </div>
 
         {justClaimed && (

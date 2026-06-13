@@ -891,6 +891,7 @@ interface AppState {
   setDeviceDataSourceStatus: (status: 'mock' | 'api' | 'mqtt' | 'error') => void;
   updateDevice: (id: string, device: Partial<Device>) => void;
   deleteDevice: (id: string) => void;
+  removeDeviceFromMyDevices: (id: string, user?: Pick<User, 'id' | 'name'> | null) => void;
   // Device Provisioning
   deviceModels: DeviceModelTemplate[];
   manufacturedDevices: ManufacturedDevice[];
@@ -1259,6 +1260,38 @@ export const useAppStore = create<AppState>()(
       deleteDevice: (id) => set((state) => ({
         devices: state.devices.filter(d => d.id !== id)
       })),
+      removeDeviceFromMyDevices: (id, user) => set((state) => {
+        const device = state.devices.find((item) => item.id === id);
+        const manufacturedDevice = state.manufacturedDevices.find((item) => item.claimedDeviceId === id);
+        const now = new Date().toISOString();
+        const log: ProvisioningAuditLog | null = manufacturedDevice ? {
+          id: `provision-log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          manufacturedDeviceId: manufacturedDevice.id,
+          identity: manufacturedDevice.serialNumber || manufacturedDevice.imei || manufacturedDevice.mac || id,
+          action: 'claim_revoked',
+          result: 'success',
+          reason: `Removed from My Devices${device?.siteId ? ` for Site ${device.siteId}` : ''}. Platform device was unbound, not permanently deleted from inventory.`,
+          platformDeviceId: id,
+          userId: user?.id,
+          userName: user?.name,
+          createdAt: now,
+        } : null;
+
+        return {
+          devices: state.devices.filter((item) => item.id !== id),
+          manufacturedDevices: state.manufacturedDevices.map((item) => item.id === manufacturedDevice?.id ? {
+            ...item,
+            status: item.status === 'claimed' ? 'shipped' : item.status,
+            claimedDeviceId: undefined,
+            claimedBy: undefined,
+            claimedAt: undefined,
+            revokedAt: now,
+            revokedBy: user?.id,
+            updatedAt: now,
+          } : item),
+          provisioningAuditLogs: log ? [log, ...state.provisioningAuditLogs].slice(0, 500) : state.provisioningAuditLogs,
+        };
+      }),
 
       deviceModels: [],
       manufacturedDevices: [],
