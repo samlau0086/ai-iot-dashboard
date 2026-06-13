@@ -321,6 +321,24 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 
 Demo 角色用于体验系统界面和配置流程。该账户产生的看板、设备、工作流、设置等修改只保存在当前前端会话中，不会同步保存到后端 PostgreSQL 数据库；控制中心也不会向后端或真实设备下发控制命令。
 
+### Simple 用户界面测试
+
+Simple 用户适合只需要设备绑定、设备查看和设备操作的客户，例如开门器、继电器、泵控器等轻量使用场景。系统会把 `Customer` 角色默认归入 Simple Device App，也可以在 **Settings -> Users** 中把任意用户的 **App Profile** 设置为 `Simple Device App`。
+
+推荐测试流程：
+
+1. 使用 Owner / Admin 登录，进入 **Settings -> Users**，创建或编辑一个测试用户。
+2. 将该用户设置为 `Customer` 角色，或者将 **App Profile** 设置为 `Simple Device App`，并绑定到一个指定 Site。
+3. 进入 **Settings -> Provisioning**，准备一个 Product Model 和一台 Manufactured Device，填写 Serial Number、MAC 或 IMEI，并生成 / 复制 Claim Code 或 Claim Link。
+4. 使用 Simple 用户登录。登录后应默认进入 `/devices`，侧边栏 / 底部导航只显示设备、添加设备和 Profile 相关入口，不显示 SCADA、Workflow、Control Center 等专业后台模块。
+5. 点击 **Add Device**，通过 MAC / IMEI / Serial Number 加 Claim Code 认领设备；如果使用 Claim Link，则打开 `/claim/{token}` 后只需要确认 Claim Code 和 Site。
+6. 认领成功后应进入设备详情页。Simple 详情页只展示设备状态、关键读数、可用控制项和基础信息，不展示高级配置区。
+7. 在设备卡片或详情页测试控制按钮。高风险动作会先弹出确认，提交后会有短暂冷却，避免重复点击连续下发命令。
+8. 测试 **Remove Device**。Simple 用户移除设备应理解为“从我的设备中解绑 / 移除显示”，不应该删除后台库存设备或影响其他管理员可见的数据。
+9. 切回 Admin / Owner 账号，确认该设备仍可在后台管理、Provisioning 审计日志和设备列表中追踪。
+
+如果需要测试真实控制链路，请确认设备 Data Source、External Device ID、命令 Topic / API Path 和控制项 payload 模板已经配置完成；Demo 用户不会真正下发设备命令。
+
 ### 查看运营总览
 
 进入首页后可以查看核心 KPI、实时功率趋势和 AI 运维建议。Overview 页面中的组件支持拖拽和缩放，也可以通过 **Add Widget** 添加 Analytics 中创建的图表。
