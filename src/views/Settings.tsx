@@ -14,6 +14,11 @@ const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark'
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
 const SITE_TYPES: SiteTenant['type'][] = ['factory', 'solar', 'cold_storage', 'pump_station', 'compressed_air', 'other'];
 const PROVISION_DEVICE_TYPES: DeviceType[] = ['gateway', 'dtu', 'rtu', 'lora_gateway', 'plc', 'io_module', 'relay_module', 'energy_meter', 'temperature_sensor', 'pressure_sensor', 'flow_meter', 'pump_controller', 'valve_controller', 'air_compressor', 'vfd', 'solar_inverter', 'battery_bms', 'ups', 'sensor'];
+const INGEST_TOKEN_SCOPE_OPTIONS = [
+  { value: 'telemetry:write', label: 'Telemetry Write', description: 'Allow HTTP/MQTT gateway telemetry ingestion.' },
+  { value: 'command:pending', label: 'Fetch Commands', description: 'Allow a device gateway to pull queued downstream commands.' },
+  { value: 'command:ack', label: 'Ack Commands', description: 'Allow a device gateway to acknowledge command results.' },
+];
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const splitCsv = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
@@ -185,6 +190,9 @@ type IngestToken = {
   token: string;
   ownerUserId: string;
   ownerName: string;
+  scopes?: string[];
+  siteIds?: string[];
+  deviceIds?: string[];
   createdAt: string;
   revokedAt?: string | null;
   lastUsedAt?: string | null;
@@ -238,6 +246,9 @@ export function Settings() {
   const [dataSourceMessage, setDataSourceMessage] = useState('');
   const [ingestTokens, setIngestTokens] = useState<IngestToken[]>([]);
   const [tokenDraftName, setTokenDraftName] = useState('Device Gateway Token');
+  const [tokenDraftScopes, setTokenDraftScopes] = useState<string[]>(['telemetry:write']);
+  const [tokenDraftSiteIds, setTokenDraftSiteIds] = useState('');
+  const [tokenDraftDeviceIds, setTokenDraftDeviceIds] = useState('');
   const [tokenMessage, setTokenMessage] = useState('');
   const [testingNotificationIds, setTestingNotificationIds] = useState<string[]>([]);
   const [channelDraft, setChannelDraft] = useState({
@@ -936,6 +947,10 @@ export function Settings() {
       setTokenMessage('Demo account cannot generate backend ingest tokens.');
       return;
     }
+    if (tokenDraftScopes.length === 0) {
+      setTokenMessage('Select at least one token permission.');
+      return;
+    }
 
     try {
       const response = await fetch('/api/ingest-tokens', {
@@ -945,17 +960,32 @@ export function Settings() {
           name: tokenDraftName.trim() || 'Device Gateway Token',
           ownerUserId: currentUser?.id,
           ownerName: currentUser?.name,
+          scopes: tokenDraftScopes,
+          siteIds: splitCsv(tokenDraftSiteIds),
+          deviceIds: splitCsv(tokenDraftDeviceIds),
         }),
       });
       const payload = await response.json();
       if (response.ok) {
         setIngestTokens(Array.isArray(payload.tokens) ? payload.tokens : []);
         setTokenDraftName('Device Gateway Token');
+        setTokenDraftScopes(['telemetry:write']);
+        setTokenDraftSiteIds('');
+        setTokenDraftDeviceIds('');
+        notifySuccess('Ingest token generated successfully.');
       }
       setTokenMessage(response.ok ? 'Token generated. Copy it into your gateway request header.' : 'Failed to generate token.');
     } catch (error) {
       setTokenMessage('Failed to generate token.');
     }
+  };
+
+  const toggleTokenDraftScope = (scope: string) => {
+    setTokenDraftScopes((current) => (
+      current.includes(scope)
+        ? current.filter((item) => item !== scope)
+        : [...current, scope]
+    ));
   };
 
   const handleRevokeToken = async (tokenId: string) => {
@@ -974,6 +1004,7 @@ export function Settings() {
       const payload = await response.json();
       if (response.ok) {
         setIngestTokens(Array.isArray(payload.tokens) ? payload.tokens : []);
+        notifySuccess('Ingest token revoked successfully.');
       }
       setTokenMessage(response.ok ? 'Token revoked.' : 'Failed to revoke token.');
     } catch (error) {
@@ -1586,8 +1617,8 @@ export function Settings() {
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[1fr_auto]">
-                <div>
+              <div className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[1fr_auto]">
+                <div className="space-y-4">
                   <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Token Name</label>
                   <input
                     value={tokenDraftName}
@@ -1595,6 +1626,47 @@ export function Settings() {
                     placeholder="Factory A Gateway Token"
                     className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
                   />
+                  <div>
+                    <div className="text-xs font-medium uppercase tracking-wider text-slate-500">Permissions</div>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                      {INGEST_TOKEN_SCOPE_OPTIONS.map((option) => (
+                        <label key={option.value} className="flex cursor-pointer gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-950">
+                          <input
+                            type="checkbox"
+                            checked={tokenDraftScopes.includes(option.value)}
+                            onChange={() => toggleTokenDraftScope(option.value)}
+                            className="mt-1 h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>
+                            <span className="block font-medium text-slate-800 dark:text-slate-100">{option.label}</span>
+                            <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{option.description}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Allowed Site IDs</label>
+                      <input
+                        value={tokenDraftSiteIds}
+                        onChange={(event) => setTokenDraftSiteIds(event.target.value)}
+                        placeholder="factory-a, pump-station"
+                        className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                      />
+                      <p className="mt-1 text-xs text-slate-500">Leave empty to allow every Site.</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Allowed Device IDs</label>
+                      <input
+                        value={tokenDraftDeviceIds}
+                        onChange={(event) => setTokenDraftDeviceIds(event.target.value)}
+                        placeholder="DEV-001, DEV-002"
+                        className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                      />
+                      <p className="mt-1 text-xs text-slate-500">Leave empty to allow every Device.</p>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex items-end">
                   <button
@@ -1620,6 +1692,7 @@ export function Settings() {
                     <tr>
                       <th className="px-4 py-3 font-semibold">Token</th>
                       <th className="px-4 py-3 font-semibold">Owner</th>
+                      <th className="px-4 py-3 font-semibold">Permissions</th>
                       <th className="px-4 py-3 font-semibold">Status</th>
                       <th className="px-4 py-3 font-semibold">Last Used</th>
                       <th className="px-4 py-3 text-right font-semibold">Actions</th>
@@ -1640,6 +1713,17 @@ export function Settings() {
                           <td className="px-4 py-3 align-top">
                             <div className="text-slate-700 dark:text-slate-200">{token.ownerName}</div>
                             <div className="mt-1 font-mono text-xs text-slate-500">{token.ownerUserId}</div>
+                          </td>
+                          <td className="px-4 py-3 align-top">
+                            <div className="flex max-w-xs flex-wrap gap-1.5">
+                              {(token.scopes?.length ? token.scopes : ['All scopes']).map((scope) => (
+                                <span key={scope} className="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-600 dark:bg-slate-950 dark:text-slate-300">{scope}</span>
+                              ))}
+                            </div>
+                            <div className="mt-2 space-y-1 text-xs text-slate-500">
+                              <div>Sites: {token.siteIds?.length ? token.siteIds.join(', ') : 'All'}</div>
+                              <div>Devices: {token.deviceIds?.length ? token.deviceIds.join(', ') : 'All'}</div>
+                            </div>
                           </td>
                           <td className="px-4 py-3 align-top">
                             <span className={cn(
@@ -1687,7 +1771,7 @@ export function Settings() {
                     })}
                     {ingestTokens.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                        <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
                           No ingest tokens yet. Generate one for your device gateway before enabling token-protected telemetry.
                         </td>
                       </tr>

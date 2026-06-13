@@ -31,7 +31,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] V1 Energy Monitoring MVP 核心闭环已完成：设备、总览、告警、基础报表、VPS + PM2 自动部署、真实数据入口。
 - [x] 后端持久化已切换到 PostgreSQL + pgvector，`app_state`、遥测消息、Workflow Webhook 事件等由后端保存。
 - [x] 已支持真实设备数据接入：HTTP Push、多 HTTP Channel、后端 MQTT Subscriber、设备专属 API Path。
-- [x] Ingest Token 已改为后台用户级管理，支持 Generate / Revoke / Copy。
+- [x] Ingest Token 已改为后台用户级管理，支持 Generate / Revoke / Copy、用途 Scope、Site / Device 范围限制。
 - [x] Mock 告警和能耗数据已由设备 metrics 派生，减少前端固定假数据依赖。
 - [x] 总览中心 Widget 已支持绑定设备与 metric，并支持单位、精度、阈值、颜色规则配置。
 - [x] Widget 模板市场 / 预设库已完成，可从行业预设快速加入可用 Widget。
@@ -629,6 +629,16 @@ Token 管理流程：
 3. 点击 **Generate Token** 生成当前用户名下的 token。
 4. 点击 **Copy** 后配置到网关请求头。
 5. token 泄露或不再使用时点击 **Revoke**，撤销后该 token 不能继续写入遥测数据。
+
+Token 可以按用途和数据范围收窄：
+
+| Scope | 用途 |
+| --- | --- |
+| `telemetry:write` | 允许通过 `/api/telemetry` 或设备专属 API Path 写入遥测数据。 |
+| `command:pending` | 允许网关调用 `/api/device-commands/pending` 拉取待下发命令。 |
+| `command:ack` | 允许网关调用 `/api/device-commands/{commandId}/ack` 回写命令执行结果。 |
+
+生成 token 时可选填 `Allowed Site IDs` 和 `Allowed Device IDs`。为空表示不限制；填写后，该 token 只能对对应 Site / Device 的遥测写入或命令网关接口生效。建议生产环境为每个网关单独生成 token，并仅开放该网关实际负责的 Site / Device。
 
 请求体可以是一条遥测消息，也可以是遥测消息数组：
 

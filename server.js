@@ -36,6 +36,9 @@ const maxSystemNotifications = Number(process.env.SYSTEM_NOTIFICATION_BUFFER_SIZ
 const splitTopics = (value) => Array.isArray(value)
   ? value.map((topic) => String(topic).trim()).filter(Boolean)
   : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
+const splitList = (value) => Array.isArray(value)
+  ? value.map((item) => String(item).trim()).filter(Boolean)
+  : String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
 const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 const isHex = (value, length = null) => {
@@ -470,12 +473,18 @@ const publicMqttChannel = (channel) => ({
 
 const createIngestToken = () => `iot_${crypto.randomBytes(24).toString('hex')}`;
 
+const normalizeIngestTokenScopes = (value) => splitList(value);
+const normalizeIngestTokenTargets = (value) => splitList(value);
+
 const publicIngestToken = (token) => ({
   id: token.id,
   name: token.name,
   token: token.token,
   ownerUserId: token.ownerUserId,
   ownerName: token.ownerName,
+  scopes: normalizeIngestTokenScopes(token.scopes),
+  siteIds: normalizeIngestTokenTargets(token.siteIds),
+  deviceIds: normalizeIngestTokenTargets(token.deviceIds),
   createdAt: token.createdAt,
   revokedAt: token.revokedAt || null,
   lastUsedAt: token.lastUsedAt || null,
@@ -492,13 +501,80 @@ const saveIngestTokens = async () => {
 
 const getProvidedIngestToken = (req) => req.get('x-iot-token') || req.get('authorization')?.replace(/^Bearer\s+/i, '');
 
-const validateIngestToken = async (req, source) => {
+const ingestScopeMatches = (scope, source) => {
+  const normalizedScope = String(scope || '').trim();
+  const normalizedSource = String(source || '').trim();
+  if (!normalizedScope || !normalizedSource) return false;
+  if (normalizedScope === '*' || normalizedScope === normalizedSource) return true;
+  if (normalizedScope.endsWith(':*')) {
+    return normalizedSource.startsWith(normalizedScope.slice(0, -1));
+  }
+  if (normalizedScope === 'telemetry:write') {
+    return normalizedSource.startsWith('http:') || normalizedSource.startsWith('mqtt:');
+  }
+  if (normalizedScope === 'command:gateway') {
+    return normalizedSource.startsWith('command:');
+  }
+  return false;
+};
+
+const getIngestTokenContextsFromPayload = async (payload) => {
+  const messages = Array.isArray(payload) ? payload : [payload];
+  const contexts = [];
+
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') continue;
+    const device = await findDashboardDeviceForTelemetry(message);
+    const deviceId = message.device_id || message.deviceId || message.id || device?.config?.externalDeviceId || device?.id;
+    contexts.push({
+      deviceId: device?.id || deviceId || '',
+      siteId: message.site_id || message.siteId || device?.siteId || '',
+    });
+  }
+
+  return contexts.length > 0 ? contexts : [{}];
+};
+
+const enrichIngestTokenContext = async (context = {}) => {
+  if (context.siteId || !context.deviceId) return context;
+  const device = await findDashboardDevice(context.deviceId);
+  return {
+    ...context,
+    deviceId: device?.id || context.deviceId,
+    siteId: device?.siteId || context.siteId || '',
+  };
+};
+
+const isIngestTokenAllowedForContext = async (token, source, contexts = [{}]) => {
+  const scopes = normalizeIngestTokenScopes(token.scopes);
+  if (scopes.length > 0 && !scopes.some((scope) => ingestScopeMatches(scope, source))) {
+    return false;
+  }
+
+  const siteIds = normalizeIngestTokenTargets(token.siteIds);
+  const deviceIds = normalizeIngestTokenTargets(token.deviceIds);
+  if (siteIds.length === 0 && deviceIds.length === 0) return true;
+
+  const enrichedContexts = await Promise.all((contexts.length > 0 ? contexts : [{}]).map(enrichIngestTokenContext));
+  return enrichedContexts.every((context) => {
+    const contextDeviceId = String(context.deviceId || '').trim();
+    const contextSiteId = String(context.siteId || '').trim();
+    const deviceAllowed = deviceIds.length === 0 || (contextDeviceId && deviceIds.includes(contextDeviceId));
+    const siteAllowed = siteIds.length === 0 || (contextSiteId && siteIds.includes(contextSiteId));
+    return deviceAllowed && siteAllowed;
+  });
+};
+
+const validateIngestToken = async (req, source, contexts = [{}]) => {
   const activeTokens = ingestTokens.filter((token) => !token.revokedAt);
   if (activeTokens.length === 0) return true;
 
   const providedToken = getProvidedIngestToken(req);
   const matchedToken = activeTokens.find((token) => token.token === providedToken);
   if (!matchedToken) return false;
+
+  const allowed = await isIngestTokenAllowedForContext(matchedToken, source, contexts);
+  if (!allowed) return false;
 
   matchedToken.lastUsedAt = new Date().toISOString();
   matchedToken.lastUsedSource = source;
@@ -1311,6 +1387,21 @@ const updateDeviceControlCommand = async (commandId, patch) => {
   }
 
   return nextCommand;
+};
+
+const findDeviceControlCommandById = async (commandId) => {
+  const localCommand = deviceControlCommands.find((command) => command.id === commandId) || null;
+  if (!db) return localCommand;
+
+  const result = await queryDb(
+    `SELECT id, device_id AS "deviceId", device_name AS "deviceName", command, parameters,
+            requested_by AS "requestedBy", requested_by_role AS "requestedByRole", source,
+            status, result, created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM device_control_commands
+     WHERE id = $1`,
+    [commandId]
+  );
+  return result.rows[0] || localCommand;
 };
 
 const getDeviceCommandTopic = (device) => {
@@ -3850,6 +3941,9 @@ app.post('/api/ingest-tokens', async (req, res) => {
       token: createIngestToken(),
       ownerUserId: String(payload.ownerUserId || 'unknown'),
       ownerName: String(payload.ownerName || 'Unknown user'),
+      scopes: normalizeIngestTokenScopes(payload.scopes || ['telemetry:write']),
+      siteIds: normalizeIngestTokenTargets(payload.siteIds),
+      deviceIds: normalizeIngestTokenTargets(payload.deviceIds),
       createdAt: new Date().toISOString(),
       revokedAt: null,
       lastUsedAt: null,
@@ -4306,7 +4400,8 @@ app.post('/api/telemetry/:channelId/:token', async (req, res) => {
 
 app.post('/api/telemetry', async (req, res) => {
   try {
-    const isAuthorized = await validateIngestToken(req, 'http:legacy');
+    const contexts = await getIngestTokenContextsFromPayload(req.body);
+    const isAuthorized = await validateIngestToken(req, 'http:legacy', contexts);
     if (!isAuthorized) {
       res.status(401).json({error: 'invalid telemetry token'});
       return;
@@ -4328,7 +4423,10 @@ app.post('*', async (req, res, next) => {
       return;
     }
 
-    const isAuthorized = await validateIngestToken(req, `http:path:${req.path}`);
+    const isAuthorized = await validateIngestToken(req, `http:path:${req.path}`, [{
+      deviceId: device.id,
+      siteId: device.siteId,
+    }]);
     if (!isAuthorized) {
       res.status(401).json({error: 'invalid telemetry token'});
       return;
@@ -4515,12 +4613,6 @@ app.get('/api/device-commands', async (req, res) => {
 
 app.get('/api/device-commands/pending', async (req, res) => {
   try {
-    const isAuthorized = await validateIngestToken(req, 'command:pending');
-    if (!isAuthorized) {
-      res.status(401).json({error: 'invalid ingest token', commands: []});
-      return;
-    }
-
     const deviceId = typeof req.query.deviceId === 'string' ? req.query.deviceId : '';
     const limit = Math.max(1, Math.min(Number(req.query.limit || 20), 100));
 
@@ -4532,6 +4624,15 @@ app.get('/api/device-commands/pending', async (req, res) => {
     const device = await findDashboardDevice(deviceId);
     if (!device) {
       res.status(404).json({error: 'device not found', commands: []});
+      return;
+    }
+
+    const isAuthorized = await validateIngestToken(req, 'command:pending', [{
+      deviceId: device.id,
+      siteId: device.siteId,
+    }]);
+    if (!isAuthorized) {
+      res.status(401).json({error: 'invalid ingest token', commands: []});
       return;
     }
 
@@ -4563,7 +4664,10 @@ app.get('/api/device-commands/pending', async (req, res) => {
 
 app.post('/api/device-commands/:commandId/ack', async (req, res) => {
   try {
-    const isAuthorized = await validateIngestToken(req, 'command:ack');
+    const existingCommand = await findDeviceControlCommandById(req.params.commandId);
+    const isAuthorized = await validateIngestToken(req, 'command:ack', existingCommand ? [{
+      deviceId: existingCommand.deviceId,
+    }] : [{}]);
     if (!isAuthorized) {
       res.status(401).json({error: 'invalid ingest token'});
       return;
