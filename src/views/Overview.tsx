@@ -13,7 +13,7 @@ import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import type { Device } from '../types';
-import { applyMetricMappingsToMetrics } from '../lib/metricMappings';
+import { applyMetricMappingsToMetrics, getMetricLabel, getMetricMappings, getMetricPrecision, getMetricUnit } from '../lib/metricMappings';
 import { getDeviceDataQuality } from '../lib/deviceStatus';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
@@ -156,6 +156,24 @@ const getWidgetRuleState = (value: number, widget: OverviewWidget): WidgetRuleSt
 
 const getWidgetRuleColor = (widget: OverviewWidget, state: WidgetRuleState) => {
   return widget.colorRules?.[state] || DEFAULT_WIDGET_COLORS[state];
+};
+
+const getMetricDefaultsForDevices = (metricKey: string, sourceDevices: Device[]) => {
+  const mapping = sourceDevices
+    .flatMap((device) => getMetricMappings(device))
+    .find((item) => item.standardKey === metricKey || item.rawKey === metricKey);
+  const sourceDevice = sourceDevices.find((device) => (
+    Object.prototype.hasOwnProperty.call(device.metrics || {}, metricKey)
+    || getMetricMappings(device).some((item) => item.standardKey === metricKey || item.rawKey === metricKey)
+  )) || sourceDevices[0] || null;
+
+  return {
+    label: mapping?.displayName || getMetricLabel(sourceDevice, metricKey),
+    unit: mapping?.unit ?? getMetricUnit(sourceDevice, metricKey),
+    precision: Number.isFinite(Number(mapping?.precision))
+      ? normalizePrecision(Number(mapping?.precision))
+      : getMetricPrecision(sourceDevice, metricKey),
+  };
 };
 
 const createWidgetId = (prefix: string) => `${prefix}_${Date.now()}_${Math.round(Math.random() * 10000)}`;
@@ -527,6 +545,8 @@ export function Overview() {
   const [builderDeviceIds, setBuilderDeviceIds] = useState<string[]>([]);
   const [builderUnit, setBuilderUnit] = useState('');
   const [builderPrecision, setBuilderPrecision] = useState(1);
+  const [builderUnitTouched, setBuilderUnitTouched] = useState(false);
+  const [builderPrecisionTouched, setBuilderPrecisionTouched] = useState(false);
   const [builderThresholdDirection, setBuilderThresholdDirection] = useState<'above' | 'below'>('above');
   const [builderWarningThreshold, setBuilderWarningThreshold] = useState('');
   const [builderCriticalThreshold, setBuilderCriticalThreshold] = useState('');
@@ -862,10 +882,18 @@ export function Overview() {
     const metrics = new Set<string>();
     builderDevices.forEach((device) => {
       Object.keys(device.metrics || {}).forEach((metric) => metrics.add(metric));
+      getMetricMappings(device).forEach((mapping) => {
+        if (mapping.standardKey) metrics.add(mapping.standardKey);
+        if (mapping.rawKey) metrics.add(mapping.rawKey);
+      });
     });
 
     return Array.from(metrics).sort();
   }, [builderDevices]);
+
+  const builderMetricOptionMeta = useMemo(() => (
+    Object.fromEntries(builderMetricOptions.map((metric) => [metric, getMetricDefaultsForDevices(metric, builderDevices)]))
+  ), [builderDevices, builderMetricOptions]);
 
   const getAlertsForDevices = (targetDevices: any[]) => {
     if (targetDevices === scopedDevices) return scopedAlerts;
@@ -988,11 +1016,29 @@ export function Overview() {
 
   useEffect(() => {
     if (!showWidgetBuilder) return;
-    if (builderMetricOptions.length === 0) return;
+    if (builderMetricOptions.length === 0) {
+      if (builderMetricKey) setBuilderMetricKey('');
+      return;
+    }
     if (builderMetricOptions.includes(builderMetricKey)) return;
 
     setBuilderMetricKey(builderMetricOptions[0]);
   }, [builderMetricKey, builderMetricOptions, showWidgetBuilder]);
+
+  useEffect(() => {
+    if (!showWidgetBuilder || !builderMetricKey) return;
+
+    const defaults = builderMetricOptionMeta[builderMetricKey] || getMetricDefaultsForDevices(builderMetricKey, builderDevices);
+    if (!builderUnitTouched) setBuilderUnit(defaults.unit || '');
+    if (!builderPrecisionTouched) setBuilderPrecision(normalizePrecision(defaults.precision));
+  }, [
+    builderDevices,
+    builderMetricKey,
+    builderMetricOptionMeta,
+    builderPrecisionTouched,
+    builderUnitTouched,
+    showWidgetBuilder,
+  ]);
 
   const isDark = theme === 'dark';
   const cartesianGridStroke = isDark ? '#334155' : '#e2e8f0';
@@ -1263,6 +1309,8 @@ export function Overview() {
     setBuilderDeviceIds([]);
     setBuilderUnit('');
     setBuilderPrecision(1);
+    setBuilderUnitTouched(false);
+    setBuilderPrecisionTouched(false);
     setBuilderThresholdDirection('above');
     setBuilderWarningThreshold('');
     setBuilderCriticalThreshold('');
@@ -1282,6 +1330,8 @@ export function Overview() {
       setBuilderDeviceIds(widget.deviceIds ? [...widget.deviceIds] : []);
       setBuilderUnit(widget.unit || '');
       setBuilderPrecision(getWidgetPrecision(widget));
+      setBuilderUnitTouched(Boolean(widget.unit));
+      setBuilderPrecisionTouched(widget.precision !== undefined);
       setBuilderThresholdDirection(widget.thresholds?.direction || 'above');
       setBuilderWarningThreshold(widget.thresholds?.warning !== undefined ? String(widget.thresholds.warning) : '');
       setBuilderCriticalThreshold(widget.thresholds?.critical !== undefined ? String(widget.thresholds.critical) : '');
@@ -2067,14 +2117,24 @@ export function Overview() {
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Metric</label>
               <select
                 value={builderMetricKey}
-                onChange={(event) => setBuilderMetricKey(event.target.value)}
+                onChange={(event) => {
+                  setBuilderMetricKey(event.target.value);
+                  setBuilderUnitTouched(false);
+                  setBuilderPrecisionTouched(false);
+                }}
                 disabled={builderMetricOptions.length === 0}
                 className="mt-1 h-10 w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
               >
                 {builderMetricOptions.length > 0 ? (
-                  builderMetricOptions.map((metric) => (
-                    <option key={metric} value={metric}>{metric}</option>
-                  ))
+                  builderMetricOptions.map((metric) => {
+                    const meta = builderMetricOptionMeta[metric];
+                    const label = meta?.label && meta.label !== metric ? `${meta.label} (${metric})` : metric;
+                    return (
+                      <option key={metric} value={metric}>
+                        {meta?.unit ? `${label} / ${meta.unit}` : label}
+                      </option>
+                    );
+                  })
                 ) : (
                   <option value="">No metrics available</option>
                 )}
@@ -2153,7 +2213,10 @@ export function Overview() {
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Unit</label>
               <input
                 value={builderUnit}
-                onChange={(event) => setBuilderUnit(event.target.value)}
+                onChange={(event) => {
+                  setBuilderUnitTouched(true);
+                  setBuilderUnit(event.target.value);
+                }}
                 placeholder="kWh, bar, deg C"
                 className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               />
@@ -2165,7 +2228,10 @@ export function Overview() {
                 min={0}
                 max={6}
                 value={builderPrecision}
-                onChange={(event) => setBuilderPrecision(Number(event.target.value))}
+                onChange={(event) => {
+                  setBuilderPrecisionTouched(true);
+                  setBuilderPrecision(Number(event.target.value));
+                }}
                 className="mt-1 h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               />
             </div>
