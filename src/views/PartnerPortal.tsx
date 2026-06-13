@@ -626,7 +626,7 @@ export function PartnerPortal() {
           {activeTab === 'permissions' && (
             <div className="space-y-4">
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/30 dark:text-slate-300">
-                Partner / White Label uses the existing role and App Profile model. Use Settings -> Users to assign Partner, Customer, or Admin roles, and bind each user to the correct Site.
+                Partner / White Label uses the existing role and App Profile model. Use Settings {'->'} Users to assign Partner, Customer, or Admin roles, and bind each user to the correct Site.
               </div>
               <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
                 <table className="min-w-full text-left text-sm">

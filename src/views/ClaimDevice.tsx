@@ -344,7 +344,7 @@ export function ClaimDevice() {
           </div>
           <div className="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
             <div className="rounded-md bg-white p-3 dark:bg-slate-950">1. Match inventory by Claim Link token, MAC, IMEI, or Serial Number.</div>
-            <div className="rounded-md bg-white p-3 dark:bg-slate-950">2. Verify the Claim Code generated in Settings -> Provisioning.</div>
+            <div className="rounded-md bg-white p-3 dark:bg-slate-950">2. Verify the Claim Code generated in Settings {'->'} Provisioning.</div>
             <div className="rounded-md bg-white p-3 dark:bg-slate-950">3. Create the platform device from the model template.</div>
             <div className="rounded-md bg-white p-3 dark:bg-slate-950">4. Mark inventory as claimed and write an audit log.</div>
           </div>
