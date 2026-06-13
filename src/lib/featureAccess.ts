@@ -15,6 +15,7 @@ export type FeatureNavKey =
   | 'alerts'
   | 'reports'
   | 'ai'
+  | 'partner'
   | 'settings'
   | 'profile';
 
@@ -45,11 +46,12 @@ const PROFILE_FEATURES: Record<AppProfile, Set<FeatureNavKey>> = {
   simple: new Set(['devices', 'claim', 'profile']),
   operations: new Set(['overview', 'devices', 'claim', 'control', 'analytics', 'alerts', 'reports', 'ai', 'profile']),
   automation: new Set(['overview', 'devices', 'claim', 'workflows', 'control', 'scada', 'accessControl', 'analytics', 'rawData', 'alerts', 'reports', 'ai', 'profile']),
-  full: new Set(['overview', 'devices', 'claim', 'workflows', 'control', 'scada', 'accessControl', 'analytics', 'rawData', 'alerts', 'reports', 'ai', 'settings', 'profile']),
+  full: new Set(['overview', 'devices', 'claim', 'workflows', 'control', 'scada', 'accessControl', 'analytics', 'rawData', 'alerts', 'reports', 'ai', 'partner', 'settings', 'profile']),
 };
 
 export const getUserAppProfile = (user?: Pick<User, 'role' | 'appProfile'> | null): AppProfile => {
   if (user?.appProfile) return user.appProfile;
+  if (user?.role === 'Partner') return 'full';
   if (user?.role === 'Customer') return 'simple';
   if (user?.role === 'Operator' || user?.role === 'Viewer') return 'operations';
   return 'full';
@@ -78,6 +80,7 @@ export const getFeatureForPath = (pathname: string): FeatureNavKey => {
   if (pathname.startsWith('/alerts')) return 'alerts';
   if (pathname.startsWith('/reports')) return 'reports';
   if (pathname.startsWith('/ai-insights')) return 'ai';
+  if (pathname.startsWith('/partner')) return 'partner';
   if (pathname.startsWith('/settings')) return 'settings';
   if (pathname.startsWith('/profile')) return 'profile';
   return 'overview';

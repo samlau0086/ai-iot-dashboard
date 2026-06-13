@@ -1,0 +1,472 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Building2,
+  CheckCircle2,
+  Copy,
+  Globe2,
+  Handshake,
+  Palette,
+  Plus,
+  ShieldCheck,
+  Trash2,
+} from 'lucide-react';
+import {
+  useAppStore,
+  type PartnerCustomer,
+  type PartnerProject,
+  type WhiteLabelConfig,
+} from '../lib/store';
+import { cn } from '../lib/utils';
+import { confirmDelete } from '../lib/confirm';
+import { notifySuccess } from '../lib/toast';
+
+const CUSTOMER_STATUSES: PartnerCustomer['status'][] = ['prospect', 'active', 'paused', 'archived'];
+const CUSTOMER_PLANS: PartnerCustomer['plan'][] = ['starter', 'operations', 'automation', 'enterprise'];
+const PROJECT_TYPES: PartnerProject['type'][] = ['deployment', 'maintenance', 'retrofit', 'integration', 'support'];
+const PROJECT_STATUSES: PartnerProject['status'][] = ['draft', 'quoted', 'won', 'in_progress', 'delivered', 'lost'];
+const DOMAIN_STATUSES: WhiteLabelConfig['domainStatus'][] = ['not_configured', 'pending_dns', 'active', 'error'];
+
+const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const splitCsv = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
+
+const money = (value?: number, currency = 'USD') => (
+  Number.isFinite(Number(value))
+    ? new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(value))
+    : '-'
+);
+
+export function PartnerPortal() {
+  const {
+    partnerCustomers,
+    partnerProjects,
+    whiteLabelConfig,
+    sites,
+    users,
+    devices,
+    addPartnerCustomer,
+    updatePartnerCustomer,
+    deletePartnerCustomer,
+    addPartnerProject,
+    updatePartnerProject,
+    deletePartnerProject,
+    updateWhiteLabelConfig,
+  } = useAppStore();
+
+  const [activeTab, setActiveTab] = useState<'customers' | 'projects' | 'branding' | 'permissions'>('customers');
+  const [customerDraft, setCustomerDraft] = useState({
+    name: '',
+    contactName: '',
+    email: '',
+    phone: '',
+    tenantId: '',
+    status: 'prospect' as PartnerCustomer['status'],
+    plan: 'starter' as PartnerCustomer['plan'],
+    siteIds: '',
+    notes: '',
+  });
+  const [projectDraft, setProjectDraft] = useState({
+    customerId: partnerCustomers[0]?.id || '',
+    name: '',
+    type: 'deployment' as PartnerProject['type'],
+    status: 'draft' as PartnerProject['status'],
+    value: '',
+    currency: 'USD',
+    siteIds: '',
+    ownerUserId: '',
+    quoteNo: '',
+    nextStep: '',
+  });
+  const [brandDraft, setBrandDraft] = useState(whiteLabelConfig);
+
+  useEffect(() => {
+    setBrandDraft(whiteLabelConfig);
+  }, [whiteLabelConfig]);
+
+  const siteById = useMemo(() => new Map(sites.map((site) => [site.id, site])), [sites]);
+  const customerById = useMemo(() => new Map(partnerCustomers.map((customer) => [customer.id, customer])), [partnerCustomers]);
+  const activeCustomers = partnerCustomers.filter((customer) => customer.status === 'active').length;
+  const projectPipeline = partnerProjects
+    .filter((project) => !['lost', 'delivered'].includes(project.status))
+    .reduce((sum, project) => sum + (Number(project.value) || 0), 0);
+  const managedSiteIds = new Set(partnerCustomers.flatMap((customer) => customer.siteIds));
+  const managedDevices = devices.filter((device) => managedSiteIds.has(device.siteId || '')).length;
+
+  const tabs = [
+    { id: 'customers', label: 'Customers', icon: Building2 },
+    { id: 'projects', label: 'Projects & Quotes', icon: Handshake },
+    { id: 'branding', label: 'White Label', icon: Palette },
+    { id: 'permissions', label: 'RBAC Matrix', icon: ShieldCheck },
+  ] as const;
+
+  const handleAddCustomer = () => {
+    if (!customerDraft.name.trim()) return;
+    const tenantId = customerDraft.tenantId.trim() || customerDraft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    addPartnerCustomer({
+      id: newId('customer'),
+      name: customerDraft.name.trim(),
+      contactName: customerDraft.contactName.trim(),
+      email: customerDraft.email.trim(),
+      phone: customerDraft.phone.trim(),
+      tenantId,
+      status: customerDraft.status,
+      plan: customerDraft.plan,
+      siteIds: splitCsv(customerDraft.siteIds),
+      notes: customerDraft.notes.trim(),
+      createdAt: new Date().toISOString(),
+    });
+    setCustomerDraft({ name: '', contactName: '', email: '', phone: '', tenantId: '', status: 'prospect', plan: 'starter', siteIds: '', notes: '' });
+    notifySuccess('Customer created successfully.');
+  };
+
+  const handleAddProject = () => {
+    if (!projectDraft.name.trim()) return;
+    addPartnerProject({
+      id: newId('project'),
+      customerId: projectDraft.customerId,
+      name: projectDraft.name.trim(),
+      type: projectDraft.type,
+      status: projectDraft.status,
+      value: Number(projectDraft.value) || undefined,
+      currency: projectDraft.currency.trim() || 'USD',
+      siteIds: splitCsv(projectDraft.siteIds),
+      ownerUserId: projectDraft.ownerUserId,
+      quoteNo: projectDraft.quoteNo.trim(),
+      nextStep: projectDraft.nextStep.trim(),
+      createdAt: new Date().toISOString(),
+    });
+    setProjectDraft({
+      customerId: partnerCustomers[0]?.id || '',
+      name: '',
+      type: 'deployment',
+      status: 'draft',
+      value: '',
+      currency: 'USD',
+      siteIds: '',
+      ownerUserId: '',
+      quoteNo: '',
+      nextStep: '',
+    });
+    notifySuccess('Project created successfully.');
+  };
+
+  const saveBranding = () => {
+    updateWhiteLabelConfig(brandDraft);
+    notifySuccess('White label configuration saved successfully.');
+  };
+
+  const copyDnsHint = async () => {
+    const domain = brandDraft.customDomain || 'iot.customer-domain.com';
+    const hint = `CNAME ${domain} -> your-dashboard-domain.com`;
+    try {
+      await navigator.clipboard.writeText(hint);
+      notifySuccess('DNS hint copied.');
+    } catch {
+      notifySuccess(hint, 'DNS hint');
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+            <Handshake className="h-6 w-6 text-orange-500" />
+            Partner / White Label
+          </h1>
+          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+            Manage customer accounts, projects, branding, domains, and delivery permissions for partner-led deployments.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          {[
+            ['Customers', partnerCustomers.length],
+            ['Active', activeCustomers],
+            ['Managed Sites', managedSiteIds.size],
+            ['Devices', managedDevices],
+          ].map(([label, value]) => (
+            <div key={String(label)} className="rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-[#1c2128]">
+              <p className="text-slate-500">{label}</p>
+              <p className="mt-1 text-lg font-bold text-slate-900 dark:text-white">{value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+        <div className="border-b border-slate-200 dark:border-slate-800">
+          <nav className="-mb-px flex overflow-x-auto">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  'inline-flex items-center gap-2 border-b-2 px-5 py-4 text-sm font-medium transition-colors',
+                  activeTab === tab.id
+                    ? 'border-orange-500 text-orange-600 dark:text-orange-400'
+                    : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400'
+                )}
+              >
+                <tab.icon className="h-4 w-4" />
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        <div className="p-5 sm:p-6">
+          {activeTab === 'customers' && (
+            <div className="space-y-6">
+              <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-4">
+                <input value={customerDraft.name} onChange={(event) => setCustomerDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Customer name" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <input value={customerDraft.contactName} onChange={(event) => setCustomerDraft((current) => ({ ...current, contactName: event.target.value }))} placeholder="Contact name" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <input value={customerDraft.email} onChange={(event) => setCustomerDraft((current) => ({ ...current, email: event.target.value }))} placeholder="Email" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <input value={customerDraft.phone} onChange={(event) => setCustomerDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <input value={customerDraft.tenantId} onChange={(event) => setCustomerDraft((current) => ({ ...current, tenantId: event.target.value }))} placeholder="Tenant ID, auto if blank" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <select value={customerDraft.status} onChange={(event) => setCustomerDraft((current) => ({ ...current, status: event.target.value as PartnerCustomer['status'] }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                  {CUSTOMER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+                <select value={customerDraft.plan} onChange={(event) => setCustomerDraft((current) => ({ ...current, plan: event.target.value as PartnerCustomer['plan'] }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                  {CUSTOMER_PLANS.map((plan) => <option key={plan} value={plan}>{plan}</option>)}
+                </select>
+                <input value={customerDraft.siteIds} onChange={(event) => setCustomerDraft((current) => ({ ...current, siteIds: event.target.value }))} placeholder="Site IDs, comma separated" className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                <textarea value={customerDraft.notes} onChange={(event) => setCustomerDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Notes" rows={2} className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700 lg:col-span-3" />
+                <button type="button" onClick={handleAddCustomer} className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500">
+                  <Plus className="h-4 w-4" />
+                  Add Customer
+                </button>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3">Customer</th>
+                      <th className="px-4 py-3">Contact</th>
+                      <th className="px-4 py-3">Plan</th>
+                      <th className="px-4 py-3">Sites</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {partnerCustomers.map((customer) => (
+                      <tr key={customer.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                        <td className="px-4 py-3">
+                          <input value={customer.name} onChange={(event) => updatePartnerCustomer(customer.id, { name: event.target.value })} className="block w-56 rounded border-0 bg-transparent px-2 py-1 font-semibold text-slate-900 ring-1 ring-transparent focus:ring-orange-500 dark:text-white" />
+                          <input value={customer.tenantId} onChange={(event) => updatePartnerCustomer(customer.id, { tenantId: event.target.value })} className="mt-1 block w-56 rounded border-0 bg-transparent px-2 py-1 font-mono text-xs text-slate-500 ring-1 ring-transparent focus:ring-orange-500" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <input value={customer.contactName || ''} onChange={(event) => updatePartnerCustomer(customer.id, { contactName: event.target.value })} className="block w-44 rounded border-0 bg-transparent px-2 py-1 text-slate-700 ring-1 ring-transparent focus:ring-orange-500 dark:text-slate-300" />
+                          <input value={customer.email || ''} onChange={(event) => updatePartnerCustomer(customer.id, { email: event.target.value })} className="mt-1 block w-44 rounded border-0 bg-transparent px-2 py-1 text-xs text-slate-500 ring-1 ring-transparent focus:ring-orange-500" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <select value={customer.plan} onChange={(event) => updatePartnerCustomer(customer.id, { plan: event.target.value as PartnerCustomer['plan'] })} className="rounded-md border-0 bg-transparent px-2 py-1 ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
+                            {CUSTOMER_PLANS.map((plan) => <option key={plan} value={plan}>{plan}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <input value={customer.siteIds.join(', ')} onChange={(event) => updatePartnerCustomer(customer.id, { siteIds: splitCsv(event.target.value) })} className="w-64 rounded border-0 bg-transparent px-2 py-1 text-xs text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700" />
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {customer.siteIds.map((siteId) => (
+                              <span key={siteId} className="rounded bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">{siteById.get(siteId)?.name || siteId}</span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select value={customer.status} onChange={(event) => updatePartnerCustomer(customer.id, { status: event.target.value as PartnerCustomer['status'] })} className="rounded-md border-0 bg-transparent px-2 py-1 ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
+                            {CUSTOMER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button type="button" onClick={async () => {
+                            if (await confirmDelete({ title: 'Delete customer', itemName: customer.name, description: 'Customer profile will be removed. Existing sites and devices are not deleted.' })) deletePartnerCustomer(customer.id);
+                          }} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'projects' && (
+            <div className="space-y-6">
+              <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-4">
+                <select value={projectDraft.customerId} onChange={(event) => setProjectDraft((current) => ({ ...current, customerId: event.target.value }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                  <option value="">Unassigned customer</option>
+                  {partnerCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+                </select>
+                <input value={projectDraft.name} onChange={(event) => setProjectDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Project name" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                <select value={projectDraft.type} onChange={(event) => setProjectDraft((current) => ({ ...current, type: event.target.value as PartnerProject['type'] }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                  {PROJECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                </select>
+                <select value={projectDraft.status} onChange={(event) => setProjectDraft((current) => ({ ...current, status: event.target.value as PartnerProject['status'] }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                  {PROJECT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+                <input value={projectDraft.value} onChange={(event) => setProjectDraft((current) => ({ ...current, value: event.target.value }))} placeholder="Quote value" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                <input value={projectDraft.currency} onChange={(event) => setProjectDraft((current) => ({ ...current, currency: event.target.value }))} placeholder="Currency" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                <input value={projectDraft.quoteNo} onChange={(event) => setProjectDraft((current) => ({ ...current, quoteNo: event.target.value }))} placeholder="Quote No" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                <select value={projectDraft.ownerUserId} onChange={(event) => setProjectDraft((current) => ({ ...current, ownerUserId: event.target.value }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                  <option value="">No owner</option>
+                  {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                </select>
+                <input value={projectDraft.siteIds} onChange={(event) => setProjectDraft((current) => ({ ...current, siteIds: event.target.value }))} placeholder="Site IDs" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700 lg:col-span-2" />
+                <input value={projectDraft.nextStep} onChange={(event) => setProjectDraft((current) => ({ ...current, nextStep: event.target.value }))} placeholder="Next step" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                <button type="button" onClick={handleAddProject} className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500">
+                  <Plus className="h-4 w-4" />
+                  Add Project
+                </button>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                <p className="text-xs uppercase tracking-wider text-slate-500">Open pipeline</p>
+                <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{money(projectPipeline, 'USD')}</p>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                {partnerProjects.map((project) => (
+                  <div key={project.id} className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <input value={project.name} onChange={(event) => updatePartnerProject(project.id, { name: event.target.value })} className="w-full rounded border-0 bg-transparent px-1 py-0.5 text-base font-semibold text-slate-900 ring-1 ring-transparent focus:ring-orange-500 dark:text-white" />
+                        <p className="mt-1 text-xs text-slate-500">{customerById.get(project.customerId)?.name || 'Unassigned customer'} / {project.quoteNo || 'No quote'}</p>
+                      </div>
+                      <button type="button" onClick={async () => {
+                        if (await confirmDelete({ title: 'Delete project', itemName: project.name, description: 'Project and quote tracking data will be removed.' })) deletePartnerProject(project.id);
+                      }} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <select value={project.status} onChange={(event) => updatePartnerProject(project.id, { status: event.target.value as PartnerProject['status'] })} className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700">
+                        {PROJECT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                      <select value={project.type} onChange={(event) => updatePartnerProject(project.id, { type: event.target.value as PartnerProject['type'] })} className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700">
+                        {PROJECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                      </select>
+                      <input value={project.value || ''} onChange={(event) => updatePartnerProject(project.id, { value: Number(event.target.value) || undefined })} className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700" />
+                      <input value={project.nextStep || ''} onChange={(event) => updatePartnerProject(project.id, { nextStep: event.target.value })} placeholder="Next step" className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'branding' && (
+            <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Product Name</span>
+                  <input value={brandDraft.productName} onChange={(event) => setBrandDraft((current) => ({ ...current, productName: event.target.value }))} className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Company Name</span>
+                  <input value={brandDraft.companyName} onChange={(event) => setBrandDraft((current) => ({ ...current, companyName: event.target.value }))} className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Logo URL</span>
+                  <input value={brandDraft.logoUrl || ''} onChange={(event) => setBrandDraft((current) => ({ ...current, logoUrl: event.target.value }))} placeholder="https://..." className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Primary Color</span>
+                  <input type="color" value={brandDraft.primaryColor} onChange={(event) => setBrandDraft((current) => ({ ...current, primaryColor: event.target.value }))} className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-slate-50 px-2 dark:border-slate-700 dark:bg-slate-950" />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Support Email</span>
+                  <input value={brandDraft.supportEmail || ''} onChange={(event) => setBrandDraft((current) => ({ ...current, supportEmail: event.target.value }))} className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Custom Domain</span>
+                  <input value={brandDraft.customDomain || ''} onChange={(event) => setBrandDraft((current) => ({ ...current, customDomain: event.target.value }))} placeholder="dash.customer.com" className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Domain Status</span>
+                  <select value={brandDraft.domainStatus} onChange={(event) => setBrandDraft((current) => ({ ...current, domainStatus: event.target.value as WhiteLabelConfig['domainStatus'] }))} className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                    {DOMAIN_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Portal Subtitle</span>
+                  <input value={brandDraft.portalTitle || ''} onChange={(event) => setBrandDraft((current) => ({ ...current, portalTitle: event.target.value }))} className="mt-1 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                </label>
+                <div className="flex flex-wrap gap-2 md:col-span-2">
+                  <button type="button" onClick={saveBranding} className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500">
+                    <CheckCircle2 className="h-4 w-4" />
+                    Save White Label
+                  </button>
+                  <button type="button" onClick={copyDnsHint} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                    <Copy className="h-4 w-4" />
+                    Copy DNS Hint
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-950 p-5 text-white dark:border-slate-800">
+                <div className="flex items-center gap-3">
+                  {brandDraft.logoUrl ? (
+                    <img src={brandDraft.logoUrl} alt={brandDraft.productName} className="h-11 w-11 rounded-lg object-contain" />
+                  ) : (
+                    <div className="flex h-11 w-11 items-center justify-center rounded-lg" style={{ backgroundColor: `${brandDraft.primaryColor}22`, color: brandDraft.primaryColor }}>
+                      <Globe2 className="h-6 w-6" />
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-lg font-bold">{brandDraft.productName || 'AI IoT Dashboard'}</p>
+                    <p className="text-xs text-slate-400">{brandDraft.companyName || 'Partner Company'}</p>
+                  </div>
+                </div>
+                <div className="mt-8 rounded-lg border border-slate-800 bg-slate-900 p-4">
+                  <p className="text-xs uppercase tracking-wider text-slate-500">Portal</p>
+                  <p className="mt-2 text-xl font-semibold">{brandDraft.portalTitle || 'Industrial Monitoring Platform'}</p>
+                  <p className="mt-3 text-sm text-slate-400">{brandDraft.customDomain || 'No custom domain configured'}</p>
+                  <span className="mt-4 inline-flex rounded-full px-2 py-1 text-xs font-semibold" style={{ backgroundColor: `${brandDraft.primaryColor}22`, color: brandDraft.primaryColor }}>
+                    {brandDraft.domainStatus}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'permissions' && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/30 dark:text-slate-300">
+                Partner / White Label uses the existing role and App Profile model. Use Settings -> Users to assign Partner, Customer, or Admin roles, and bind each user to the correct Site.
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3">Role</th>
+                      <th className="px-4 py-3">Typical Use</th>
+                      <th className="px-4 py-3">Recommended App Profile</th>
+                      <th className="px-4 py-3">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {[
+                      ['Owner / Admin', 'Platform operator', 'Full Platform', 'Can manage users, settings, Partner Portal, devices, workflows, and data sources.'],
+                      ['Partner', 'System integrator / reseller', 'Full Platform', 'Can manage customer delivery records and white-label setup.'],
+                      ['Engineer', 'Implementation team', 'Automation / SCADA', 'Good fit for deployment, workflow, SCADA, raw data, and device diagnostics.'],
+                      ['Operator', 'Customer operations', 'Operations Dashboard', 'Daily monitoring, analytics, alerts, reports, and controlled operations.'],
+                      ['Customer', 'Simple device user', 'Simple Device App', 'Device list, claim flow, profile, and device operations only.'],
+                    ].map((row) => (
+                      <tr key={row[0]}>
+                        {row.map((cell) => <td key={cell} className="px-4 py-3 text-slate-700 dark:text-slate-300">{cell}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

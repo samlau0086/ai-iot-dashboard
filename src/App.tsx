@@ -12,6 +12,7 @@ import { ScadaView } from './views/ScadaView';
 import { AccessControl } from './views/AccessControl';
 import { Reports } from './views/Reports';
 import { AIInsights } from './views/AIInsights';
+import { PartnerPortal } from './views/PartnerPortal';
 import { Settings } from './views/Settings';
 import { Profile } from './views/Profile';
 import { ClaimDevice } from './views/ClaimDevice';
@@ -68,7 +69,7 @@ function DeviceDataConnection() {
 }
 
 export default function App() {
-  const { theme, backendHydrated, hydrateBackendState } = useAppStore();
+  const { theme, backendHydrated, hydrateBackendState, whiteLabelConfig } = useAppStore();
 
   useEffect(() => {
     hydrateBackendState();
@@ -81,6 +82,10 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
+
+  useEffect(() => {
+    document.title = whiteLabelConfig.productName || 'AI IoT Dashboard';
+  }, [whiteLabelConfig.productName]);
 
   if (!backendHydrated) {
     return (
@@ -114,6 +119,7 @@ export default function App() {
               <Route path="alerts" element={<Alerts />} />
               <Route path="reports" element={<Reports />} />
               <Route path="ai-insights" element={<AIInsights />} />
+              <Route path="partner" element={<PartnerPortal />} />
               <Route path="settings" element={<Settings />} />
               <Route path="profile" element={<Profile />} />
             </Route>

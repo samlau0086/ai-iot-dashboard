@@ -14,6 +14,7 @@ import {
   Server,
   Settings,
   SlidersHorizontal,
+  Handshake,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { translations } from '../lib/i18n';
@@ -33,6 +34,7 @@ const mobileItems: { key: keyof typeof translations.en.nav; to: string; icon: an
   { key: 'alerts', to: '/alerts', icon: Bell },
   { key: 'reports', to: '/reports', icon: FileText },
   { key: 'ai', to: '/ai-insights', icon: BrainCircuit },
+  { key: 'partner', to: '/partner', icon: Handshake },
   { key: 'settings', to: '/settings', icon: Settings },
 ];
 

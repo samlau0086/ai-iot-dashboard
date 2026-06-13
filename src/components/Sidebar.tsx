@@ -14,7 +14,8 @@ import {
   PackageCheck,
   SlidersHorizontal,
   Network,
-  LogOut
+  LogOut,
+  Handshake
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../lib/store';
@@ -34,11 +35,12 @@ const menuItems: { key: keyof typeof translations.en.nav; to: string; icon: any 
   { key: 'alerts', to: '/alerts', icon: Bell },
   { key: 'reports', to: '/reports', icon: FileText },
   { key: 'ai', to: '/ai-insights', icon: BrainCircuit },
+  { key: 'partner', to: '/partner', icon: Handshake },
   { key: 'settings', to: '/settings', icon: Settings },
 ];
 
 export function Sidebar() {
-  const { language, currentUser, logout } = useAppStore();
+  const { language, currentUser, logout, whiteLabelConfig } = useAppStore();
   const navigate = useNavigate();
   const t = translations[language];
   const visibleMenuItems = menuItems.filter((item) => canAccessFeature(currentUser, item.key));
@@ -51,8 +53,12 @@ export function Sidebar() {
   return (
     <div className="hidden w-64 flex-col border-r border-slate-200 bg-white text-slate-700 dark:border-slate-800 dark:bg-[#16191f] dark:text-slate-300 lg:flex">
       <div className="flex h-16 shrink-0 items-center px-6 bg-slate-50 dark:bg-[#16191f] border-b border-slate-200 dark:border-slate-800">
-        <BrainCircuit className="h-6 w-6 text-orange-500 mr-2" />
-        <span className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">AI IoT Dashboard</span>
+        {whiteLabelConfig.logoUrl ? (
+          <img src={whiteLabelConfig.logoUrl} alt={whiteLabelConfig.productName} className="mr-2 h-7 w-7 rounded object-contain" />
+        ) : (
+          <BrainCircuit className="h-6 w-6 text-orange-500 mr-2" />
+        )}
+        <span className="truncate text-lg font-bold text-slate-900 dark:text-white tracking-tight">{whiteLabelConfig.productName || 'AI IoT Dashboard'}</span>
       </div>
       <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6">
         <nav className="flex-1 space-y-1">

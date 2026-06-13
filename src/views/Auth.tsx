@@ -9,7 +9,7 @@ type AuthMode = 'login' | 'register';
 export function Auth({ mode }: { mode: AuthMode }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, login, registerUser } = useAppStore();
+  const { currentUser, login, registerUser, whiteLabelConfig } = useAppStore();
   const [message, setMessage] = useState('');
   const [formData, setFormData] = useState({
     name: '',
@@ -53,12 +53,16 @@ export function Auth({ mode }: { mode: AuthMode }) {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex">
       <div className="hidden lg:flex lg:w-[42%] flex-col justify-between border-r border-slate-800 bg-slate-900 px-10 py-10">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/15 text-orange-400 ring-1 ring-orange-400/30">
-            <Cpu className="h-6 w-6" />
-          </div>
+          {whiteLabelConfig.logoUrl ? (
+            <img src={whiteLabelConfig.logoUrl} alt={whiteLabelConfig.productName} className="h-10 w-10 rounded-lg object-contain" />
+          ) : (
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/15 text-orange-400 ring-1 ring-orange-400/30">
+              <Cpu className="h-6 w-6" />
+            </div>
+          )}
           <div>
-            <p className="text-lg font-semibold text-white">AI IoT Dashboard</p>
-            <p className="text-xs uppercase tracking-wider text-slate-500">Industrial Monitoring Platform</p>
+            <p className="text-lg font-semibold text-white">{whiteLabelConfig.productName || 'AI IoT Dashboard'}</p>
+            <p className="text-xs uppercase tracking-wider text-slate-500">{whiteLabelConfig.portalTitle || 'Industrial Monitoring Platform'}</p>
           </div>
         </div>
 
@@ -82,8 +86,12 @@ export function Auth({ mode }: { mode: AuthMode }) {
         <div className="w-full max-w-md">
           <div className="mb-8 lg:hidden">
             <div className="flex items-center gap-3">
-              <Cpu className="h-8 w-8 text-orange-500" />
-              <span className="text-lg font-semibold">AI IoT Dashboard</span>
+              {whiteLabelConfig.logoUrl ? (
+                <img src={whiteLabelConfig.logoUrl} alt={whiteLabelConfig.productName} className="h-8 w-8 rounded-md object-contain" />
+              ) : (
+                <Cpu className="h-8 w-8 text-orange-500" />
+              )}
+              <span className="text-lg font-semibold">{whiteLabelConfig.productName || 'AI IoT Dashboard'}</span>
             </div>
           </div>
 

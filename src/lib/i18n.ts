@@ -14,6 +14,7 @@ export const translations = {
       alerts: 'Alerts',
       reports: 'Reports',
       ai: 'AI Insights',
+      partner: 'Partner',
       settings: 'Settings',
     },
     // Common
@@ -219,6 +220,7 @@ export const translations = {
       alerts: '告警中心',
       reports: '数据报表',
       ai: 'AI 工业助手',
+      partner: '伙伴后台',
       settings: '系统设置',
     },
     // Common

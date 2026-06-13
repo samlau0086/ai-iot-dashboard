@@ -222,6 +222,8 @@ export function Settings() {
     revokeManufacturedDeviceClaim,
     regenerateManufacturedDeviceClaimCode,
     addProvisioningAuditLog,
+    whiteLabelConfig,
+    updateWhiteLabelConfig,
   } = useAppStore();
   const t = translations[language];
   const isDemoUser = currentUser?.role === 'Demo';
@@ -288,6 +290,13 @@ export function Settings() {
   const [manufacturedBatchFilter, setManufacturedBatchFilter] = useState('all');
   const [claimLabelModal, setClaimLabelModal] = useState<{ item: ManufacturedDevice; claimLink: string } | null>(null);
   const [provisioningMessage, setProvisioningMessage] = useState('');
+  const [generalDraft, setGeneralDraft] = useState({
+    productName: whiteLabelConfig.productName,
+    companyName: whiteLabelConfig.companyName,
+    supportEmail: whiteLabelConfig.supportEmail || '',
+    customDomain: whiteLabelConfig.customDomain || '',
+    portalTitle: whiteLabelConfig.portalTitle || '',
+  });
 
   const tabs = [
     { id: 'general', name: t.settings.tabs.general, icon: SettingsIcon },
@@ -339,6 +348,16 @@ export function Settings() {
     loadDataSources();
     loadIngestTokens();
   }, []);
+
+  useEffect(() => {
+    setGeneralDraft({
+      productName: whiteLabelConfig.productName,
+      companyName: whiteLabelConfig.companyName,
+      supportEmail: whiteLabelConfig.supportEmail || '',
+      customDomain: whiteLabelConfig.customDomain || '',
+      portalTitle: whiteLabelConfig.portalTitle || '',
+    });
+  }, [whiteLabelConfig]);
 
   useEffect(() => {
     if (activeTab !== 'data' || mqttChannelIds.length === 0) return;
@@ -435,6 +454,17 @@ export function Settings() {
       location: '',
       timezone: 'Asia/Shanghai',
     });
+  };
+
+  const handleSaveGeneral = () => {
+    updateWhiteLabelConfig({
+      productName: generalDraft.productName.trim() || 'AI IoT Dashboard',
+      companyName: generalDraft.companyName.trim() || 'IoT Edge Solutions',
+      supportEmail: generalDraft.supportEmail.trim(),
+      customDomain: generalDraft.customDomain.trim(),
+      portalTitle: generalDraft.portalTitle.trim() || 'Industrial Monitoring Platform',
+    });
+    notifySuccess('General settings saved successfully.');
   };
 
   const parseJsonArray = (value: string, label: string) => {
@@ -980,24 +1010,63 @@ export function Settings() {
 
         <div className="px-4 py-6 sm:p-8 min-h-[400px]">
           {activeTab === 'general' && (
-            <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
-              <div className="sm:col-span-4">
-                <label htmlFor="company-name" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
-                  {t.settings.whiteLabel}
-                </label>
-                <div className="mt-2">
-                  <input
-                    type="text"
-                    name="company-name"
-                    id="company-name"
-                    className="block w-full rounded-md border-0 bg-transparent py-2 px-3 text-slate-900 dark:text-white shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-orange-500 dark:bg-slate-900/50 dark:ring-slate-700 sm:text-sm"
-                    placeholder="AI IoT Dashboard"
-                    defaultValue="AI IoT Dashboard"
-                  />
-                </div>
-              </div>
+            <div className="grid max-w-4xl grid-cols-1 gap-x-6 gap-y-6 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="font-medium leading-6 text-slate-900 dark:text-slate-300">{t.settings.whiteLabel}</span>
+                <input
+                  type="text"
+                  value={generalDraft.productName}
+                  onChange={(event) => setGeneralDraft((current) => ({ ...current, productName: event.target.value }))}
+                  className="mt-2 block w-full rounded-md border-0 bg-transparent px-3 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-orange-500 dark:bg-slate-900/50 dark:text-white dark:ring-slate-700 sm:text-sm"
+                  placeholder="AI IoT Dashboard"
+                />
+              </label>
 
-              <div className="sm:col-span-full">
+              <label className="block text-sm">
+                <span className="font-medium leading-6 text-slate-900 dark:text-slate-300">Company Name</span>
+                <input
+                  type="text"
+                  value={generalDraft.companyName}
+                  onChange={(event) => setGeneralDraft((current) => ({ ...current, companyName: event.target.value }))}
+                  className="mt-2 block w-full rounded-md border-0 bg-transparent px-3 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-500 dark:bg-slate-900/50 dark:text-white dark:ring-slate-700 sm:text-sm"
+                  placeholder="Customer company"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <span className="font-medium leading-6 text-slate-900 dark:text-slate-300">Portal Subtitle</span>
+                <input
+                  type="text"
+                  value={generalDraft.portalTitle}
+                  onChange={(event) => setGeneralDraft((current) => ({ ...current, portalTitle: event.target.value }))}
+                  className="mt-2 block w-full rounded-md border-0 bg-transparent px-3 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-500 dark:bg-slate-900/50 dark:text-white dark:ring-slate-700 sm:text-sm"
+                  placeholder="Industrial Monitoring Platform"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <span className="font-medium leading-6 text-slate-900 dark:text-slate-300">Support Email</span>
+                <input
+                  type="email"
+                  value={generalDraft.supportEmail}
+                  onChange={(event) => setGeneralDraft((current) => ({ ...current, supportEmail: event.target.value }))}
+                  className="mt-2 block w-full rounded-md border-0 bg-transparent px-3 py-2 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-500 dark:bg-slate-900/50 dark:text-white dark:ring-slate-700 sm:text-sm"
+                  placeholder="support@example.com"
+                />
+              </label>
+
+              <label className="block text-sm sm:col-span-2">
+                <span className="font-medium leading-6 text-slate-900 dark:text-slate-300">Custom Domain</span>
+                <input
+                  type="text"
+                  value={generalDraft.customDomain}
+                  onChange={(event) => setGeneralDraft((current) => ({ ...current, customDomain: event.target.value }))}
+                  className="mt-2 block w-full rounded-md border-0 bg-transparent px-3 py-2 font-mono text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-500 dark:bg-slate-900/50 dark:text-white dark:ring-slate-700 sm:text-sm"
+                  placeholder="dash.customer-domain.com"
+                />
+              </label>
+
+              <div className="sm:col-span-2">
                 <label htmlFor="timezone" className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
                   {t.settings.timezone}
                 </label>
@@ -1014,6 +1083,17 @@ export function Settings() {
                     <option value="CST">CST (China Standard Time)</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="sm:col-span-2">
+                <button
+                  type="button"
+                  onClick={handleSaveGeneral}
+                  className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Save General Settings
+                </button>
               </div>
             </div>
           )}

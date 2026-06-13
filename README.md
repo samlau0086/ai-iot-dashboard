@@ -23,8 +23,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 | V3 Device & Data Foundation | 真实设备数据、PostgreSQL / pgvector、HTTP Push、MQTT Subscriber、Ingest Tokens | 进行中 |
 | V4 Control Center | 远程控制、参数下发、控制日志、权限校验 | 基础闭环已完成 |
 | V5 Workflow Automation | Trigger / Condition / Action、通知、Webhook、任务与报告自动化 | 进行中 |
-| V6 AI Copilot | 自然语言查询、异常分析、建议动作、生成报表与工作流 | 规划中 |
-| V7 Partner / White Label | 多租户、客户管理、白标、代理商后台 | 规划中 |
+| V6 AI Copilot | 自然语言查询、异常分析、建议动作、生成报表与工作流 | 基础闭环已完成 |
+| V7 Partner / White Label | 多租户、客户管理、白标、代理商后台 | 基础闭环已完成 |
 
 ### 最近进度更新
 
@@ -42,7 +42,9 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Demo 账户角色已完成：内置 `demo@factory.com / demo123`，Demo 修改仅保存在前端会话中，不写入后端数据库，也不会对设备控制生效。
 - [x] 原始数据查询已完成：支持按设备、metric、来源、时间范围和 limit 查询遥测原始 payload，并支持 JSON 导出。
 - [x] 工作流条件节点已调整为 IF / ELIF / ELSE 分支语义；多个 Trigger 采用任一触发即可进入后续流程。
-- [ ] 下一阶段重点：指标筛选、时间范围分析、设备对比、控制连接器、AI Copilot 真实能力接入。
+- [x] AI Copilot 基础闭环已完成：支持基于当前 Site / 设备 / 告警 / 工作流 / 图表上下文进行自然语言查询、异常解释、建议动作、CSV 报表生成和工作流草稿生成。
+- [x] Partner / White Label 基础闭环已完成：支持客户管理、项目/报价记录、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
+- [ ] 下一阶段重点：指标筛选、时间范围分析、设备对比、控制连接器、AI Copilot 外部大模型接入、Partner 计费与更细粒度 RBAC。
 
 ### V1: Energy Monitoring MVP
 
@@ -170,30 +172,32 @@ An AI-powered industrial operations platform that connects machines, meters and 
 
 - [x] AI Insights 页面基础界面
 - [x] Overview AI 运维助手卡片
-- [ ] 自然语言查询设备、告警、能耗和报表
-- [ ] 异常原因分析
-- [ ] 相关设备定位
-- [ ] 建议动作
-- [ ] AI 生成报表
-- [ ] AI 创建工作流
-- [ ] RAG 知识库
+- [x] 自然语言查询设备、告警、能耗和报表
+- [x] 异常原因分析
+- [x] 相关设备定位
+- [x] 建议动作
+- [x] AI 生成报表
+- [x] AI 创建工作流
+- [x] RAG 知识库
 - [x] PostgreSQL + pgvector 存储入口
-- [ ] Tool Calling 执行控制、报告、工作流等动作
+- [x] Tool Calling 执行报告下载、打开设备、打开分析页、创建工作流草稿等动作
+- [ ] 外部大模型接入：Gemini / OpenAI / 私有模型
 
 ### V7: Partner / White Label
 
 目标：支持系统集成商、自动化公司、能源服务商、Solar EPC、Electrical Contractor 面向自己的客户交付平台。
 
-- [ ] 多租户 Tenant / Site
-- [ ] 客户管理
-- [ ] 项目管理
-- [ ] 白标 Logo
-- [ ] 自定义域名
-- [ ] 代理商后台
-- [ ] 客户子账号
-- [ ] 项目报价记录
+- [x] 多租户 Tenant / Site
+- [x] 客户管理
+- [x] 项目管理
+- [x] 白标 Logo
+- [x] 自定义域名
+- [x] 代理商后台
+- [x] 客户子账号
+- [x] 项目报价记录
 - [x] 基础角色权限：Owner、Admin、Engineer、Operator、Viewer、Demo、Partner、Customer
 - [x] Demo 账户本地演示模式：允许体验界面和配置流程，但不持久化到后端、不影响设备
+- [x] 基础 RBAC 权限矩阵说明：角色、App Profile、站点绑定和客户账号使用方式
 - [ ] 更细粒度 RBAC：菜单、站点、设备、控制动作、数据源、Token 权限矩阵
 
 ### 技术演进方向
@@ -239,6 +243,7 @@ AI IoT Dashboard 是一个面向工业物联网场景的运维监控后台，用
 | Alerts | `/alerts` | 查看告警、确认告警、创建工单。 |
 | Reports | `/reports` | 管理运营报告。 |
 | AI Insights | `/ai-insights` | 通过 AI Copilot 查询运营问题。 |
+| Partner | `/partner` | 管理客户、项目、报价记录、白标品牌、自定义域名和伙伴交付权限。 |
 | Settings | `/settings` | 配置系统、通知渠道和用户。 |
 | Profile | `/profile` | 当前用户信息。 |
 
@@ -436,7 +441,29 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 
 ### 使用 AI Copilot
 
-进入 **AI Insights** 页面，可以用自然语言询问设备、能耗、告警和运营异常相关问题。当前实现为前端模拟响应，后续可接入真实 Gemini 或其他 AI 服务。
+进入 **AI Insights** 页面，可以用自然语言询问设备、能耗、告警、运营异常、报表和工作流相关问题。Copilot 会读取当前 Site 范围内的设备、派生告警、Analytics 图表和 Workflow 配置，返回结构化分析、关联设备、建议动作和使用的数据来源。
+
+当前 AI Copilot 已支持：
+
+- 查询设备状态、在线/离线情况、关键 metrics 和当前 Site 概况。
+- 分析异常原因，例如高功率、高温、高压、泄漏率、低电量、离线或遥测过期。
+- 定位相关设备，并可直接跳转到设备详情页。
+- 生成 CSV 格式的 AI Operations Report。
+- 根据最高风险设备生成 Workflow Draft，包含指标触发、AI 分析和系统通知节点；生成后仍需要人工检查、保存和发布。
+- 使用内置知识库解释 MQTT、HTTP Push、Workflow、Provisioning、SCADA 等系统机制。
+
+当前实现是基于平台上下文的本地 Copilot 引擎，不依赖外部模型服务；后续可以将回答生成层接入 Gemini、OpenAI 或私有大模型，同时保留现有的工具调用和数据上下文。
+
+### Partner / White Label
+
+进入 **Partner** 页面 `/partner` 后，可以管理面向系统集成商、代理商或多客户交付场景的基础运营数据：
+
+- **Customers**：添加、编辑、删除客户，配置客户联系人、Tenant ID、套餐、状态和绑定的 Site IDs。
+- **Projects & Quotes**：记录客户项目、报价编号、项目类型、交付状态、金额、负责人、关联站点和下一步跟进事项。
+- **White Label**：配置产品名称、公司名称、Logo URL、主色、支持邮箱、自定义域名和域名状态。保存后侧边栏、移动端标题和登录页会使用新的系统标题和 Logo。
+- **RBAC Matrix**：查看不同角色与 App Profile 的推荐组合，例如 Partner 使用 Full Platform，Customer 使用 Simple Device App。
+
+白标的快速配置也可以在 **Settings -> General** 中修改；更完整的品牌、域名和客户交付配置建议在 **Partner** 页面维护。
 
 ### 配置通知和用户
 
@@ -810,7 +837,7 @@ Dashboard 后端不直接作为 Modbus、CAN、LoRa 或蜂窝网络驱动运行�
 
 - 接入真实设备数据 API 或 MQTT 服务。
 - 将 Mock 告警、能耗和设备数据替换为后端接口。
-- 将 AI Copilot 的模拟回复替换为真实 Gemini API 调用。
+- 将 AI Copilot 的本地上下文引擎接入 Gemini、OpenAI 或私有大模型回答生成层。
 - 为工作流增加后端执行器，支持真正的通知、工单、Webhook 和设备控制。
 - 增加用户鉴权、角色权限和多站点隔离。
 

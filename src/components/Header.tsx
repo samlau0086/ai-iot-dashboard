@@ -8,7 +8,7 @@ import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 
 export function Header() {
   const navigate = useNavigate();
-  const { language, setLanguage, theme, toggleTheme, devices: storedDevices, currentUser, sites, activeSiteId, setActiveSite } = useAppStore();
+  const { language, setLanguage, theme, toggleTheme, devices: storedDevices, currentUser, sites, activeSiteId, setActiveSite, whiteLabelConfig } = useAppStore();
   const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
   const [showNotifications, setShowNotifications] = useState(false);
@@ -143,11 +143,15 @@ export function Header() {
     <header className="relative z-[40] flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-[#16191f]/80 sm:h-16 sm:gap-x-6 sm:px-6 lg:px-8">
       <div className="flex min-w-0 flex-1 gap-x-3 self-stretch lg:gap-x-6">
         <div className="flex min-w-0 items-center gap-2 sm:hidden">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-orange-500/10">
-            <BrainCircuit className="h-5 w-5 text-orange-500" />
-          </div>
+          {whiteLabelConfig.logoUrl ? (
+            <img src={whiteLabelConfig.logoUrl} alt={whiteLabelConfig.productName} className="h-9 w-9 shrink-0 rounded-md object-contain" />
+          ) : (
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-orange-500/10">
+              <BrainCircuit className="h-5 w-5 text-orange-500" />
+            </div>
+          )}
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">AI IoT Dashboard</p>
+            <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{whiteLabelConfig.productName || 'AI IoT Dashboard'}</p>
             <p className="truncate text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">
               {currentUser?.role || 'Operator'}
             </p>

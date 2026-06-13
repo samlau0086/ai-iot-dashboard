@@ -44,6 +44,47 @@ const DEFAULT_USERS: User[] = [
   },
 ];
 
+const DEFAULT_WHITE_LABEL_CONFIG: WhiteLabelConfig = {
+  productName: 'AI IoT Dashboard',
+  companyName: 'IoT Edge Solutions',
+  primaryColor: '#ea580c',
+  supportEmail: 'support@example.com',
+  customDomain: '',
+  domainStatus: 'not_configured',
+  portalTitle: 'Industrial Monitoring Platform',
+};
+
+const DEFAULT_PARTNER_CUSTOMERS: PartnerCustomer[] = [
+  {
+    id: 'customer-demo-factory',
+    name: 'Default Tenant',
+    contactName: 'Operations Manager',
+    email: 'ops@example.com',
+    tenantId: 'default-tenant',
+    status: 'active',
+    plan: 'automation',
+    siteIds: ['factory-a', 'solar-site', 'pump-station'],
+    notes: 'Default demo customer owning the bundled factory, solar, and pump station sites.',
+    createdAt: new Date().toISOString(),
+  },
+];
+
+const DEFAULT_PARTNER_PROJECTS: PartnerProject[] = [
+  {
+    id: 'project-demo-rollout',
+    customerId: 'customer-demo-factory',
+    name: 'Factory A IoT Rollout',
+    type: 'deployment',
+    status: 'in_progress',
+    value: 12800,
+    currency: 'USD',
+    siteIds: ['factory-a'],
+    quoteNo: 'QT-2026-001',
+    nextStep: 'Confirm MQTT data mapping and operator training schedule.',
+    createdAt: new Date().toISOString(),
+  },
+];
+
 export interface SiteTenant {
   id: string;
   name: string;
@@ -55,6 +96,50 @@ export interface SiteTenant {
   timezone?: string;
   status: 'active' | 'inactive';
   createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PartnerCustomer {
+  id: string;
+  name: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  tenantId: string;
+  status: 'prospect' | 'active' | 'paused' | 'archived';
+  plan: 'starter' | 'operations' | 'automation' | 'enterprise';
+  siteIds: string[];
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PartnerProject {
+  id: string;
+  customerId: string;
+  name: string;
+  type: 'deployment' | 'maintenance' | 'retrofit' | 'integration' | 'support';
+  status: 'draft' | 'quoted' | 'won' | 'in_progress' | 'delivered' | 'lost';
+  value?: number;
+  currency?: string;
+  siteIds: string[];
+  ownerUserId?: string;
+  quoteNo?: string;
+  nextStep?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface WhiteLabelConfig {
+  productName: string;
+  companyName: string;
+  logoUrl?: string;
+  faviconUrl?: string;
+  primaryColor: string;
+  supportEmail?: string;
+  customDomain?: string;
+  domainStatus: 'not_configured' | 'pending_dns' | 'active' | 'error';
+  portalTitle?: string;
   updatedAt?: string;
 }
 
@@ -560,6 +645,22 @@ const mergeDefaultSites = (sites: SiteTenant[] = []) => {
   ];
 };
 
+const mergeDefaultPartnerCustomers = (customers: PartnerCustomer[] = []) => {
+  const existingIds = new Set(customers.map((customer) => customer.id));
+  return [
+    ...customers,
+    ...DEFAULT_PARTNER_CUSTOMERS.filter((customer) => !existingIds.has(customer.id)),
+  ];
+};
+
+const mergeDefaultPartnerProjects = (projects: PartnerProject[] = []) => {
+  const existingIds = new Set(projects.map((project) => project.id));
+  return [
+    ...projects,
+    ...DEFAULT_PARTNER_PROJECTS.filter((project) => !existingIds.has(project.id)),
+  ];
+};
+
 const sameOverviewLayout = (first: any[] = [], second: any[] = []) => {
   if (first.length !== second.length) return false;
 
@@ -914,6 +1015,17 @@ interface AppState {
   addSite: (site: SiteTenant) => void;
   updateSite: (id: string, site: Partial<SiteTenant>) => void;
   deleteSite: (id: string) => void;
+  // Partner / White Label
+  partnerCustomers: PartnerCustomer[];
+  partnerProjects: PartnerProject[];
+  whiteLabelConfig: WhiteLabelConfig;
+  addPartnerCustomer: (customer: PartnerCustomer) => void;
+  updatePartnerCustomer: (id: string, customer: Partial<PartnerCustomer>) => void;
+  deletePartnerCustomer: (id: string) => void;
+  addPartnerProject: (project: PartnerProject) => void;
+  updatePartnerProject: (id: string, project: Partial<PartnerProject>) => void;
+  deletePartnerProject: (id: string) => void;
+  updateWhiteLabelConfig: (config: Partial<WhiteLabelConfig>) => void;
   // Access Control
   accesses: AccessDefinition[];
   accessCredentials: AccessCredential[];
@@ -988,6 +1100,9 @@ type BackendState = Partial<Pick<AppState,
   | 'provisioningAuditLogs'
   | 'sites'
   | 'activeSiteId'
+  | 'partnerCustomers'
+  | 'partnerProjects'
+  | 'whiteLabelConfig'
   | 'users'
   | 'accesses'
   | 'accessCredentials'
@@ -1055,6 +1170,9 @@ const pickBackendState = (state: AppState): BackendState => ({
   provisioningAuditLogs: state.provisioningAuditLogs,
   sites: state.sites,
   activeSiteId: state.activeSiteId,
+  partnerCustomers: state.partnerCustomers,
+  partnerProjects: state.partnerProjects,
+  whiteLabelConfig: state.whiteLabelConfig,
   users: state.users,
   accesses: state.accesses,
   accessCredentials: state.accessCredentials,
@@ -1132,6 +1250,9 @@ export const useAppStore = create<AppState>()(
             provisioningAuditLogs: Array.isArray(state?.provisioningAuditLogs) ? state.provisioningAuditLogs : [],
             sites,
             activeSiteId,
+            partnerCustomers: mergeDefaultPartnerCustomers(state?.partnerCustomers),
+            partnerProjects: mergeDefaultPartnerProjects(state?.partnerProjects),
+            whiteLabelConfig: { ...DEFAULT_WHITE_LABEL_CONFIG, ...(state?.whiteLabelConfig || {}) },
             charts: mergeDefaultCharts(state?.charts),
             accesses: Array.isArray(state?.accesses) ? state.accesses : [],
             accessCredentials: Array.isArray(state?.accessCredentials) ? state.accessCredentials : [],
@@ -1467,6 +1588,38 @@ export const useAppStore = create<AppState>()(
           devices: state.devices.map((device) => device.siteId === id ? { ...device, siteId: fallbackSiteId } : device),
         };
       }),
+
+      partnerCustomers: DEFAULT_PARTNER_CUSTOMERS,
+      partnerProjects: DEFAULT_PARTNER_PROJECTS,
+      whiteLabelConfig: DEFAULT_WHITE_LABEL_CONFIG,
+      addPartnerCustomer: (customer) => set((state) => ({
+        partnerCustomers: [customer, ...state.partnerCustomers],
+      })),
+      updatePartnerCustomer: (id, customer) => set((state) => ({
+        partnerCustomers: state.partnerCustomers.map((item) => (
+          item.id === id ? { ...item, ...customer, updatedAt: new Date().toISOString() } : item
+        )),
+      })),
+      deletePartnerCustomer: (id) => set((state) => ({
+        partnerCustomers: state.partnerCustomers.filter((item) => item.id !== id),
+        partnerProjects: state.partnerProjects.map((project) => (
+          project.customerId === id ? { ...project, customerId: '', updatedAt: new Date().toISOString() } : project
+        )),
+      })),
+      addPartnerProject: (project) => set((state) => ({
+        partnerProjects: [project, ...state.partnerProjects],
+      })),
+      updatePartnerProject: (id, project) => set((state) => ({
+        partnerProjects: state.partnerProjects.map((item) => (
+          item.id === id ? { ...item, ...project, updatedAt: new Date().toISOString() } : item
+        )),
+      })),
+      deletePartnerProject: (id) => set((state) => ({
+        partnerProjects: state.partnerProjects.filter((item) => item.id !== id),
+      })),
+      updateWhiteLabelConfig: (config) => set((state) => ({
+        whiteLabelConfig: { ...state.whiteLabelConfig, ...config, updatedAt: new Date().toISOString() },
+      })),
 
       accesses: [],
       accessCredentials: [],
