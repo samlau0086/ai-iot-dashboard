@@ -535,6 +535,8 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 
 批量导入支持下载 CSV 模板、导入前预检、错误行提示、新增/覆盖统计，以及按 `batchNo` 筛选库存设备。
 
+现场或客户自助绑定可使用 **Claim Device** 页面 `/claim`。登录用户输入 MAC / IMEI / Serial Number 与 Claim Code 后，系统会按型号模板自动创建平台设备，并绑定到当前用户可访问的 Site；Admin / Owner 可选择目标 Site。
+
 模板支持占位符：
 
 - `{identity}`：优先使用 Serial Number，其次 IMEI / MAC。

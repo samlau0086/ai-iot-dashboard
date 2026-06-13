@@ -14,6 +14,7 @@ import { Reports } from './views/Reports';
 import { AIInsights } from './views/AIInsights';
 import { Settings } from './views/Settings';
 import { Profile } from './views/Profile';
+import { ClaimDevice } from './views/ClaimDevice';
 import { useAppStore } from './lib/store';
 import { useDeviceDataConnection } from './hooks/useDeviceDataConnection';
 import { Auth } from './views/Auth';
@@ -78,6 +79,7 @@ export default function App() {
             <Route index element={<Overview />} />
             <Route path="devices" element={<Devices />} />
             <Route path="devices/:id" element={<DeviceDetails />} />
+            <Route path="claim" element={<ClaimDevice />} />
             <Route path="workflows" element={<Workflows />} />
             <Route path="control" element={<ControlCenter />} />
             <Route path="scada" element={<ScadaView />} />

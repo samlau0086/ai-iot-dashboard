@@ -4,6 +4,7 @@ export const translations = {
     nav: {
       overview: 'Overview',
       devices: 'Devices',
+      claim: 'Claim Device',
       workflows: 'Workflows',
       control: 'Control',
       scada: 'SCADA',
@@ -208,6 +209,7 @@ export const translations = {
     nav: {
       overview: '总览中心',
       devices: '设备管理',
+      claim: '设备认领',
       workflows: '工作流自动化',
       control: '控制中心',
       scada: 'SCADA 运维',

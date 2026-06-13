@@ -11,6 +11,7 @@ import {
   Settings,
   GitMerge,
   KeyRound,
+  PackageCheck,
   SlidersHorizontal,
   Network,
   LogOut
@@ -22,6 +23,7 @@ import { translations } from '../lib/i18n';
 const menuItems: { key: keyof typeof translations.en.nav; to: string; icon: any }[] = [
   { key: 'overview', to: '/', icon: LayoutDashboard },
   { key: 'devices', to: '/devices', icon: Server },
+  { key: 'claim', to: '/claim', icon: PackageCheck },
   { key: 'workflows', to: '/workflows', icon: GitMerge },
   { key: 'control', to: '/control', icon: SlidersHorizontal },
   { key: 'scada', to: '/scada', icon: Network },

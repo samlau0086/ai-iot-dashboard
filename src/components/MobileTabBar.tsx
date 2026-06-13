@@ -10,6 +10,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Network,
+  PackageCheck,
   Server,
   Settings,
   SlidersHorizontal,
@@ -21,6 +22,7 @@ import { useAppStore } from '../lib/store';
 const mobileItems: { key: keyof typeof translations.en.nav; to: string; icon: any }[] = [
   { key: 'overview', to: '/', icon: LayoutDashboard },
   { key: 'devices', to: '/devices', icon: Server },
+  { key: 'claim', to: '/claim', icon: PackageCheck },
   { key: 'workflows', to: '/workflows', icon: GitMerge },
   { key: 'control', to: '/control', icon: SlidersHorizontal },
   { key: 'scada', to: '/scada', icon: Network },
