@@ -218,6 +218,19 @@ export function PartnerPortal() {
     updateUser(userId, { controlAccess: undefined });
   };
 
+  const handleAccountDataAccessChange = (user: User, patch: NonNullable<User['dataAccess']>) => {
+    updateUser(user.id, {
+      dataAccess: {
+        ...(user.dataAccess || {}),
+        ...patch,
+      },
+    });
+  };
+
+  const resetAccountDataAccess = (userId: string) => {
+    updateUser(userId, { dataAccess: undefined });
+  };
+
   const handleAddProject = () => {
     if (!projectDraft.name.trim()) return;
     addPartnerProject({
@@ -545,6 +558,45 @@ export function PartnerPortal() {
                                 className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
                               >
                                 Reset control access
+                              </button>
+                            </details>
+                            <details className="mt-2 w-72 rounded-md border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-950/40">
+                              <summary className="cursor-pointer text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                Data access
+                              </summary>
+                              <label className="mt-2 flex items-center gap-2 text-[10px] text-slate-600 dark:text-slate-300">
+                                <input
+                                  type="checkbox"
+                                  checked={user.dataAccess?.enabled !== false}
+                                  onChange={(event) => handleAccountDataAccessChange(user, { enabled: event.target.checked })}
+                                  className="h-3 w-3 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                                />
+                                Allow device data access
+                              </label>
+                              <label className="mt-2 block text-[10px] text-slate-500">
+                                Allowed Site IDs
+                                <input
+                                  value={(user.dataAccess?.siteIds || []).join(', ')}
+                                  onChange={(event) => handleAccountDataAccessChange(user, { siteIds: splitCsv(event.target.value) })}
+                                  placeholder={allowedSiteIds.join(', ') || 'empty = customer site'}
+                                  className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                                />
+                              </label>
+                              <label className="mt-2 block text-[10px] text-slate-500">
+                                Allowed Device IDs
+                                <input
+                                  value={(user.dataAccess?.deviceIds || []).join(', ')}
+                                  onChange={(event) => handleAccountDataAccessChange(user, { deviceIds: splitCsv(event.target.value) })}
+                                  placeholder={devices.filter((device) => allowedSiteIds.includes(device.siteId || '')).slice(0, 3).map((device) => device.id).join(', ') || 'empty = site scope'}
+                                  className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => resetAccountDataAccess(user.id)}
+                                className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
+                              >
+                                Reset data access
                               </button>
                             </details>
                           </td>

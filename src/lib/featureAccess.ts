@@ -25,11 +25,28 @@ export type ControlAccessConfig = {
   actionIds?: string[];
 };
 
+export type DataAccessConfig = {
+  enabled?: boolean;
+  siteIds?: string[];
+  deviceIds?: string[];
+};
+
 type AccessUser = {
+  siteId?: string;
   role?: string;
   appProfile?: AppProfile;
   featureAccess?: FeatureAccessMap;
   controlAccess?: ControlAccessConfig;
+  dataAccess?: DataAccessConfig;
+};
+
+type AccessSite = {
+  id: string;
+};
+
+type AccessDevice = {
+  id: string;
+  siteId?: string;
 };
 
 export const FEATURE_ACCESS_OPTIONS: Array<{ key: FeatureNavKey; label: string; description: string }> = [
@@ -142,6 +159,46 @@ export const canIssueControlCommand = (
 
   return true;
 };
+
+const hasFullDataAccessByRole = (user: AccessUser | null | undefined) => (
+  ['Owner', 'Admin', 'Partner', 'Demo'].includes(user?.role || '')
+);
+
+export const hasFullDataAccess = (user: AccessUser | null | undefined) => {
+  if (!user) return false;
+  if (user.dataAccess?.enabled === false) return false;
+  if (user.dataAccess?.siteIds?.length || user.dataAccess?.deviceIds?.length) return false;
+  return hasFullDataAccessByRole(user);
+};
+
+export const canAccessSiteData = (user: AccessUser | null | undefined, siteId?: string) => {
+  if (!user) return false;
+  if (!siteId) return true;
+
+  const config = user.dataAccess;
+  if (config?.enabled === false) return false;
+  if (config?.siteIds?.length) return config.siteIds.includes(siteId);
+  if (hasFullDataAccessByRole(user)) return true;
+
+  return !user.siteId || user.siteId === siteId;
+};
+
+export const canAccessDeviceData = (user: AccessUser | null | undefined, device?: AccessDevice | null) => {
+  if (!user || !device) return false;
+
+  const config = user.dataAccess;
+  if (config?.enabled === false) return false;
+  if (config?.deviceIds?.length) return config.deviceIds.includes(device.id);
+  return canAccessSiteData(user, device.siteId);
+};
+
+export const getAccessibleSites = <T extends AccessSite>(user: AccessUser | null | undefined, sites: T[]) => (
+  sites.filter((site) => canAccessSiteData(user, site.id))
+);
+
+export const getAccessibleDevices = <T extends AccessDevice>(user: AccessUser | null | undefined, devices: T[]) => (
+  devices.filter((device) => canAccessDeviceData(user, device))
+);
 
 export const getDefaultRouteForUser = (user: AccessUser | null | undefined) => {
   const access = getUserFeatureAccess(user);

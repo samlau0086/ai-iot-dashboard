@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, MoreVertical, Edit2, PackageCheck, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../lib/store';
@@ -10,7 +10,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { Device } from '../types';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
-import { canIssueControlCommand, getUserAppProfile } from '../lib/featureAccess';
+import { canIssueControlCommand, getAccessibleDevices, getAccessibleSites, getUserAppProfile, hasFullDataAccess } from '../lib/featureAccess';
 import {
   buildControlParameters,
   buildControlStatePatch,
@@ -56,10 +56,13 @@ const qualityDot = (state: string) => (
 export function Devices() {
   const navigate = useNavigate();
   const { language, devices: storedDevices, sites, activeSiteId, setActiveSite, updateDevice, currentUser } = useAppStore();
-  const devices = useRuntimeDevices(storedDevices);
+  const accessibleSites = useMemo(() => getAccessibleSites(currentUser, sites), [currentUser, sites]);
+  const accessibleStoredDevices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const devices = useRuntimeDevices(accessibleStoredDevices);
   const t = translations[language];
   const isSimpleProfile = getUserAppProfile(currentUser) === 'simple';
-  const userSiteId = currentUser?.siteId || activeSiteId || 'factory-a';
+  const canViewAllSites = hasFullDataAccess(currentUser);
+  const userSiteId = accessibleSites[0]?.id || currentUser?.siteId || activeSiteId || 'factory-a';
 
   const [activeView, setActiveView] = useState<'list' | 'form'>('list');
   const [editingDeviceId, setEditingDeviceId] = useState<string | undefined>(undefined);
@@ -75,7 +78,7 @@ export function Devices() {
   const userSiteOption = sites.find((site) => site.id === userSiteId) || { id: userSiteId, name: userSiteId, tenantName: 'Assigned Site' };
   const siteOptions = isSimpleProfile
     ? [userSiteOption]
-    : [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants' }, ...sites];
+    : [...(canViewAllSites ? [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants' }] : []), ...accessibleSites];
   const effectiveSiteId = isSimpleProfile ? userSiteId : selectedSiteId;
   const siteScopedDevices = devices.filter((device) => (
     effectiveSiteId === 'All'
@@ -93,6 +96,16 @@ export function Devices() {
   };
 
   useEffect(() => {
+    if (!canViewAllSites && selectedSiteId === 'All') {
+      setSelectedSiteId(userSiteId);
+      setSelectedTag('All');
+      return;
+    }
+    if (selectedSiteId !== 'All' && !accessibleSites.some((site) => site.id === selectedSiteId)) {
+      setSelectedSiteId(userSiteId);
+      setSelectedTag('All');
+      return;
+    }
     if (isSimpleProfile && selectedSiteId !== userSiteId) {
       setSelectedSiteId(userSiteId);
       setSelectedTag('All');
@@ -102,7 +115,7 @@ export function Devices() {
 
     setSelectedSiteId(activeSiteId);
     setSelectedTag('All');
-  }, [activeSiteId, isSimpleProfile, selectedSiteId, userSiteId]);
+  }, [accessibleSites, activeSiteId, canViewAllSites, isSimpleProfile, selectedSiteId, userSiteId]);
 
   const handleCreate = () => {
     if (isSimpleProfile) {

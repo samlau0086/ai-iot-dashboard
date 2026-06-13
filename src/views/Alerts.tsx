@@ -5,10 +5,12 @@ import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { getAccessibleDevices } from '../lib/featureAccess';
 
 export function Alerts() {
-  const { language, devices: storedDevices } = useAppStore();
-  const devices = useRuntimeDevices(storedDevices);
+  const { language, devices: storedDevices, currentUser } = useAppStore();
+  const accessibleDevices = React.useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const devices = useRuntimeDevices(accessibleDevices);
   const t = translations[language];
   const alerts = deriveAlertsFromDevices(devices);
 

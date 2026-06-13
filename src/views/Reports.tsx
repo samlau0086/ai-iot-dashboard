@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { FileText, Download, Calendar, Mail, FileDown } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
+import { getAccessibleDevices } from '../lib/featureAccess';
 
 type ReportItem = {
   id: string;
@@ -48,8 +49,9 @@ const getCsvSize = (rows: string[][]) => {
 };
 
 export function Reports() {
-  const { language, devices: storedDevices } = useAppStore();
-  const devices = useRuntimeDevices(storedDevices);
+  const { language, devices: storedDevices, currentUser } = useAppStore();
+  const accessibleDevices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const devices = useRuntimeDevices(accessibleDevices);
   const t = translations[language];
   const alerts = deriveAlertsFromDevices(devices);
 

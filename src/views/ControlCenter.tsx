@@ -5,7 +5,7 @@ import { cn } from '../lib/utils';
 import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinitions, isDeviceControllable } from '../lib/deviceControls';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
-import { canIssueControlCommand } from '../lib/featureAccess';
+import { canIssueControlCommand, getAccessibleDevices, getAccessibleSites, hasFullDataAccess } from '../lib/featureAccess';
 
 type ControlCommand = {
   id: string;
@@ -24,7 +24,9 @@ type ControlCommand = {
 
 export function ControlCenter() {
   const { devices: storedDevices, currentUser, activeSiteId, sites, updateDevice } = useAppStore();
-  const devices = useRuntimeDevices(storedDevices);
+  const accessibleSites = useMemo(() => getAccessibleSites(currentUser, sites), [currentUser, sites]);
+  const accessibleStoredDevices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const devices = useRuntimeDevices(accessibleStoredDevices);
   const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || 'All');
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [selectedCommand, setSelectedCommand] = useState('power_on');
@@ -37,7 +39,9 @@ export function ControlCenter() {
 
   const isDemoUser = currentUser?.role === 'Demo';
   const canControl = canIssueControlCommand(currentUser);
-  const siteOptions = [{ id: 'All', name: 'All Sites' }, ...sites];
+  const siteOptions = useMemo(() => (
+    [...(hasFullDataAccess(currentUser) ? [{ id: 'All', name: 'All Sites' }] : []), ...accessibleSites]
+  ), [accessibleSites, currentUser]);
   const scopedDevices = useMemo(() => {
     return devices.filter((device) => {
       const inSite = selectedSiteId === 'All' || device.siteId === selectedSiteId;
@@ -48,6 +52,19 @@ export function ControlCenter() {
   const commandOptions = getDeviceControlDefinitions(selectedDevice).filter((control) => (
     canIssueControlCommand(currentUser, selectedDevice?.id, control.id)
   ));
+
+  useEffect(() => {
+    if (!siteOptions.length) return;
+    if (selectedSiteId === 'All' && !hasFullDataAccess(currentUser)) {
+      setSelectedSiteId(siteOptions[0].id);
+      setSelectedDeviceId('');
+      return;
+    }
+    if (selectedSiteId !== 'All' && !siteOptions.some((site) => site.id === selectedSiteId)) {
+      setSelectedSiteId(siteOptions[0].id);
+      setSelectedDeviceId('');
+    }
+  }, [currentUser, selectedSiteId, siteOptions]);
 
   useEffect(() => {
     if (!selectedDeviceId && selectedDevice) {

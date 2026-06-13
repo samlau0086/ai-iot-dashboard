@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Database, Download, FileJson, Filter, RefreshCw, Search } from 'lucide-react';
 import { useAppStore } from '../lib/store';
+import { getAccessibleDevices, getAccessibleSites, hasFullDataAccess } from '../lib/featureAccess';
 
 type RawTelemetryMessage = {
   device_id?: string;
@@ -41,7 +42,10 @@ const downloadJson = (messages: RawTelemetryMessage[]) => {
 };
 
 export function RawData() {
-  const { devices, sites } = useAppStore();
+  const { devices: storedDevices, sites, currentUser } = useAppStore();
+  const devices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const accessibleSites = useMemo(() => getAccessibleSites(currentUser, sites), [currentUser, sites]);
+  const canViewUnmatchedRawData = hasFullDataAccess(currentUser);
   const [deviceId, setDeviceId] = useState('');
   const [metric, setMetric] = useState('');
   const [source, setSource] = useState('');
@@ -123,7 +127,11 @@ export function RawData() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || `Telemetry query failed: ${response.status}`);
 
-      const nextMessages = Array.isArray(payload.messages) ? payload.messages : [];
+      const nextMessages = (Array.isArray(payload.messages) ? payload.messages : []).filter((message: RawTelemetryMessage) => {
+        if (canViewUnmatchedRawData) return true;
+        const rowDeviceId = getDeviceId(message);
+        return devices.some((device) => device.id === rowDeviceId || device.config?.externalDeviceId === rowDeviceId);
+      });
       setMessages(nextMessages);
       setSelected(nextMessages[0] || null);
     } catch (queryError) {
@@ -188,7 +196,7 @@ export function RawData() {
             className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
           >
             <option value="">All devices</option>
-            {sites.map((site) => {
+            {accessibleSites.map((site) => {
               const siteDevices = devices.filter((device) => device.siteId === site.id);
               if (siteDevices.length === 0) return null;
               return (

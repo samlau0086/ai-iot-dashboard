@@ -21,6 +21,7 @@ import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { notifySuccess } from '../lib/toast';
 import { cn } from '../lib/utils';
 import { runAiCopilot, type AiCopilotAction, type AiCopilotResponse } from '../lib/aiCopilot';
+import { getAccessibleDevices, getAccessibleSites } from '../lib/featureAccess';
 
 type ChatMessage = {
   id: string;
@@ -75,8 +76,11 @@ export function AIInsights() {
     sites,
     activeSiteId,
     addWorkflow,
+    currentUser,
   } = useAppStore();
-  const devices = useRuntimeDevices(storedDevices);
+  const accessibleSites = useMemo(() => getAccessibleSites(currentUser, sites), [currentUser, sites]);
+  const accessibleStoredDevices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const devices = useRuntimeDevices(accessibleStoredDevices);
   const alerts = useMemo(() => deriveAlertsFromDevices(devices), [devices]);
   const t = translations[language];
   const [query, setQuery] = useState('');
@@ -94,9 +98,9 @@ export function AIInsights() {
     alerts,
     workflows,
     charts,
-    sites,
+    sites: accessibleSites,
     activeSiteId,
-  }), [activeSiteId, alerts, charts, devices, sites, workflows]);
+  }), [accessibleSites, activeSiteId, alerts, charts, devices, workflows]);
 
   const executeAction = (action: AiCopilotAction) => {
     if (action.type === 'download_report') {

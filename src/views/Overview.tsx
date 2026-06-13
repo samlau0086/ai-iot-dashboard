@@ -12,6 +12,7 @@ import { deriveAlertsFromDevices, deriveEnergyTrendData } from '../lib/derivedDa
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { getAccessibleDevices, getAccessibleSites, hasFullDataAccess } from '../lib/featureAccess';
 import type { Device } from '../types';
 import { applyMetricMappingsToMetrics, getMetricLabel, getMetricMappings, getMetricPrecision, getMetricUnit } from '../lib/metricMappings';
 import { getDeviceDataQuality } from '../lib/deviceStatus';
@@ -517,8 +518,12 @@ export function Overview() {
     addOverviewWidgetLibraryItem,
     updateOverviewWidgetLibraryItem,
     removeOverviewWidgetLibraryItem,
+    currentUser,
   } = useAppStore();
-  const liveDevices = useRuntimeDevices(storedDevices);
+  const accessibleSites = useMemo(() => getAccessibleSites(currentUser, sites), [currentUser, sites]);
+  const accessibleStoredDevices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const canViewAllSites = hasFullDataAccess(currentUser);
+  const liveDevices = useRuntimeDevices(accessibleStoredDevices);
   const t = translations[language];
   const [showWidgetBuilder, setShowWidgetBuilder] = useState(false);
   const [activeSnapGuide, setActiveSnapGuide] = useState<SnapGuide>({});
@@ -572,7 +577,7 @@ export function Overview() {
   const devices = useMemo(() => {
     if (!historyMode) return liveDevices;
 
-    const snapshotById = new Map<string, Device>(storedDevices.map((device): [string, Device] => [
+    const snapshotById = new Map<string, Device>(accessibleStoredDevices.map((device): [string, Device] => [
       device.id,
       {
         ...device,
@@ -605,7 +610,7 @@ export function Overview() {
       });
 
     return Array.from(snapshotById.values());
-  }, [historyCursor, historyMessages, historyMode, liveDevices, storedDevices]);
+  }, [accessibleStoredDevices, historyCursor, historyMessages, historyMode, liveDevices]);
   const historyProgress = historyMode && historyRangeValid
     ? Math.max(0, Math.min(100, ((historyCursor - historyStartMs) / (historyEndMs - historyStartMs)) * 100))
     : 0;
@@ -618,15 +623,15 @@ export function Overview() {
     [telemetryDataDays]
   );
   const historyScopeDevices = useMemo(() => {
-    if (selectedSiteId === 'All') return storedDevices;
+    if (selectedSiteId === 'All') return accessibleStoredDevices;
 
-    const selectedSite = sites.find((site) => site.id === selectedSiteId) || null;
+    const selectedSite = accessibleSites.find((site) => site.id === selectedSiteId) || null;
     const siteTags = new Set(selectedSite?.tags || []);
-    return storedDevices.filter((device) => (
+    return accessibleStoredDevices.filter((device) => (
       device.siteId === selectedSiteId ||
       (!device.siteId && Boolean(device.tags?.some((tag) => siteTags.has(tag))))
     ));
-  }, [selectedSiteId, sites, storedDevices]);
+  }, [accessibleSites, accessibleStoredDevices, selectedSiteId]);
   const historyDeviceIdentifiers = useMemo(() => (
     Array.from(new Set(
       historyScopeDevices
@@ -821,19 +826,28 @@ export function Overview() {
   const isLayoutEditable = isDesktopGrid && layoutEditMode;
 
   const siteFilters = useMemo(() => [
-    { id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] },
-    ...sites,
-  ], [sites]);
+    ...(canViewAllSites ? [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] }] : []),
+    ...accessibleSites,
+  ], [accessibleSites, canViewAllSites]);
 
   useEffect(() => {
     if (!selectedSiteId && activeSiteId) setSelectedSiteId(activeSiteId);
   }, [activeSiteId, selectedSiteId]);
 
   useEffect(() => {
-    if (!activeSiteId || selectedSiteId === 'All' || selectedSiteId === activeSiteId) return;
+    if (!siteFilters.length) return;
+    if (selectedSiteId === 'All' && !canViewAllSites) {
+      setSelectedSiteId(siteFilters[0].id);
+      return;
+    }
+    if (selectedSiteId !== 'All' && !siteFilters.some((site) => site.id === selectedSiteId)) {
+      setSelectedSiteId(siteFilters[0].id);
+      return;
+    }
+    if (!activeSiteId || selectedSiteId === 'All' || selectedSiteId === activeSiteId || !siteFilters.some((site) => site.id === activeSiteId)) return;
 
     setSelectedSiteId(activeSiteId);
-  }, [activeSiteId, selectedSiteId]);
+  }, [activeSiteId, canViewAllSites, selectedSiteId, siteFilters]);
 
   useEffect(() => {
     if (!isDesktopGrid && layoutEditMode) {
@@ -842,7 +856,7 @@ export function Overview() {
     }
   }, [isDesktopGrid, layoutEditMode]);
 
-  const selectedSite = useMemo(() => sites.find((site) => site.id === selectedSiteId) || null, [selectedSiteId, sites]);
+  const selectedSite = useMemo(() => accessibleSites.find((site) => site.id === selectedSiteId) || null, [accessibleSites, selectedSiteId]);
 
   const scopedDevices = useMemo(() => {
     if (selectedSiteId === 'All') return devices;

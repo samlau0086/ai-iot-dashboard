@@ -460,6 +460,21 @@ export function Settings() {
     updateUser(userId, { controlAccess: undefined });
   };
 
+  const handleUserDataAccessChange = (userId: string, patch: NonNullable<typeof users[number]['dataAccess']>) => {
+    const user = users.find((item) => item.id === userId);
+    if (!user) return;
+    updateUser(userId, {
+      dataAccess: {
+        ...(user.dataAccess || {}),
+        ...patch,
+      },
+    });
+  };
+
+  const handleResetUserDataAccess = (userId: string) => {
+    updateUser(userId, { dataAccess: undefined });
+  };
+
   const handleAddSite = () => {
     const id = siteDraft.id.trim() || siteDraft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     if (!id || !siteDraft.name.trim()) return;
@@ -2299,6 +2314,45 @@ export function Settings() {
                               className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
                             >
                               Reset control access
+                            </button>
+                          </details>
+                          <details className="mt-2 max-w-72 rounded-md border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-950/40">
+                            <summary className="cursor-pointer text-xs font-semibold text-slate-600 dark:text-slate-300">
+                              Data access
+                            </summary>
+                            <label className="mt-2 flex items-center gap-2 text-[10px] text-slate-600 dark:text-slate-300">
+                              <input
+                                type="checkbox"
+                                checked={user.dataAccess?.enabled !== false}
+                                onChange={(event) => handleUserDataAccessChange(user.id, { enabled: event.target.checked })}
+                                className="h-3 w-3 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                              />
+                              Allow device data access
+                            </label>
+                            <label className="mt-2 block text-[10px] text-slate-500">
+                              Allowed Site IDs
+                              <input
+                                value={(user.dataAccess?.siteIds || []).join(', ')}
+                                onChange={(event) => handleUserDataAccessChange(user.id, { siteIds: splitCsv(event.target.value) })}
+                                placeholder={sites.slice(0, 3).map((site) => site.id).join(', ') || 'empty = role default'}
+                                className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                              />
+                            </label>
+                            <label className="mt-2 block text-[10px] text-slate-500">
+                              Allowed Device IDs
+                              <input
+                                value={(user.dataAccess?.deviceIds || []).join(', ')}
+                                onChange={(event) => handleUserDataAccessChange(user.id, { deviceIds: splitCsv(event.target.value) })}
+                                placeholder={devices.slice(0, 3).map((device) => device.id).join(', ') || 'empty = site scope'}
+                                className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleResetUserDataAccess(user.id)}
+                              className="mt-2 text-[10px] font-semibold text-orange-600 hover:text-orange-500"
+                            >
+                              Reset data access
                             </button>
                           </details>
                         </td>

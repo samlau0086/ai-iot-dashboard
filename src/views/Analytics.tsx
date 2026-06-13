@@ -7,6 +7,7 @@ import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
+import { getAccessibleDevices, getAccessibleSites, hasFullDataAccess } from '../lib/featureAccess';
 import type { Device } from '../types';
 import { applyMetricMappingsToMetrics, getMetricLabel, getMetricMappings, getMetricPrecision, getMetricUnit } from '../lib/metricMappings';
 
@@ -310,8 +311,11 @@ export function Analytics() {
     devices: storedDevices,
     sites,
     activeSiteId,
+    currentUser,
   } = useAppStore();
-  const devices = useRuntimeDevices(storedDevices);
+  const accessibleSites = useMemo(() => getAccessibleSites(currentUser, sites), [currentUser, sites]);
+  const accessibleStoredDevices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const devices = useRuntimeDevices(accessibleStoredDevices);
   const t = translations[language];
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || 'All');
@@ -325,13 +329,16 @@ export function Analytics() {
   const [rangeTo, setRangeTo] = useState(() => toDateTimeLocal(new Date()));
 
   const siteOptions = useMemo(() => [
-    { id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] },
-    ...sites,
-  ], [sites]);
+    ...(hasFullDataAccess(currentUser) ? [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] }] : []),
+    ...accessibleSites,
+  ], [accessibleSites, currentUser]);
+  const defaultAnalyticsSiteId = siteOptions.some((site) => site.id === activeSiteId)
+    ? activeSiteId
+    : siteOptions[0]?.id || 'All';
 
   const getDevicesForSite = (siteId: string) => {
     if (siteId === 'All') return devices;
-    const site = sites.find((item) => item.id === siteId);
+    const site = accessibleSites.find((item) => item.id === siteId);
     const siteTags = new Set(site?.tags || []);
     return devices.filter((device) => (
       device.siteId === siteId ||
@@ -339,7 +346,7 @@ export function Analytics() {
     ));
   };
 
-  const scopedDevices = useMemo(() => getDevicesForSite(selectedSiteId), [devices, selectedSiteId, sites]);
+  const scopedDevices = useMemo(() => getDevicesForSite(selectedSiteId), [accessibleSites, devices, selectedSiteId]);
   const builderDevices = useMemo(() => (
     selectedDeviceIds.length
       ? scopedDevices.filter((device) => selectedDeviceIds.includes(device.id))
@@ -349,6 +356,12 @@ export function Analytics() {
   const metricOptionMeta = useMemo(() => (
     Object.fromEntries(metricOptions.map((metric) => [metric, getMetricDefaultsForDevices(metric, builderDevices)]))
   ), [builderDevices, metricOptions]);
+
+  useEffect(() => {
+    if (!siteOptions.some((site) => site.id === selectedSiteId)) {
+      setSelectedSiteId(defaultAnalyticsSiteId);
+    }
+  }, [defaultAnalyticsSiteId, selectedSiteId, siteOptions]);
 
   useEffect(() => {
     setSelectedDeviceIds([]);
@@ -381,7 +394,7 @@ export function Analytics() {
 
   const closeAddModal = () => {
     setShowAddModal(false);
-    setSelectedSiteId(activeSiteId || 'All');
+    setSelectedSiteId(defaultAnalyticsSiteId);
     setSelectedDeviceIds([]);
     setMetricKey('');
     setUnit('');

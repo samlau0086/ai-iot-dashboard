@@ -10,7 +10,7 @@ import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, g
 import { confirmDelete } from '../lib/confirm';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
-import { canIssueControlCommand, getUserAppProfile } from '../lib/featureAccess';
+import { canAccessDeviceData, canIssueControlCommand, getUserAppProfile } from '../lib/featureAccess';
 import {
   STANDARD_METRIC_OPTIONS,
   applyMetricMappingsToMetrics,
@@ -115,7 +115,7 @@ export function DeviceDetails() {
   const device = devices.find(d => d.id === id);
   const appProfile = getUserAppProfile(currentUser);
   const isSimpleProfile = appProfile === 'simple';
-  const isOutsideSimpleSite = Boolean(isSimpleProfile && currentUser?.siteId && device?.siteId && device.siteId !== currentUser.siteId);
+  const hasDeviceAccess = Boolean(device && canAccessDeviceData(currentUser, device));
   const [isEditing, setIsEditing] = useState(false);
 
   const [controlValues, setControlValues] = useState<Record<string, any>>({});
@@ -253,11 +253,11 @@ export function DeviceDetails() {
     ))
   )).sort();
 
-  if (!device || isOutsideSimpleSite) {
+  if (!device || !hasDeviceAccess) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-slate-500">
-        <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Device Not Found</h2>
-        <p>The requested device could not be found.</p>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Device Unavailable</h2>
+        <p>The requested device could not be found or is outside your data access scope.</p>
         <button onClick={() => navigate((location.state as { from?: string } | null)?.from || '/devices')} className="mt-4 px-4 py-2 bg-orange-600 text-white rounded hover:bg-orange-500">
           Back
         </button>

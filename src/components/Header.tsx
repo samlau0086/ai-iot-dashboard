@@ -5,11 +5,14 @@ import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { deriveAlertsFromDevices } from '../lib/derivedData';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
+import { getAccessibleDevices, getAccessibleSites } from '../lib/featureAccess';
 
 export function Header() {
   const navigate = useNavigate();
   const { language, setLanguage, theme, toggleTheme, devices: storedDevices, currentUser, sites, activeSiteId, setActiveSite, whiteLabelConfig } = useAppStore();
-  const devices = useRuntimeDevices(storedDevices);
+  const accessibleSites = useMemo(() => getAccessibleSites(currentUser, sites), [currentUser, sites]);
+  const accessibleStoredDevices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
+  const devices = useRuntimeDevices(accessibleStoredDevices);
   const t = translations[language];
   const [showNotifications, setShowNotifications] = useState(false);
   const [readNotificationKeys, setReadNotificationKeys] = useState<string[]>([]);
@@ -83,6 +86,13 @@ export function Header() {
     if (notification.runId) query.set('runId', notification.runId);
     navigate(`/workflows?${query.toString()}`);
   };
+
+  useEffect(() => {
+    if (!accessibleSites.length) return;
+    if (!activeSiteId || !accessibleSites.some((site) => site.id === activeSiteId)) {
+      setActiveSite(accessibleSites[0].id);
+    }
+  }, [accessibleSites, activeSiteId, setActiveSite]);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,7 +190,7 @@ export function Header() {
             onChange={(event) => setActiveSite(event.target.value)}
             className="hidden h-9 max-w-[180px] rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-600 outline-none hover:border-slate-300 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 lg:block"
           >
-            {sites.map((site) => (
+            {accessibleSites.map((site) => (
               <option key={site.id} value={site.id}>{site.name}</option>
             ))}
           </select>
