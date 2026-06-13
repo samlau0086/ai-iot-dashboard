@@ -4,6 +4,7 @@ import { Device } from '../types';
 import { mockDevices } from './mockData';
 import { mergeTelemetryIntoDevices } from './deviceData';
 import type { DeviceTelemetryMessage } from '../types';
+import type { AppProfile } from './featureAccess';
 
 export interface User {
   id: string;
@@ -11,6 +12,7 @@ export interface User {
   email: string;
   password?: string;
   role: string;
+  appProfile?: AppProfile;
   siteId: string;
   status: 'pending' | 'approved' | 'rejected';
   createdAt?: string;
@@ -23,6 +25,7 @@ const DEFAULT_USERS: User[] = [
     name: 'Admin User',
     email: 'admin@factory.com',
     role: 'Admin',
+    appProfile: 'full',
     siteId: 'factory-a',
     password: 'password123',
     status: 'approved',
@@ -33,6 +36,7 @@ const DEFAULT_USERS: User[] = [
     name: 'Demo User',
     email: 'demo@factory.com',
     role: 'Demo',
+    appProfile: 'full',
     siteId: 'factory-a',
     password: 'demo123',
     status: 'approved',
@@ -920,10 +924,10 @@ interface AppState {
   // Users
   users: User[];
   addUser: (user: User) => void;
-  registerUser: (user: Omit<User, 'id' | 'role' | 'siteId' | 'status' | 'createdAt'> & { siteId?: string }) => { ok: boolean; message: string };
+  registerUser: (user: Omit<User, 'id' | 'role' | 'appProfile' | 'siteId' | 'status' | 'createdAt'> & { siteId?: string; appProfile?: AppProfile }) => { ok: boolean; message: string };
   updateUser: (id: string, user: Partial<User>) => void;
   deleteUser: (id: string) => void;
-  approveUser: (id: string, role: string, siteId: string) => void;
+  approveUser: (id: string, role: string, siteId: string, appProfile?: AppProfile) => void;
   rejectUser: (id: string) => void;
   login: (email: string, password: string) => { ok: boolean; message: string };
   logout: () => void;
@@ -1459,6 +1463,7 @@ export const useAppStore = create<AppState>()(
           email,
           password: user.password,
           role: 'Viewer',
+          appProfile: user.appProfile || 'simple',
           siteId: user.siteId?.trim() || 'factory-a',
           status: 'pending',
           createdAt: new Date().toISOString(),
@@ -1478,10 +1483,10 @@ export const useAppStore = create<AppState>()(
           currentUser: state.currentUser && state.currentUser.id === id ? null : state.currentUser
         }));
       },
-      approveUser: (id, role, siteId) => set((state) => ({
+      approveUser: (id, role, siteId, appProfile) => set((state) => ({
         users: state.users.map((user) => (
           user.id === id
-            ? { ...user, role, siteId, status: 'approved', approvedAt: new Date().toISOString() }
+            ? { ...user, role, siteId, appProfile: appProfile || user.appProfile || 'operations', status: 'approved', approvedAt: new Date().toISOString() }
             : user
         ))
       })),

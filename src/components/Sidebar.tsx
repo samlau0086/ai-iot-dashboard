@@ -19,6 +19,7 @@ import {
 import { cn } from '../lib/utils';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
+import { canAccessFeature } from '../lib/featureAccess';
 
 const menuItems: { key: keyof typeof translations.en.nav; to: string; icon: any }[] = [
   { key: 'overview', to: '/', icon: LayoutDashboard },
@@ -40,6 +41,7 @@ export function Sidebar() {
   const { language, currentUser, logout } = useAppStore();
   const navigate = useNavigate();
   const t = translations[language];
+  const visibleMenuItems = menuItems.filter((item) => canAccessFeature(currentUser, item.key));
 
   const handleLogout = () => {
     logout();
@@ -54,7 +56,7 @@ export function Sidebar() {
       </div>
       <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6">
         <nav className="flex-1 space-y-1">
-          {menuItems.map((item) => (
+          {visibleMenuItems.map((item) => (
             <NavLink
               key={item.key}
               to={item.to}

@@ -20,6 +20,7 @@ import { useDeviceDataConnection } from './hooks/useDeviceDataConnection';
 import { Auth } from './views/Auth';
 import { ConfirmDeleteDialog } from './components/ConfirmDeleteDialog';
 import { ToastHost } from './components/ToastHost';
+import { canAccessPath, getDefaultRouteForUser } from './lib/featureAccess';
 
 import { DeviceDetails } from './views/DeviceDetails';
 
@@ -37,6 +38,28 @@ function ProtectedRoute() {
       <Outlet />
     </>
   );
+}
+
+function FeatureRoute() {
+  const currentUser = useAppStore((state) => state.currentUser);
+  const location = useLocation();
+
+  if (!canAccessPath(currentUser, location.pathname)) {
+    return <Navigate to={getDefaultRouteForUser(currentUser)} replace />;
+  }
+
+  return <Outlet />;
+}
+
+function HomeRoute() {
+  const currentUser = useAppStore((state) => state.currentUser);
+  const defaultRoute = getDefaultRouteForUser(currentUser);
+
+  if (defaultRoute !== '/') {
+    return <Navigate to={defaultRoute} replace />;
+  }
+
+  return <Overview />;
 }
 
 function DeviceDataConnection() {
@@ -76,22 +99,24 @@ export default function App() {
         <Route path="/register" element={<Auth mode="register" />} />
         <Route element={<ProtectedRoute />}>
           <Route path="/" element={<DashboardLayout />}>
-            <Route index element={<Overview />} />
-            <Route path="devices" element={<Devices />} />
-            <Route path="devices/:id" element={<DeviceDetails />} />
-            <Route path="claim" element={<ClaimDevice />} />
-            <Route path="claim/:token" element={<ClaimDevice />} />
-            <Route path="workflows" element={<Workflows />} />
-            <Route path="control" element={<ControlCenter />} />
-            <Route path="scada" element={<ScadaView />} />
-            <Route path="access-control" element={<AccessControl />} />
-            <Route path="analytics" element={<Analytics />} />
-            <Route path="raw-data" element={<RawData />} />
-            <Route path="alerts" element={<Alerts />} />
-            <Route path="reports" element={<Reports />} />
-            <Route path="ai-insights" element={<AIInsights />} />
-            <Route path="settings" element={<Settings />} />
-            <Route path="profile" element={<Profile />} />
+            <Route index element={<HomeRoute />} />
+            <Route element={<FeatureRoute />}>
+              <Route path="devices" element={<Devices />} />
+              <Route path="devices/:id" element={<DeviceDetails />} />
+              <Route path="claim" element={<ClaimDevice />} />
+              <Route path="claim/:token" element={<ClaimDevice />} />
+              <Route path="workflows" element={<Workflows />} />
+              <Route path="control" element={<ControlCenter />} />
+              <Route path="scada" element={<ScadaView />} />
+              <Route path="access-control" element={<AccessControl />} />
+              <Route path="analytics" element={<Analytics />} />
+              <Route path="raw-data" element={<RawData />} />
+              <Route path="alerts" element={<Alerts />} />
+              <Route path="reports" element={<Reports />} />
+              <Route path="ai-insights" element={<AIInsights />} />
+              <Route path="settings" element={<Settings />} />
+              <Route path="profile" element={<Profile />} />
+            </Route>
           </Route>
         </Route>
       </Routes>

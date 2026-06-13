@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Cpu, Lock, Mail, User, Factory } from 'lucide-react';
 import { useAppStore } from '../lib/store';
+import { canAccessPath, getDefaultRouteForUser } from '../lib/featureAccess';
 
 type AuthMode = 'login' | 'register';
 
@@ -22,7 +23,8 @@ export function Auth({ mode }: { mode: AuthMode }) {
   }, [mode]);
 
   if (currentUser) {
-    const target = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/';
+    const requestedTarget = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || getDefaultRouteForUser(currentUser);
+    const target = canAccessPath(currentUser, requestedTarget) ? requestedTarget : getDefaultRouteForUser(currentUser);
     return <Navigate to={target} replace />;
   }
 

@@ -18,6 +18,7 @@ import {
 import { cn } from '../lib/utils';
 import { translations } from '../lib/i18n';
 import { useAppStore } from '../lib/store';
+import { canAccessFeature } from '../lib/featureAccess';
 
 const mobileItems: { key: keyof typeof translations.en.nav; to: string; icon: any }[] = [
   { key: 'overview', to: '/', icon: LayoutDashboard },
@@ -36,13 +37,14 @@ const mobileItems: { key: keyof typeof translations.en.nav; to: string; icon: an
 ];
 
 export function MobileTabBar() {
-  const { language } = useAppStore();
+  const { language, currentUser } = useAppStore();
   const t = translations[language];
+  const visibleItems = mobileItems.filter((item) => canAccessFeature(currentUser, item.key));
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 px-2 pt-2 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-slate-800 dark:bg-[#16191f]/95 lg:hidden">
       <div className="mobile-tab-scroll flex gap-1 overflow-x-auto pb-[calc(env(safe-area-inset-bottom)+0.45rem)]">
-        {mobileItems.map((item) => (
+        {visibleItems.map((item) => (
           <NavLink
             key={item.key}
             to={item.to}

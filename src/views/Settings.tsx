@@ -8,6 +8,7 @@ import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 import { generateClaimCode, generateClaimToken } from '../lib/deviceProvisioning';
+import { APP_PROFILE_OPTIONS, getUserAppProfile, type AppProfile } from '../lib/featureAccess';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
@@ -245,6 +246,7 @@ export function Settings() {
     email: '',
     password: '',
     role: 'Operator',
+    appProfile: 'operations' as AppProfile,
     siteId: 'factory-a',
   });
   const [siteDraft, setSiteDraft] = useState({
@@ -398,12 +400,13 @@ export function Settings() {
       email: userDraft.email.trim().toLowerCase(),
       password: userDraft.password,
       role: userDraft.role,
+      appProfile: userDraft.appProfile,
       siteId: userDraft.siteId.trim() || sites[0]?.id || 'factory-a',
       status: 'approved',
       createdAt: new Date().toISOString(),
       approvedAt: new Date().toISOString(),
     });
-    setUserDraft({ name: '', email: '', password: '', role: 'Operator', siteId: sites[0]?.id || 'factory-a' });
+    setUserDraft({ name: '', email: '', password: '', role: 'Operator', appProfile: 'operations', siteId: sites[0]?.id || 'factory-a' });
   };
 
   const handleAddSite = () => {
@@ -2002,7 +2005,7 @@ export function Settings() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[1fr_1.3fr_1fr_150px_130px_auto]">
+              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 lg:grid-cols-[1fr_1.3fr_1fr_150px_190px_130px_auto]">
                 <input
                   value={userDraft.name}
                   onChange={(event) => setUserDraft((current) => ({ ...current, name: event.target.value }))}
@@ -2033,6 +2036,16 @@ export function Settings() {
                   ))}
                 </select>
                 <select
+                  value={userDraft.appProfile}
+                  onChange={(event) => setUserDraft((current) => ({ ...current, appProfile: event.target.value as AppProfile }))}
+                  title="App Profile"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                >
+                  {APP_PROFILE_OPTIONS.map((profile) => (
+                    <option key={profile.value} value={profile.value}>{profile.label}</option>
+                  ))}
+                </select>
+                <select
                   value={userDraft.siteId}
                   onChange={(event) => setUserDraft((current) => ({ ...current, siteId: event.target.value }))}
                   className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
@@ -2058,6 +2071,7 @@ export function Settings() {
                       <th className="px-4 py-3 font-semibold">User</th>
                       <th className="px-4 py-3 font-semibold">Status</th>
                       <th className="px-4 py-3 font-semibold">Role</th>
+                      <th className="px-4 py-3 font-semibold">App Profile</th>
                       <th className="px-4 py-3 font-semibold">Site / Tags</th>
                       <th className="px-4 py-3 text-right font-semibold">Actions</th>
                     </tr>
@@ -2100,6 +2114,20 @@ export function Settings() {
                         </td>
                         <td className="px-4 py-3">
                           <select
+                            value={getUserAppProfile(user)}
+                            onChange={(event) => updateUser(user.id, { appProfile: event.target.value as AppProfile })}
+                            className="w-48 rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
+                          >
+                            {APP_PROFILE_OPTIONS.map((profile) => (
+                              <option key={profile.value} value={profile.value}>{profile.label}</option>
+                            ))}
+                          </select>
+                          <p className="mt-1 max-w-48 whitespace-normal text-[10px] leading-4 text-slate-400">
+                            {APP_PROFILE_OPTIONS.find((profile) => profile.value === getUserAppProfile(user))?.description}
+                          </p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
                             value={user.siteId}
                             onChange={(event) => updateUser(user.id, { siteId: event.target.value })}
                             className="w-40 rounded-md border-0 bg-transparent px-2 py-1 text-sm text-slate-600 ring-1 ring-slate-300 focus:ring-orange-500 dark:text-slate-300 dark:ring-slate-700"
@@ -2113,7 +2141,7 @@ export function Settings() {
                           <div className="flex justify-end gap-2">
                             <button
                               type="button"
-                              onClick={() => approveUser(user.id, user.role, user.siteId)}
+                              onClick={() => approveUser(user.id, user.role, user.siteId, user.appProfile)}
                               className="inline-flex items-center gap-1 rounded-md border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/30 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
                             >
                               <UserCheck className="h-3.5 w-3.5" />
