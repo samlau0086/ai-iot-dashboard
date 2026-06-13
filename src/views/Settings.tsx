@@ -161,6 +161,8 @@ type HttpPushChannel = {
   name: string;
   enabled: boolean;
   token: string;
+  siteIds?: string[];
+  deviceIds?: string[];
 };
 
 type MqttChannel = {
@@ -171,6 +173,8 @@ type MqttChannel = {
   username: string;
   password?: string;
   topics: string[] | string;
+  siteIds?: string[];
+  deviceIds?: string[];
 };
 
 type MqttStatus = {
@@ -843,6 +847,8 @@ export function Settings() {
         name: `HTTP Push ${current.length + 1}`,
         enabled: true,
         token: Math.random().toString(36).slice(2, 12),
+        siteIds: [],
+        deviceIds: [],
       },
     ]);
   };
@@ -858,6 +864,8 @@ export function Settings() {
         username: '',
         password: '',
         topics: 'devices/+/telemetry',
+        siteIds: [],
+        deviceIds: [],
       },
     ]);
   };
@@ -1402,6 +1410,28 @@ export function Settings() {
                       <code className="mt-1 block overflow-x-auto rounded bg-slate-100 px-3 py-2 text-xs text-slate-700 dark:bg-slate-900 dark:text-slate-300">
                         {`${window.location.origin}/api/telemetry/${channel.id}/${channel.token || '<token>'}`}
                       </code>
+                      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Allowed Site IDs</label>
+                          <input
+                            value={(channel.siteIds || []).join(', ')}
+                            onChange={(event) => setHttpPushChannels((current) => current.map((item) => item.id === channel.id ? { ...item, siteIds: splitCsv(event.target.value) } : item))}
+                            placeholder="factory-a, pump-station"
+                            className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700"
+                          />
+                          <p className="mt-1 text-xs text-slate-500">Empty means this HTTP channel can accept telemetry for every Site.</p>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Allowed Device IDs</label>
+                          <input
+                            value={(channel.deviceIds || []).join(', ')}
+                            onChange={(event) => setHttpPushChannels((current) => current.map((item) => item.id === channel.id ? { ...item, deviceIds: splitCsv(event.target.value) } : item))}
+                            placeholder="DEV-001, DEV-002"
+                            className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700"
+                          />
+                          <p className="mt-1 text-xs text-slate-500">Empty means this HTTP channel can accept telemetry for every Device.</p>
+                        </div>
+                      </div>
                     </div>
                   ))}
                   {httpPushChannels.length === 0 && (
@@ -1556,6 +1586,28 @@ export function Settings() {
                                   ))}
                               </div>
                             )}
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <div>
+                            <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Allowed Site IDs</label>
+                            <input
+                              value={(channel.siteIds || []).join(', ')}
+                              onChange={(event) => setMqttChannels((current) => current.map((item) => item.id === channel.id ? { ...item, siteIds: splitCsv(event.target.value) } : item))}
+                              placeholder="factory-a, pump-station"
+                              className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700"
+                            />
+                            <p className="mt-1 text-xs text-slate-500">Empty means this MQTT subscriber can write telemetry for every Site.</p>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">Allowed Device IDs</label>
+                            <input
+                              value={(channel.deviceIds || []).join(', ')}
+                              onChange={(event) => setMqttChannels((current) => current.map((item) => item.id === channel.id ? { ...item, deviceIds: splitCsv(event.target.value) } : item))}
+                              placeholder="DEV-001, DEV-002"
+                              className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700"
+                            />
+                            <p className="mt-1 text-xs text-slate-500">Empty means this MQTT subscriber can write telemetry for every Device.</p>
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap items-center gap-2">

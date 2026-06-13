@@ -30,7 +30,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 
 - [x] V1 Energy Monitoring MVP 核心闭环已完成：设备、总览、告警、基础报表、VPS + PM2 自动部署、真实数据入口。
 - [x] 后端持久化已切换到 PostgreSQL + pgvector，`app_state`、遥测消息、Workflow Webhook 事件等由后端保存。
-- [x] 已支持真实设备数据接入：HTTP Push、多 HTTP Channel、后端 MQTT Subscriber、设备专属 API Path。
+- [x] 已支持真实设备数据接入：HTTP Push、多 HTTP Channel、后端 MQTT Subscriber、设备专属 API Path，并支持通道级 Site / Device 范围限制。
 - [x] Ingest Token 已改为后台用户级管理，支持 Generate / Revoke / Copy、用途 Scope、Site / Device 范围限制。
 - [x] Mock 告警和能耗数据已由设备 metrics 派生，减少前端固定假数据依赖。
 - [x] 总览中心 Widget 已支持绑定设备与 metric，并支持单位、精度、阈值、颜色规则配置。
@@ -538,6 +538,15 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 项目已提供真实设备数据接入入口。推荐方式是网关通过 HTTP 主动 POST 遥测数据到 Dashboard 后端；也可以让 Dashboard 后端连接外部 MQTT Broker 并订阅 Topic。前端统一只读取 Dashboard 后端的 `/api/telemetry` 缓冲区。
 
 同一种数据源类型支持配置多条通道。可以在后台 **Settings -> Data Sources** 中新增多个 HTTP Push endpoint 或多个 MQTT Subscriber，例如不同厂区、不同网关、不同客户站点各用独立通道。配置会保存到 PostgreSQL 的 `app_state` 表；未配置 `DATABASE_URL` 的本地演示环境才会回退到服务器本地 `runtime-config.json`。
+
+每条 HTTP Push Channel / MQTT Subscriber 都可以配置 `Allowed Site IDs` 和 `Allowed Device IDs`：
+
+- 留空表示该通道不限制 Site / Device。
+- 填写后，通道只会写入对应 Site / Device 的遥测数据。
+- HTTP Push 收到超出范围的 payload 会返回 `403`。
+- MQTT Subscriber 收到超出范围的消息会拒绝写入，并在连接状态中累计 `Rejected` 计数。
+
+生产环境建议按网关、客户、厂区或项目拆分通道，并把每条通道限制到它实际负责的数据范围。
 
 ### Device Metrics Mapping
 

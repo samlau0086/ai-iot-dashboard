@@ -448,6 +448,8 @@ const sanitizeHttpChannel = (channel) => ({
   name: String(channel.name || 'HTTP Push'),
   enabled: channel.enabled !== false,
   token: String(channel.token || ''),
+  siteIds: splitList(channel.siteIds),
+  deviceIds: splitList(channel.deviceIds),
 });
 
 const sanitizeMqttChannel = (channel, existing = null) => ({
@@ -460,6 +462,8 @@ const sanitizeMqttChannel = (channel, existing = null) => ({
     ? String(existing?.password || '')
     : String(channel.password),
   topics: splitTopics(channel.topics),
+  siteIds: splitList(channel.siteIds),
+  deviceIds: splitList(channel.deviceIds),
 });
 
 const publicMqttChannel = (channel) => ({
@@ -469,6 +473,8 @@ const publicMqttChannel = (channel) => ({
   brokerUrl: channel.brokerUrl,
   username: channel.username,
   topics: channel.topics,
+  siteIds: splitList(channel.siteIds),
+  deviceIds: splitList(channel.deviceIds),
 });
 
 const createIngestToken = () => `iot_${crypto.randomBytes(24).toString('hex')}`;
@@ -881,6 +887,45 @@ const applyDeviceReceiveTemplate = (message, device) => {
     ...resolved,
     device_id: resolved.device_id || resolved.deviceId || resolved.id || message.device_id || message.deviceId || message.id || device?.config?.externalDeviceId || device?.id,
     mqtt_topic: message.mqtt_topic || message.topic,
+  };
+};
+
+const getTelemetryMessageContext = async (message) => {
+  if (!message || typeof message !== 'object') return {};
+  const device = await findDashboardDeviceForTelemetry(message);
+  const deviceId = message.device_id || message.deviceId || message.id || device?.config?.externalDeviceId || device?.id;
+  return {
+    device,
+    deviceId: device?.id || deviceId || '',
+    siteId: message.site_id || message.siteId || device?.siteId || '',
+  };
+};
+
+const dataSourceChannelAllowsMessage = async (channel, message) => {
+  const siteIds = splitList(channel?.siteIds);
+  const deviceIds = splitList(channel?.deviceIds);
+  if (siteIds.length === 0 && deviceIds.length === 0) return true;
+
+  const context = await getTelemetryMessageContext(message);
+  const contextDeviceId = String(context.deviceId || '').trim();
+  const contextSiteId = String(context.siteId || '').trim();
+  const deviceAllowed = deviceIds.length === 0 || (contextDeviceId && deviceIds.includes(contextDeviceId));
+  const siteAllowed = siteIds.length === 0 || (contextSiteId && siteIds.includes(contextSiteId));
+  return Boolean(deviceAllowed && siteAllowed);
+};
+
+const filterTelemetryPayloadByChannel = async (channel, payload) => {
+  const messages = Array.isArray(payload) ? payload : [payload];
+  const allowed = [];
+  for (const message of messages) {
+    if (await dataSourceChannelAllowsMessage(channel, message)) {
+      allowed.push(message);
+    }
+  }
+  return {
+    payload: Array.isArray(payload) ? allowed : allowed[0],
+    allowedCount: allowed.length,
+    rejectedCount: Math.max(0, messages.length - allowed.length),
   };
 };
 
@@ -3733,24 +3778,30 @@ const handleMqttPublish = async (runtime, packet, flags) => {
 
   try {
     const payload = JSON.parse(payloadText);
-    const accepted = await ingestTelemetryPayload(
-      Array.isArray(payload)
-        ? payload.map((item) => ({...item, mqtt_topic: topic}))
-        : {...payload, mqtt_topic: topic},
-      `mqtt:${runtime.config.id}`
-    );
+    const payloadWithTopic = Array.isArray(payload)
+      ? payload.map((item) => ({...item, mqtt_topic: topic}))
+      : {...payload, mqtt_topic: topic};
+    const filtered = await filterTelemetryPayloadByChannel(runtime.config, payloadWithTopic);
+    const accepted = filtered.allowedCount > 0
+      ? await ingestTelemetryPayload(filtered.payload, `mqtt:${runtime.config.id}`)
+      : [];
     if (accepted.length > 0) {
       runtime.status = {
         ...runtime.status,
-        message: `Accepted ${accepted.length} telemetry message(s) from ${topic}`,
+        message: filtered.rejectedCount > 0
+          ? `Accepted ${accepted.length} telemetry message(s), rejected ${filtered.rejectedCount} outside channel scope`
+          : `Accepted ${accepted.length} telemetry message(s) from ${topic}`,
         lastMessageAt: now,
         acceptedCount: (runtime.status.acceptedCount || 0) + accepted.length,
+        rejectedCount: (runtime.status.rejectedCount || 0) + filtered.rejectedCount,
       };
     } else {
       runtime.status = {
         ...runtime.status,
-        message: `MQTT payload on ${topic} did not include a device id and numeric metrics`,
-        rejectedCount: (runtime.status.rejectedCount || 0) + 1,
+        message: filtered.rejectedCount > 0
+          ? `MQTT payload on ${topic} was outside this subscriber scope`
+          : `MQTT payload on ${topic} did not include a device id and numeric metrics`,
+        rejectedCount: (runtime.status.rejectedCount || 0) + Math.max(1, filtered.rejectedCount),
       };
     }
   } catch (error) {
@@ -4391,8 +4442,14 @@ app.post('/api/telemetry/:channelId/:token', async (req, res) => {
       return;
     }
 
-    const accepted = await ingestTelemetryPayload(req.body, `http:${channel.id}`);
-    res.status(202).json({accepted: accepted.length});
+    const filtered = await filterTelemetryPayloadByChannel(channel, req.body);
+    if (filtered.allowedCount === 0 && filtered.rejectedCount > 0) {
+      res.status(403).json({error: 'telemetry target is outside this HTTP channel scope', accepted: 0, rejected: filtered.rejectedCount});
+      return;
+    }
+
+    const accepted = await ingestTelemetryPayload(filtered.payload, `http:${channel.id}`);
+    res.status(202).json({accepted: accepted.length, rejected: filtered.rejectedCount});
   } catch (error) {
     res.status(500).json({error: error.message});
   }
