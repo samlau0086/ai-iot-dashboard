@@ -166,8 +166,13 @@ export interface ChartConfig {
   title: string;
   type: 'bar' | 'pie' | 'line';
   dataSource: 'energy' | 'devices' | 'alerts' | 'solar' | 'coldStorage' | 'waterPump' | 'airCompressor';
+  siteId?: string;
   deviceIds?: string[];
   metricKey?: string;
+  unit?: string;
+  precision?: number;
+  from?: string;
+  to?: string;
 }
 
 export type OverviewKpiKey =
