@@ -10,6 +10,7 @@ import { Link } from 'react-router-dom';
 import type { Device } from '../types';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
+import { getUserAppProfile } from '../lib/featureAccess';
 
 const getDeviceKeyMetric = (device: Device) => {
   const metrics = device.metrics || {};
@@ -45,38 +46,50 @@ const qualityDot = (state: string) => (
 );
 
 export function Devices() {
-  const { language, devices: storedDevices, sites, activeSiteId, setActiveSite } = useAppStore();
+  const { language, devices: storedDevices, sites, activeSiteId, setActiveSite, currentUser } = useAppStore();
   const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
+  const isSimpleProfile = getUserAppProfile(currentUser) === 'simple';
+  const userSiteId = currentUser?.siteId || activeSiteId || 'factory-a';
 
   const [activeView, setActiveView] = useState<'list' | 'form'>('list');
   const [editingDeviceId, setEditingDeviceId] = useState<string | undefined>(undefined);
   const [deletingDeviceId, setDeletingDeviceId] = useState<string | null>(null);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
-  const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || 'All');
+  const [selectedSiteId, setSelectedSiteId] = useState<string>(isSimpleProfile ? userSiteId : activeSiteId || 'All');
   const [selectedTag, setSelectedTag] = useState<string>('All');
 
-  const siteOptions = [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants' }, ...sites];
+  const userSiteOption = sites.find((site) => site.id === userSiteId) || { id: userSiteId, name: userSiteId, tenantName: 'Assigned Site' };
+  const siteOptions = isSimpleProfile
+    ? [userSiteOption]
+    : [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants' }, ...sites];
+  const effectiveSiteId = isSimpleProfile ? userSiteId : selectedSiteId;
   const siteScopedDevices = devices.filter((device) => (
-    selectedSiteId === 'All'
-    || device.siteId === selectedSiteId
-    || sites.find((site) => site.id === selectedSiteId)?.tags?.some((tag) => device.tags?.includes(tag))
+    effectiveSiteId === 'All'
+    || device.siteId === effectiveSiteId
+    || sites.find((site) => site.id === effectiveSiteId)?.tags?.some((tag) => device.tags?.includes(tag))
   ));
   const uniqueTags = ['All', ...Array.from(new Set(siteScopedDevices.flatMap(d => d.tags || [])))].filter(Boolean);
   const filteredDevices = siteScopedDevices.filter(d => selectedTag === 'All' || d.tags?.includes(selectedTag));
 
   const handleSiteSelect = (siteId: string) => {
+    if (isSimpleProfile) return;
     setSelectedSiteId(siteId);
     setSelectedTag('All');
     if (siteId !== 'All') setActiveSite(siteId);
   };
 
   useEffect(() => {
+    if (isSimpleProfile && selectedSiteId !== userSiteId) {
+      setSelectedSiteId(userSiteId);
+      setSelectedTag('All');
+      return;
+    }
     if (!activeSiteId || selectedSiteId === 'All' || selectedSiteId === activeSiteId) return;
 
     setSelectedSiteId(activeSiteId);
     setSelectedTag('All');
-  }, [activeSiteId, selectedSiteId]);
+  }, [activeSiteId, isSimpleProfile, selectedSiteId, userSiteId]);
 
   const handleCreate = () => {
     setEditingDeviceId(undefined);

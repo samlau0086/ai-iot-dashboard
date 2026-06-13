@@ -10,6 +10,7 @@ import { CONTROL_ICON_OPTIONS, buildControlParameters, buildControlStatePatch, g
 import { confirmDelete } from '../lib/confirm';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
+import { getUserAppProfile } from '../lib/featureAccess';
 import {
   STANDARD_METRIC_OPTIONS,
   applyMetricMappingsToMetrics,
@@ -112,6 +113,9 @@ export function DeviceDetails() {
 
   const storedDevice = storedDevices.find(d => d.id === id);
   const device = devices.find(d => d.id === id);
+  const appProfile = getUserAppProfile(currentUser);
+  const isSimpleProfile = appProfile === 'simple';
+  const isOutsideSimpleSite = Boolean(isSimpleProfile && currentUser?.siteId && device?.siteId && device.siteId !== currentUser.siteId);
   const [isEditing, setIsEditing] = useState(false);
 
   const [controlValues, setControlValues] = useState<Record<string, any>>({});
@@ -132,7 +136,8 @@ export function DeviceDetails() {
   const [dataSourcesSnapshot, setDataSourcesSnapshot] = useState<DataSourceSnapshot | null>(null);
   const [diagnosticsMessage, setDiagnosticsMessage] = useState('');
   const controlDefinitions = getDeviceControlDefinitions(device);
-  const canControl = currentUser?.role !== 'Demo' && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
+  const canEditDevice = currentUser?.role !== 'Demo' && ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || '');
+  const canControl = currentUser?.role !== 'Demo' && (isSimpleProfile || ['Owner', 'Admin', 'Engineer', 'Operator'].includes(currentUser?.role || ''));
 
   useEffect(() => {
     if (!device) return;
@@ -146,6 +151,12 @@ export function DeviceDetails() {
   }, [device?.id]);
 
   const queryMetricLogs = async () => {
+    if (isSimpleProfile) {
+      setMetricLogs([]);
+      setMetricLogsError('');
+      setMetricLogsLoading(false);
+      return;
+    }
     const targetDevice = storedDevice || device;
     if (!targetDevice) return;
 
@@ -183,8 +194,14 @@ export function DeviceDetails() {
   };
 
   useEffect(() => {
+    if (isSimpleProfile) {
+      setMetricLogs([]);
+      setMetricLogsError('');
+      setMetricLogsLoading(false);
+      return;
+    }
     queryMetricLogs();
-  }, [storedDevice?.id, storedDevice?.config?.externalDeviceId, metricLogMetric, metricLogLimit]);
+  }, [isSimpleProfile, storedDevice?.id, storedDevice?.config?.externalDeviceId, metricLogMetric, metricLogLimit]);
 
   useEffect(() => {
     setMetricMappingsDraft(getMetricMappings(storedDevice || device));
@@ -192,6 +209,10 @@ export function DeviceDetails() {
   }, [storedDevice?.id, device?.id]);
 
   useEffect(() => {
+    if (isSimpleProfile) {
+      setDataSourcesSnapshot(null);
+      return;
+    }
     let cancelled = false;
     const loadDataSources = async () => {
       try {
@@ -208,7 +229,7 @@ export function DeviceDetails() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [isSimpleProfile]);
 
   const metricLogOptions = Array.from(new Set([
     ...Object.keys(storedDevice?.metrics || {}),
@@ -231,7 +252,7 @@ export function DeviceDetails() {
     ))
   )).sort();
 
-  if (!device) {
+  if (!device || isOutsideSimpleSite) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-slate-500">
         <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Device Not Found</h2>
@@ -706,6 +727,259 @@ export function DeviceDetails() {
       </div>
     );
   };
+
+  const renderSimpleControlCard = (control: DeviceControlDefinition) => {
+    const Icon = control.icon || Play;
+    const currentValue = controlValues[control.id] ?? control.defaultValue ?? '';
+    const isSubmitting = submittingControlId === control.id;
+    const isDisabled = !canControl || isSubmitting;
+
+    return (
+      <div key={control.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-base font-semibold text-slate-900 dark:text-white">{control.label}</p>
+            <p className="mt-1 text-sm leading-relaxed text-slate-500 dark:text-slate-400">{control.description}</p>
+          </div>
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-orange-50 text-orange-600 ring-1 ring-orange-100 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/20">
+            <Icon className="h-5 w-5" />
+          </div>
+        </div>
+
+        {control.valueType === 'toggle' && (
+          <button
+            type="button"
+            disabled={isDisabled}
+            onClick={() => {
+              const nextValue = !Boolean(controlValues[control.id]);
+              const nextControlValues = { ...controlValues, [control.id]: nextValue };
+              setControlValues(nextControlValues);
+              submitDeviceControl(control.id, nextControlValues);
+            }}
+            className={cn(
+              'relative mt-5 flex h-16 w-full items-center overflow-hidden rounded-full border-2 px-2 text-lg font-black tracking-wide transition-all disabled:cursor-not-allowed disabled:opacity-60',
+              Boolean(controlValues[control.id])
+                ? 'justify-start border-slate-950 bg-slate-950 text-white dark:border-orange-500 dark:bg-orange-600'
+                : 'justify-end border-slate-950 bg-white text-slate-950 dark:border-slate-300 dark:bg-slate-950 dark:text-white'
+            )}
+          >
+            <span className="relative z-10 px-5">{Boolean(controlValues[control.id]) ? 'ON' : 'OFF'}</span>
+            <span
+              className={cn(
+                'absolute h-12 w-12 rounded-full shadow transition-all',
+                Boolean(controlValues[control.id])
+                  ? 'left-2 bg-white'
+                  : 'right-2 bg-slate-950 dark:bg-white'
+              )}
+            />
+          </button>
+        )}
+
+        {control.valueType === 'select' && (
+          <select
+            value={currentValue}
+            onChange={(event) => updateControl(control.id, event.target.value)}
+            className="mt-5 h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+          >
+            {control.options?.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        )}
+
+        {(control.valueType === 'range' || control.valueType === 'slider') && (
+          <div className="mt-5">
+            <div className="mb-3 flex items-center justify-between text-xs text-slate-500">
+              <span>{control.min ?? 0}</span>
+              <span className="rounded-full bg-orange-50 px-3 py-1 font-mono text-sm font-semibold text-orange-700 dark:bg-orange-500/10 dark:text-orange-300">
+                {currentValue}{control.unit}
+              </span>
+              <span>{control.max ?? 100}</span>
+            </div>
+            <input
+              type="range"
+              min={control.min ?? 0}
+              max={control.max ?? 100}
+              step={control.step ?? 1}
+              value={currentValue}
+              onChange={(event) => updateControl(control.id, Number(event.target.value))}
+              className="h-3 w-full accent-orange-600"
+            />
+          </div>
+        )}
+
+        {control.valueType === 'number' && (
+          <div className="mt-5 flex h-12 overflow-hidden rounded-xl border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-950">
+            <input
+              type="number"
+              min={control.min}
+              max={control.max}
+              step={control.step ?? 1}
+              value={currentValue}
+              onChange={(event) => updateControl(control.id, Number(event.target.value))}
+              className="min-w-0 flex-1 border-0 bg-transparent px-4 text-base text-slate-900 focus:ring-0 dark:text-white"
+            />
+            {control.unit && <span className="flex items-center px-4 text-sm text-slate-500">{control.unit}</span>}
+          </div>
+        )}
+
+        {control.valueType === 'text' && (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <input
+              value={parameterNames[control.id] || ''}
+              onChange={(event) => setParameterNames((current) => ({ ...current, [control.id]: event.target.value }))}
+              placeholder="parameter"
+              className="h-12 rounded-xl border border-slate-300 bg-white px-4 text-base text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+            />
+            <input
+              value={currentValue}
+              onChange={(event) => updateControl(control.id, event.target.value)}
+              placeholder="value"
+              className="h-12 rounded-xl border border-slate-300 bg-white px-4 text-base text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+            />
+          </div>
+        )}
+
+        {control.valueType === 'parameter_group' && (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            {control.fields?.map((field) => (
+              <label key={field.key} className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">{field.label}</span>
+                {field.valueType === 'select' ? (
+                  <select
+                    value={controlValues[`${control.id}.${field.key}`] ?? field.defaultValue ?? ''}
+                    onChange={(event) => updateControl(`${control.id}.${field.key}`, event.target.value)}
+                    className="h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                  >
+                    {field.options?.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="flex h-12 overflow-hidden rounded-xl border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-950">
+                    <input
+                      type={field.valueType === 'number' ? 'number' : 'text'}
+                      value={controlValues[`${control.id}.${field.key}`] ?? field.defaultValue ?? ''}
+                      onChange={(event) => updateControl(`${control.id}.${field.key}`, field.valueType === 'number' ? Number(event.target.value) : event.target.value)}
+                      className="min-w-0 flex-1 border-0 bg-transparent px-4 text-base text-slate-900 focus:ring-0 dark:text-white"
+                    />
+                    {field.unit && <span className="flex items-center px-3 text-sm text-slate-500">{field.unit}</span>}
+                  </div>
+                )}
+              </label>
+            ))}
+          </div>
+        )}
+
+        {control.valueType !== 'toggle' && (
+          <button
+            type="button"
+            onClick={() => submitDeviceControl(control.id)}
+            disabled={isDisabled}
+            className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
+          >
+            <Play className="h-4 w-4" />
+            {isSubmitting ? 'Sending...' : 'Send Command'}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  if (isSimpleProfile) {
+    const hasLiveMetrics = Object.keys(device.metrics || {}).length > 0;
+    const visiblePrimaryMetrics = primaryMetrics.length
+      ? primaryMetrics
+      : Object.keys(device.metrics || {}).slice(0, 4).map((key) => ({ key, label: getMetricLabel(device, key), icon: Activity }));
+
+    return (
+      <div className="mx-auto max-w-4xl space-y-5 pb-10">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => navigate((location.state as { from?: string } | null)?.from || '/devices')}
+            className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:text-orange-600 dark:border-slate-800 dark:bg-[#1c2128] dark:text-slate-300"
+            aria-label="Back"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Device</p>
+            <h1 className="truncate text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{device.name}</h1>
+          </div>
+          {canEditDevice && (
+            <button
+              type="button"
+              onClick={() => setIsEditing(true)}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:text-orange-600 dark:border-slate-700 dark:bg-[#1c2128] dark:text-slate-200"
+            >
+              <Edit2 className="h-4 w-4" />
+              Edit
+            </button>
+          )}
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-orange-50 text-orange-600 ring-1 ring-orange-100 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/20">
+              <IconComp className="h-10 w-10" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={cn('inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold uppercase', qualityClassName)}>
+                  <span className={cn('h-2 w-2 rounded-full', dataQuality.state === 'online' ? 'bg-emerald-500' : dataQuality.state === 'warning' ? 'bg-amber-500' : dataQuality.state === 'stale' ? 'bg-orange-500' : 'bg-red-500')} />
+                  {dataQuality.label}
+                </span>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+                  {(t.devices.types as any)[device.type] || device.type}
+                </span>
+              </div>
+              <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">ID: {device.id}</p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Last seen: {formatDeviceAge(dataQuality.ageMs)}</p>
+            </div>
+          </div>
+        </div>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">Status</h2>
+            <span className="text-xs text-slate-500">{hasLiveMetrics ? `${Object.keys(device.metrics || {}).length} metrics` : 'No live data'}</span>
+          </div>
+          {hasLiveMetrics ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {visiblePrimaryMetrics.map(renderMetricCard)}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-[#1c2128]">
+              No live telemetry has been received for this device yet.
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-base font-bold text-slate-900 dark:text-white">Controls</h2>
+          {!canControl && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+              Current role can view controls only.
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {controlDefinitions.map(renderSimpleControlCard)}
+            {controlDefinitions.length === 0 && (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-[#1c2128] sm:col-span-2">
+                No control actions configured for this device.
+              </div>
+            )}
+          </div>
+          {controlMessage && (
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-[#1c2128] dark:text-slate-300">
+              {controlMessage}
+            </div>
+          )}
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
