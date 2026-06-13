@@ -11,6 +11,12 @@ import type { Device } from '../types';
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { formatDeviceAge, getDeviceDataQuality } from '../lib/deviceStatus';
 import { getUserAppProfile } from '../lib/featureAccess';
+import {
+  buildControlParameters,
+  buildControlStatePatch,
+  getDeviceControlDefinitions,
+  type DeviceControlDefinition,
+} from '../lib/deviceControls';
 
 const getDeviceKeyMetric = (device: Device) => {
   const metrics = device.metrics || {};
@@ -47,7 +53,7 @@ const qualityDot = (state: string) => (
 
 export function Devices() {
   const navigate = useNavigate();
-  const { language, devices: storedDevices, sites, activeSiteId, setActiveSite, currentUser } = useAppStore();
+  const { language, devices: storedDevices, sites, activeSiteId, setActiveSite, updateDevice, currentUser } = useAppStore();
   const devices = useRuntimeDevices(storedDevices);
   const t = translations[language];
   const isSimpleProfile = getUserAppProfile(currentUser) === 'simple';
@@ -60,6 +66,8 @@ export function Devices() {
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [selectedSiteId, setSelectedSiteId] = useState<string>(isSimpleProfile ? userSiteId : activeSiteId || 'All');
   const [selectedTag, setSelectedTag] = useState<string>('All');
+  const [submittingQuickAction, setSubmittingQuickAction] = useState('');
+  const [quickActionMessages, setQuickActionMessages] = useState<Record<string, string>>({});
 
   const userSiteOption = sites.find((site) => site.id === userSiteId) || { id: userSiteId, name: userSiteId, tenantName: 'Assigned Site' };
   const siteOptions = isSimpleProfile
@@ -118,6 +126,81 @@ export function Devices() {
     setDeviceConfirmMode('remove');
     setDeletingDeviceId(id);
     setOpenDropdown(null);
+  };
+
+  const getPrimaryControl = (device: Device) => {
+    const controls = getDeviceControlDefinitions(device);
+    return controls.find((control) => control.valueType === 'toggle')
+      || controls.find((control) => control.valueType === 'none' && /open|unlock|start|power_on|enable/i.test(`${control.id} ${control.label}`))
+      || controls.find((control) => control.valueType === 'none')
+      || null;
+  };
+
+  const getQuickActionLabel = (device: Device, control: DeviceControlDefinition) => {
+    if (control.valueType !== 'toggle') return control.label;
+    const currentValue = Boolean(device.config?.controlState?.[control.id] ?? control.defaultValue ?? false);
+    if (/lock|door|open|unlock/i.test(`${control.id} ${control.label}`)) return currentValue ? 'Lock' : 'Unlock';
+    if (/power|start|enable/i.test(`${control.id} ${control.label}`)) return currentValue ? 'Turn Off' : 'Turn On';
+    return currentValue ? 'Disable' : 'Enable';
+  };
+
+  const submitQuickAction = async (event: React.MouseEvent, device: Device, control: DeviceControlDefinition) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (currentUser?.role === 'Demo') {
+      setQuickActionMessages((current) => ({ ...current, [device.id]: 'Demo account cannot affect devices.' }));
+      return;
+    }
+
+    const actionKey = `${device.id}:${control.id}`;
+    setSubmittingQuickAction(actionKey);
+    setQuickActionMessages((current) => ({ ...current, [device.id]: '' }));
+
+    const currentControlState = device.config?.controlState || {};
+    const nextControlValues = {
+      ...currentControlState,
+      [control.id]: control.valueType === 'toggle'
+        ? !Boolean(currentControlState[control.id] ?? control.defaultValue ?? false)
+        : currentControlState[control.id] ?? control.defaultValue ?? '',
+    };
+    const parameters = buildControlParameters(control, nextControlValues);
+
+    try {
+      const response = await fetch('/api/device-commands', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          deviceId: device.id,
+          command: control.id,
+          parameters,
+          requestedBy: currentUser?.name || currentUser?.email || 'Unknown user',
+          requestedByRole: currentUser?.role || 'Customer',
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setQuickActionMessages((current) => ({ ...current, [device.id]: payload.error || 'Command rejected.' }));
+        return;
+      }
+
+      updateDevice(device.id, {
+        config: {
+          ...(device.config || {}),
+          controlState: {
+            ...(device.config?.controlState || {}),
+            ...buildControlStatePatch(control, nextControlValues, parameters),
+          },
+        },
+      });
+      setQuickActionMessages((current) => ({
+        ...current,
+        [device.id]: `${payload.command?.status || 'queued'}: ${payload.command?.result || 'Command recorded.'}`,
+      }));
+    } catch (error) {
+      setQuickActionMessages((current) => ({ ...current, [device.id]: 'Failed to submit command.' }));
+    } finally {
+      setSubmittingQuickAction('');
+    }
   };
 
   const closeForm = () => {
@@ -198,6 +281,9 @@ export function Devices() {
               const IconComp = getDeviceIcon(device.icon);
               const quality = qualityByDevice.get(device.id) || getDeviceDataQuality(device);
               const keyMetric = quality.hasLiveData ? getDeviceKeyMetric(device) : 'No Live Data';
+              const primaryControl = getPrimaryControl(device);
+              const primaryActionKey = primaryControl ? `${device.id}:${primaryControl.id}` : '';
+              const quickActionMessage = quickActionMessages[device.id];
 
               return (
                 <div
@@ -245,6 +331,29 @@ export function Devices() {
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
+                  {primaryControl && (
+                    <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
+                      <button
+                        type="button"
+                        onClick={(event) => submitQuickAction(event, device, primaryControl)}
+                        disabled={submittingQuickAction === primaryActionKey || currentUser?.role === 'Demo'}
+                        className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-orange-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
+                      >
+                        {submittingQuickAction === primaryActionKey ? 'Sending...' : getQuickActionLabel(device, primaryControl)}
+                      </button>
+                      <Link
+                        to={`/devices/${device.id}`}
+                        className="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                      >
+                        Details
+                      </Link>
+                    </div>
+                  )}
+                  {quickActionMessage && (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+                      {quickActionMessage}
+                    </div>
+                  )}
                 </div>
               );
             })}

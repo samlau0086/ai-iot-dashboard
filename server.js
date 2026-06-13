@@ -4588,7 +4588,7 @@ app.post('/api/device-commands/:commandId/ack', async (req, res) => {
 app.post('/api/device-commands', async (req, res) => {
   try {
     const payload = req.body || {};
-    const allowedRoles = new Set(['Owner', 'Admin', 'Engineer', 'Operator']);
+    const allowedRoles = new Set(['Owner', 'Admin', 'Engineer', 'Operator', 'Customer']);
     const requestedByRole = String(payload.requestedByRole || '');
 
     if (requestedByRole === 'Demo') {
