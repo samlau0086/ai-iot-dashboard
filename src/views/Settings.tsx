@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bell, Building2, CheckCircle2, Copy, Database, KeyRound, Package, Plus, Printer, QrCode, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi, X } from 'lucide-react';
+import { Bell, Building2, CheckCircle2, ClipboardList, Copy, Database, KeyRound, Package, Plus, Printer, QrCode, RefreshCw, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi, X } from 'lucide-react';
 import { useAppStore, type DeviceModelTemplate, type ManufacturedDevice, type NotificationChannel, type SiteTenant } from '../lib/store';
 import type { DeviceType } from '../types';
 import { translations } from '../lib/i18n';
@@ -20,6 +20,8 @@ const INGEST_TOKEN_SCOPE_OPTIONS = [
   { value: 'command:pending', label: 'Fetch Commands', description: 'Allow a device gateway to pull queued downstream commands.' },
   { value: 'command:ack', label: 'Ack Commands', description: 'Allow a device gateway to acknowledge command results.' },
 ];
+
+type SettingsTabId = 'general' | 'sites' | 'data' | 'tokens' | 'provisioning' | 'notifications' | 'audit' | 'users';
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const splitCsv = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
@@ -204,6 +206,21 @@ type IngestToken = {
   lastUsedSource?: string | null;
 };
 
+type AuditLog = {
+  id: string;
+  actorId?: string | null;
+  actorName?: string | null;
+  actorRole?: string | null;
+  action: string;
+  targetType?: string | null;
+  targetId?: string | null;
+  result: string;
+  ip?: string | null;
+  userAgent?: string | null;
+  details?: Record<string, unknown>;
+  createdAt: string;
+};
+
 export function Settings() {
   const {
     language,
@@ -242,7 +259,8 @@ export function Settings() {
   } = useAppStore();
   const t = translations[language];
   const isDemoUser = currentUser?.role === 'Demo';
-  const [activeTab, setActiveTab] = useState<'general' | 'sites' | 'data' | 'tokens' | 'provisioning' | 'notifications' | 'users'>('general');
+  const canViewAuditLogs = currentUser?.role === 'Owner' || currentUser?.role === 'Admin';
+  const [activeTab, setActiveTab] = useState<SettingsTabId>('general');
   const [httpPushChannels, setHttpPushChannels] = useState<HttpPushChannel[]>([]);
   const [mqttChannels, setMqttChannels] = useState<MqttChannel[]>([]);
   const [mqttStatuses, setMqttStatuses] = useState<Record<string, MqttStatus>>({});
@@ -255,6 +273,10 @@ export function Settings() {
   const [tokenDraftSiteIds, setTokenDraftSiteIds] = useState('');
   const [tokenDraftDeviceIds, setTokenDraftDeviceIds] = useState('');
   const [tokenMessage, setTokenMessage] = useState('');
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditFilters, setAuditFilters] = useState({ action: '', result: '', actorId: '', limit: '100' });
+  const [auditMessage, setAuditMessage] = useState('');
+  const [auditLoading, setAuditLoading] = useState(false);
   const [testingNotificationIds, setTestingNotificationIds] = useState<string[]>([]);
   const [channelDraft, setChannelDraft] = useState({
     type: 'email' as NotificationChannel['type'],
@@ -323,6 +345,7 @@ export function Settings() {
     { id: 'tokens', name: 'Ingest Tokens', icon: KeyRound },
     { id: 'provisioning', name: 'Provisioning', icon: Package },
     { id: 'notifications', name: t.settings.tabs.notifications, icon: Bell },
+    ...(canViewAuditLogs ? [{ id: 'audit' as const, name: 'Audit Logs', icon: ClipboardList }] : []),
     { id: 'users', name: t.settings.tabs.users, icon: Users },
   ];
 
@@ -330,6 +353,29 @@ export function Settings() {
   const normalizeTopics = (topics: MqttChannel['topics']) => Array.isArray(topics)
     ? topics.map((topic) => topic.trim()).filter(Boolean)
     : topics.split(',').map((topic) => topic.trim()).filter(Boolean);
+
+  const loadAuditLogs = async () => {
+    if (!canViewAuditLogs) return;
+    setAuditLoading(true);
+    setAuditMessage('');
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', String(Math.max(1, Math.min(Number(auditFilters.limit || 100), 500))));
+      if (auditFilters.action.trim()) params.set('action', auditFilters.action.trim());
+      if (auditFilters.result.trim()) params.set('result', auditFilters.result.trim());
+      if (auditFilters.actorId.trim()) params.set('actorId', auditFilters.actorId.trim());
+      const response = await fetch(`/api/audit-logs?${params.toString()}`, { headers: apiActorHeaders(currentUser) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Failed to load audit logs.');
+      setAuditLogs(Array.isArray(payload.logs) ? payload.logs : []);
+      setAuditMessage(`Loaded ${Array.isArray(payload.logs) ? payload.logs.length : 0} audit logs.`);
+    } catch (error) {
+      setAuditLogs([]);
+      setAuditMessage(error instanceof Error ? error.message : 'Failed to load audit logs.');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
 
   useEffect(() => {
     const loadDataSources = async () => {
@@ -366,6 +412,16 @@ export function Settings() {
     loadDataSources();
     loadIngestTokens();
   }, []);
+
+  useEffect(() => {
+    if (!canViewAuditLogs && activeTab === 'audit') setActiveTab('general');
+  }, [activeTab, canViewAuditLogs]);
+
+  useEffect(() => {
+    if (activeTab === 'audit') {
+      void loadAuditLogs();
+    }
+  }, [activeTab, currentUser?.id]);
 
   useEffect(() => {
     setGeneralDraft({
@@ -1075,7 +1131,7 @@ export function Settings() {
             {tabs.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as 'general' | 'sites' | 'data' | 'tokens' | 'provisioning' | 'notifications' | 'users')}
+                onClick={() => setActiveTab(tab.id as SettingsTabId)}
                 className={cn(
                   activeTab === tab.id
                     ? 'border-orange-500 text-orange-600 dark:text-orange-500'
@@ -2244,6 +2300,147 @@ export function Settings() {
                       <tr>
                         <td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-500">
                           No notification channels configured yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'audit' && (
+            <div className="space-y-6">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 className="text-base font-semibold leading-7 text-slate-900 dark:text-white">
+                    Audit Logs
+                  </h2>
+                  <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    Review sensitive backend operations such as login, token changes, data source updates, access changes and device commands.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadAuditLogs()}
+                  disabled={auditLoading}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  <RefreshCw className={cn('h-4 w-4', auditLoading && 'animate-spin')} />
+                  Refresh
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 md:grid-cols-[1fr_160px_1fr_120px_auto]">
+                <input
+                  value={auditFilters.action}
+                  onChange={(event) => setAuditFilters((current) => ({ ...current, action: event.target.value }))}
+                  placeholder="Action, e.g. device_command.create"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <select
+                  value={auditFilters.result}
+                  onChange={(event) => setAuditFilters((current) => ({ ...current, result: event.target.value }))}
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                >
+                  <option value="">All results</option>
+                  <option value="success">success</option>
+                  <option value="failed">failed</option>
+                </select>
+                <input
+                  value={auditFilters.actorId}
+                  onChange={(event) => setAuditFilters((current) => ({ ...current, actorId: event.target.value }))}
+                  placeholder="Actor ID"
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={auditFilters.limit}
+                  onChange={(event) => setAuditFilters((current) => ({ ...current, limit: event.target.value }))}
+                  className="rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700"
+                />
+                <button
+                  type="button"
+                  onClick={() => void loadAuditLogs()}
+                  disabled={auditLoading}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Load
+                </button>
+              </div>
+
+              {auditMessage && (
+                <p className="text-sm text-slate-500 dark:text-slate-400">{auditMessage}</p>
+              )}
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Time</th>
+                      <th className="px-4 py-3 font-semibold">Actor</th>
+                      <th className="px-4 py-3 font-semibold">Action</th>
+                      <th className="px-4 py-3 font-semibold">Target</th>
+                      <th className="px-4 py-3 font-semibold">Result</th>
+                      <th className="px-4 py-3 font-semibold">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+                    {auditLogs.map((log) => {
+                      const detailsText = JSON.stringify(log.details || {}, null, 2);
+                      return (
+                        <tr key={log.id} className="align-top hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                          <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500">
+                            {log.createdAt ? new Date(log.createdAt).toLocaleString() : '-'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="font-medium text-slate-900 dark:text-white">{log.actorName || 'Unknown'}</div>
+                            <div className="font-mono text-[11px] text-slate-500">{log.actorRole || '-'} / {log.actorId || '-'}</div>
+                            {log.ip && <div className="font-mono text-[11px] text-slate-400">{log.ip}</div>}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-200">{log.action}</td>
+                          <td className="px-4 py-3">
+                            <div className="text-xs text-slate-500">{log.targetType || '-'}</div>
+                            <div className="font-mono text-xs text-slate-700 dark:text-slate-200">{log.targetId || '-'}</div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={cn(
+                              'inline-flex rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset',
+                              log.result === 'success'
+                                ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300'
+                                : 'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300'
+                            )}>
+                              {log.result}
+                            </span>
+                          </td>
+                          <td className="min-w-80 px-4 py-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-slate-500">JSON</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void navigator.clipboard?.writeText(detailsText);
+                                  notifySuccess('Audit details copied.');
+                                }}
+                                className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                Copy
+                              </button>
+                            </div>
+                            <pre className="mt-2 max-h-28 overflow-auto rounded-md bg-slate-950 p-3 font-mono text-[11px] leading-5 text-slate-200">
+                              {detailsText}
+                            </pre>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {auditLogs.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">
+                          {auditLoading ? 'Loading audit logs...' : 'No audit logs found.'}
                         </td>
                       </tr>
                     )}

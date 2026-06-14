@@ -27,12 +27,14 @@ const workflowAlertLastSent = new Map();
 const deviceControlCommands = [];
 const accessEvents = [];
 const systemNotifications = [];
+const auditLogs = [];
 const realtimeClients = new Set();
 const maxTelemetryMessages = Number(process.env.IOT_TELEMETRY_BUFFER_SIZE || 500);
 const maxWorkflowRuns = Number(process.env.WORKFLOW_RUN_BUFFER_SIZE || 500);
 const maxDeviceControlCommands = Number(process.env.DEVICE_CONTROL_BUFFER_SIZE || 500);
 const maxAccessEvents = Number(process.env.ACCESS_EVENT_BUFFER_SIZE || 500);
 const maxSystemNotifications = Number(process.env.SYSTEM_NOTIFICATION_BUFFER_SIZE || 500);
+const maxAuditLogs = Number(process.env.AUDIT_LOG_BUFFER_SIZE || 1000);
 const authFailedLoginWindowMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_WINDOW_MS || 10 * 60 * 1000));
 const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LOGIN_MAX_ATTEMPTS || 5));
 const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
@@ -137,6 +139,51 @@ const recordLoginFailure = (key) => {
 
 const clearLoginFailures = (key) => {
   authLoginFailures.delete(key);
+};
+
+const writeAuditLog = async (req, actor, action, targetType, targetId, result = 'success', details = {}) => {
+  const log = {
+    id: createId('audit'),
+    actorId: actor?.id || null,
+    actorName: actor?.name || null,
+    actorRole: actor?.role || null,
+    action,
+    targetType: targetType || null,
+    targetId: targetId || null,
+    result,
+    ip: req ? getRequestIp(req) : null,
+    userAgent: req?.get?.('user-agent') || null,
+    details: details && typeof details === 'object' ? details : {},
+    createdAt: new Date().toISOString(),
+  };
+
+  auditLogs.unshift(log);
+  if (auditLogs.length > maxAuditLogs) {
+    auditLogs.splice(maxAuditLogs);
+  }
+
+  if (db) {
+    await queryDb(
+      `INSERT INTO audit_logs (id, actor_id, actor_name, actor_role, action, target_type, target_id, result, ip, user_agent, details, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::timestamptz)`,
+      [
+        log.id,
+        log.actorId,
+        log.actorName,
+        log.actorRole,
+        log.action,
+        log.targetType,
+        log.targetId,
+        log.result,
+        log.ip,
+        log.userAgent,
+        JSON.stringify(log.details),
+        log.createdAt,
+      ]
+    );
+  }
+
+  return log;
 };
 
 const isHex = (value, length = null) => {
@@ -406,12 +453,30 @@ const initDatabase = async () => {
       created_at timestamptz NOT NULL
     )
   `);
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id text PRIMARY KEY,
+      actor_id text,
+      actor_name text,
+      actor_role text,
+      action text NOT NULL,
+      target_type text,
+      target_id text,
+      result text NOT NULL,
+      ip text,
+      user_agent text,
+      details jsonb NOT NULL,
+      created_at timestamptz NOT NULL
+    )
+  `);
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_device_received ON telemetry_messages (device_id, received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_received ON telemetry_messages (received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_webhook_events_received ON workflow_webhook_events (workflow_id, received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_started ON workflow_runs (workflow_id, started_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_device_control_commands_created ON device_control_commands (created_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_access_events_created ON access_events (created_at DESC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action, created_at DESC)');
 
   const dataSourceState = await getAppState('data_source_channels');
   if (dataSourceState) {
@@ -4223,6 +4288,7 @@ app.post('/api/auth/register', async (req, res) => {
       users: [...sanitizeUsersForStorage(Array.isArray(state.users) ? state.users : []), pendingUser],
     };
     await setAppState('dashboard_state', nextState);
+    await writeAuditLog(req, publicAuthUser(pendingUser), 'auth.register', 'user', pendingUser.id, 'success', {email});
     res.status(201).json({ok: true, message: 'Registration submitted. Please wait for administrator approval.', user: publicAuthUser(pendingUser)});
   } catch (error) {
     res.status(500).json({ok: false, message: error.message});
@@ -4255,10 +4321,12 @@ app.post('/api/auth/login', async (req, res) => {
         res.status(429).json({ok: false, message: `Too many failed login attempts. Try again in ${retryAfterSeconds} seconds.`, retryAfterSeconds});
         return;
       }
+      await writeAuditLog(req, {id: null, name: email, role: null}, 'auth.login', 'user', email, 'failed', {reason: 'invalid_credentials'});
       res.status(401).json({ok: false, message: 'Invalid email or password.'});
       return;
     }
     if (user.status !== 'approved') {
+      await writeAuditLog(req, publicAuthUser(user), 'auth.login', 'user', user.id, 'failed', {reason: 'not_approved'});
       res.status(403).json({ok: false, message: 'Your account is waiting for approval.'});
       return;
     }
@@ -4269,6 +4337,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     clearLoginFailures(rateLimit.key);
+    await writeAuditLog(req, publicAuthUser(user), 'auth.login', 'user', user.id, 'success');
     res.status(200).json({
       ok: true,
       message: 'Signed in.',
@@ -4324,6 +4393,11 @@ app.post('/api/ingest-tokens', async (req, res) => {
     };
     ingestTokens = [token, ...ingestTokens];
     await saveIngestTokens();
+    await writeAuditLog(req, actor, 'ingest_token.create', 'ingest_token', token.id, 'success', {
+      scopes: token.scopes,
+      siteIds: token.siteIds,
+      deviceIds: token.deviceIds,
+    });
     res.status(201).json({token: publicIngestToken(token), tokens: ingestTokens.map(publicIngestToken)});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -4345,6 +4419,7 @@ app.post('/api/ingest-tokens/:tokenId/revoke', async (req, res) => {
       return;
     }
     await saveIngestTokens();
+    await writeAuditLog(req, await getApiActor(req), 'ingest_token.revoke', 'ingest_token', req.params.tokenId, 'success');
     res.status(200).json({tokens: ingestTokens.map(publicIngestToken)});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -4379,6 +4454,10 @@ app.post('/api/data-sources', async (req, res) => {
     }
 
     startMqttSubscribers();
+    await writeAuditLog(req, await getApiActor(req), 'data_sources.save', 'data_source', 'all', 'success', {
+      httpChannelCount: httpPushChannels.length,
+      mqttChannelCount: mqttChannels.length,
+    });
     res.status(200).json({
       httpPushChannels: httpPushChannels.map(sanitizeHttpChannel),
       mqttChannels: mqttChannels.map(publicMqttChannel),
@@ -4422,6 +4501,7 @@ app.post('/api/accesses', async (req, res) => {
     });
     const nextAccesses = [access, ...accesses.filter((item) => item.id !== access.id)];
     await patchAccessState({accesses: nextAccesses, accessCredentials});
+    await writeAuditLog(req, await getApiActor(req), 'access.create', 'access', access.id, 'success', {method: access.method});
     res.status(201).json({access, accesses: nextAccesses});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -4447,6 +4527,7 @@ app.put('/api/accesses/:accessId', async (req, res) => {
       return;
     }
     await patchAccessState({accesses: nextAccesses, accessCredentials});
+    await writeAuditLog(req, await getApiActor(req), 'access.update', 'access', req.params.accessId, 'success', {fields: Object.keys(patch)});
     res.status(200).json({accesses: nextAccesses});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -4460,6 +4541,7 @@ app.delete('/api/accesses/:accessId', async (req, res) => {
     const nextAccesses = accesses.filter((access) => access.id !== req.params.accessId);
     const nextCredentials = accessCredentials.filter((credential) => credential.accessId !== req.params.accessId);
     await patchAccessState({accesses: nextAccesses, accessCredentials: nextCredentials});
+    await writeAuditLog(req, await getApiActor(req), 'access.delete', 'access', req.params.accessId, 'success', {removedCredentialCount: accessCredentials.length - nextCredentials.length});
     res.status(200).json({accesses: nextAccesses, credentials: nextCredentials.map(publicAccessCredential)});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -4511,6 +4593,12 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
     };
     const nextCredentials = [credential, ...accessCredentials];
     await patchAccessState({accesses, accessCredentials: nextCredentials});
+    await writeAuditLog(req, await getApiActor(req), 'access_credential.create', 'access_credential', credential.id, 'success', {
+      accessId: access.id,
+      type,
+      groups: credential.groups,
+      maxUses,
+    });
     res.status(201).json({
       credential: publicAccessCredential(credential),
       credentials: nextCredentials.map(publicAccessCredential),
@@ -4570,6 +4658,7 @@ app.put('/api/access-credentials/:credentialId', async (req, res) => {
       return;
     }
     await patchAccessState({accesses, accessCredentials: nextCredentials});
+    await writeAuditLog(req, await getApiActor(req), 'access_credential.update', 'access_credential', req.params.credentialId, 'success', {fields: Object.keys(patch)});
     res.status(200).json({credentials: nextCredentials.map(publicAccessCredential)});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -4595,6 +4684,7 @@ app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
       nextCredentials = accessCredentials.map((item) => item.id === credential.id ? rotated.credential : item);
       await patchAccessState({accesses, accessCredentials: nextCredentials});
     }
+    await writeAuditLog(req, await getApiActor(req), 'access_credential.view_link', 'access_credential', credential.id, 'success', {type: rotated.credential.type});
     res.status(200).json({
       link: rotated.credential.type === 'nfc'
         ? createNfcDnaAccessLink(req, rotated.credential.token)
@@ -4622,6 +4712,7 @@ app.delete('/api/access-credentials/:credentialId', async (req, res) => {
         if (accessEvents[index].credentialId === req.params.credentialId) accessEvents.splice(index, 1);
       }
     }
+    await writeAuditLog(req, await getApiActor(req), 'access_credential.delete', 'access_credential', req.params.credentialId, 'success');
     res.status(200).json({credentials: nextCredentials.map(publicAccessCredential)});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -4715,6 +4806,7 @@ app.delete('/api/access-events', async (req, res) => {
       }
     }
 
+    await writeAuditLog(req, await getApiActor(req), 'access_events.clear', 'access_events', accessId || credentialId, 'success', {accessId, credentialId});
     res.status(200).json({ok: true});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -4751,6 +4843,10 @@ app.post('/api/mqtt/config', async (req, res) => {
 
     startMqttSubscribers();
     const channel = mqttChannels[0];
+    await writeAuditLog(req, await getApiActor(req), 'mqtt_config.save', 'mqtt_channel', channel.id, 'success', {
+      enabled: channel.enabled,
+      topicCount: splitTopics(channel.topics).length,
+    });
     res.status(200).json({
       config: {
         enabled: channel.enabled,
@@ -5096,6 +5192,11 @@ app.post('/api/device-commands', async (req, res) => {
       source: 'control-center',
     });
 
+    await writeAuditLog(req, actor, 'device_command.create', 'device', payload.deviceId, command.status === 'rejected' ? 'failed' : 'success', {
+      command: payload.command,
+      commandId: command.id,
+      status: command.status,
+    });
     res.status(command.status === 'rejected' ? 404 : 202).json({command});
   } catch (error) {
     res.status(500).json({error: error.message});
@@ -5112,6 +5213,10 @@ app.post('/api/notification-channels/test', async (req, res) => {
     }
 
     const result = await testNotificationChannel(channel);
+    await writeAuditLog(req, await getApiActor(req), 'notification_channel.test', 'notification_channel', channel.id || channel.name || channel.type, result.ok ? 'success' : 'failed', {
+      type: channel.type,
+      message: result.message,
+    });
     res.status(200).json(result);
   } catch (error) {
     res.status(200).json({ok: false, message: error.message || 'Notification channel test failed.'});
@@ -5125,6 +5230,51 @@ app.get('/api/system-notifications', async (req, res) => {
     res.status(200).json({notifications: notifications.slice(0, limit)});
   } catch (error) {
     res.status(500).json({error: error.message, notifications: []});
+  }
+});
+
+app.get('/api/audit-logs', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin'], 'view audit logs'))) return;
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
+    const action = typeof req.query.action === 'string' ? req.query.action.trim() : '';
+    const resultFilter = typeof req.query.result === 'string' ? req.query.result.trim() : '';
+    const actorId = typeof req.query.actorId === 'string' ? req.query.actorId.trim() : '';
+
+    if (db) {
+      const values = [];
+      const where = [];
+      const addParam = (value) => {
+        values.push(value);
+        return `$${values.length}`;
+      };
+      if (action) where.push(`action = ${addParam(action)}`);
+      if (resultFilter) where.push(`result = ${addParam(resultFilter)}`);
+      if (actorId) where.push(`actor_id = ${addParam(actorId)}`);
+      const limitParam = addParam(limit);
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const queryResult = await queryDb(
+        `SELECT id, actor_id AS "actorId", actor_name AS "actorName", actor_role AS "actorRole",
+                action, target_type AS "targetType", target_id AS "targetId", result,
+                ip, user_agent AS "userAgent", details, created_at AS "createdAt"
+         FROM audit_logs
+         ${whereSql}
+         ORDER BY created_at DESC
+         LIMIT ${limitParam}`,
+        values
+      );
+      res.status(200).json({logs: queryResult.rows});
+      return;
+    }
+
+    const logs = auditLogs
+      .filter((log) => !action || log.action === action)
+      .filter((log) => !resultFilter || log.result === resultFilter)
+      .filter((log) => !actorId || log.actorId === actorId)
+      .slice(0, limit);
+    res.status(200).json({logs});
+  } catch (error) {
+    res.status(500).json({error: error.message, logs: []});
   }
 });
 
@@ -5192,6 +5342,11 @@ app.put('/api/state', async (req, res) => {
       });
     }
     await setAppState('dashboard_state', incomingState);
+    await writeAuditLog(req, await getApiActor(req), 'state.save', 'dashboard_state', 'dashboard_state', 'success', {
+      deviceCount: Array.isArray(incomingState.devices) ? incomingState.devices.length : undefined,
+      userCount: Array.isArray(incomingState.users) ? incomingState.users.length : undefined,
+      workflowCount: Array.isArray(incomingState.workflows) ? incomingState.workflows.length : undefined,
+    });
     res.status(200).json({ok: true});
   } catch (error) {
     res.status(500).json({error: error.message});

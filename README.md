@@ -205,7 +205,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 服务端 Session Token 基础鉴权：登录由后端签发 HMAC session token，敏感 API 校验 token 后再解析用户角色
 - [x] 密码哈希基础实现：新注册和后端状态保存会把明文密码转换为 `passwordHash`，旧明文账号登录后兼容迁移
 - [x] 登录失败限流：按 IP + Email 限制失败登录次数，默认 10 分钟内 5 次失败后锁定 15 分钟
-- [ ] 更完整的安全增强：刷新 Token、操作审计和服务端 Cookie Session
+- [x] 操作审计日志：登录、注册、Ingest Token、Data Source、Access Control、MQTT、设备控制、通知测试和状态保存等敏感操作会写入审计记录
+- [ ] 更完整的安全增强：刷新 Token、服务端 Cookie Session 和审计日志前端查询界面
 
 ### 技术演进方向
 
@@ -419,6 +420,16 @@ Workflow 编辑页支持 **Run Alerting**。可为单个 workflow 启用运行�
 
 控制命令提交前需要勾选二次确认。后端会通过 `POST /api/device-commands` 记录命令、设备、参数、操作者、角色、来源和状态，并可通过 `GET /api/device-commands` 查询控制日志。
 
+### 查看操作审计日志
+
+后端会记录登录、注册、Token、Data Source、Access Control、MQTT 配置、设备控制、通知测试和全局状态保存等敏感操作。Owner / Admin 可以通过后端接口查询最近审计记录：
+
+```text
+GET /api/audit-logs?limit=100&action=device_command.create&result=success
+```
+
+未配置 `DATABASE_URL` 的本地演示环境会暂存在内存缓冲区中，默认保留最近 `1000` 条，可通过 `AUDIT_LOG_BUFFER_SIZE` 调整；生产环境会写入 PostgreSQL 的 `audit_logs` 表。
+
 当前支持两种下行方式：
 
 1. **MQTT Command Topic**：如果设备配置了 `MQTT Command Topic`，或可从 `MQTT Topic` 推导出 `{telemetry-topic-without-/telemetry}/command`，并且后端 MQTT Subscriber 已连接，控制命令会被 publish 到该 topic，状态变为 `sent`。
@@ -502,6 +513,7 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 | `AUTH_FAILED_LOGIN_MAX_ATTEMPTS` | 登录失败限流阈值，默认 `5`。 |
 | `AUTH_FAILED_LOGIN_WINDOW_MS` | 登录失败统计窗口，默认 `600000`。 |
 | `AUTH_FAILED_LOGIN_LOCK_MS` | 达到阈值后的锁定时间，默认 `900000`。 |
+| `AUDIT_LOG_BUFFER_SIZE` | 未配置 PostgreSQL 时的内存审计日志保留条数，默认 `1000`。 |
 
 `VPS_DEPLOY_PATH` 指向的目录会由工作流自动执行 `mkdir -p` 创建，但 `VPS_USER` 必须有创建和写入权限。
 
