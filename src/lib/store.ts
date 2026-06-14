@@ -105,6 +105,44 @@ const DEFAULT_PARTNER_PROJECTS: PartnerProject[] = [
   },
 ];
 
+const DEFAULT_PARTNER_BILLING_PLANS: PartnerBillingPlan[] = [
+  {
+    id: 'plan-automation',
+    name: 'Automation',
+    code: 'automation',
+    billingCycle: 'monthly',
+    basePrice: 299,
+    currency: 'USD',
+    includedSites: 3,
+    includedDevices: 50,
+    overageDevicePrice: 2,
+    features: ['Realtime monitoring', 'Workflow automation', 'SCADA operations', 'AI Copilot'],
+    status: 'active',
+    createdAt: new Date().toISOString(),
+  },
+];
+
+const DEFAULT_PARTNER_INVOICES: PartnerInvoice[] = [
+  {
+    id: 'invoice-demo-001',
+    invoiceNo: 'INV-2026-001',
+    customerId: 'customer-demo-factory',
+    planId: 'plan-automation',
+    status: 'open',
+    issueDate: new Date().toISOString().slice(0, 10),
+    dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    currency: 'USD',
+    subtotal: 299,
+    tax: 0,
+    total: 299,
+    notes: 'Demo recurring subscription invoice.',
+    lineItems: [
+      { id: 'invoice-demo-line-1', description: 'Automation plan monthly subscription', quantity: 1, unitPrice: 299, amount: 299 },
+    ],
+    createdAt: new Date().toISOString(),
+  },
+];
+
 export interface SiteTenant {
   id: string;
   name: string;
@@ -146,6 +184,49 @@ export interface PartnerProject {
   ownerUserId?: string;
   quoteNo?: string;
   nextStep?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PartnerBillingPlan {
+  id: string;
+  name: string;
+  code: string;
+  billingCycle: 'monthly' | 'quarterly' | 'yearly' | 'one_time';
+  basePrice: number;
+  currency: string;
+  includedSites?: number;
+  includedDevices?: number;
+  overageDevicePrice?: number;
+  features: string[];
+  status: 'active' | 'draft' | 'archived';
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PartnerInvoiceLineItem {
+  id: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+}
+
+export interface PartnerInvoice {
+  id: string;
+  invoiceNo: string;
+  customerId: string;
+  planId?: string;
+  status: 'draft' | 'open' | 'paid' | 'overdue' | 'void';
+  issueDate: string;
+  dueDate?: string;
+  paidAt?: string;
+  currency: string;
+  subtotal: number;
+  tax?: number;
+  total: number;
+  notes?: string;
+  lineItems: PartnerInvoiceLineItem[];
   createdAt: string;
   updatedAt?: string;
 }
@@ -681,6 +762,22 @@ const mergeDefaultPartnerProjects = (projects: PartnerProject[] = []) => {
   ];
 };
 
+const mergeDefaultPartnerBillingPlans = (plans: PartnerBillingPlan[] = []) => {
+  const existingIds = new Set(plans.map((plan) => plan.id));
+  return [
+    ...plans,
+    ...DEFAULT_PARTNER_BILLING_PLANS.filter((plan) => !existingIds.has(plan.id)),
+  ];
+};
+
+const mergeDefaultPartnerInvoices = (invoices: PartnerInvoice[] = []) => {
+  const existingIds = new Set(invoices.map((invoice) => invoice.id));
+  return [
+    ...invoices,
+    ...DEFAULT_PARTNER_INVOICES.filter((invoice) => !existingIds.has(invoice.id)),
+  ];
+};
+
 const sameOverviewLayout = (first: any[] = [], second: any[] = []) => {
   if (first.length !== second.length) return false;
 
@@ -1040,6 +1137,8 @@ interface AppState {
   // Partner / White Label
   partnerCustomers: PartnerCustomer[];
   partnerProjects: PartnerProject[];
+  partnerBillingPlans: PartnerBillingPlan[];
+  partnerInvoices: PartnerInvoice[];
   whiteLabelConfig: WhiteLabelConfig;
   addPartnerCustomer: (customer: PartnerCustomer) => void;
   updatePartnerCustomer: (id: string, customer: Partial<PartnerCustomer>) => void;
@@ -1047,6 +1146,12 @@ interface AppState {
   addPartnerProject: (project: PartnerProject) => void;
   updatePartnerProject: (id: string, project: Partial<PartnerProject>) => void;
   deletePartnerProject: (id: string) => void;
+  addPartnerBillingPlan: (plan: PartnerBillingPlan) => void;
+  updatePartnerBillingPlan: (id: string, plan: Partial<PartnerBillingPlan>) => void;
+  deletePartnerBillingPlan: (id: string) => void;
+  addPartnerInvoice: (invoice: PartnerInvoice) => void;
+  updatePartnerInvoice: (id: string, invoice: Partial<PartnerInvoice>) => void;
+  deletePartnerInvoice: (id: string) => void;
   updateWhiteLabelConfig: (config: Partial<WhiteLabelConfig>) => void;
   // Access Control
   accesses: AccessDefinition[];
@@ -1125,6 +1230,8 @@ type BackendState = Partial<Pick<AppState,
   | 'activeSiteId'
   | 'partnerCustomers'
   | 'partnerProjects'
+  | 'partnerBillingPlans'
+  | 'partnerInvoices'
   | 'whiteLabelConfig'
   | 'users'
   | 'accesses'
@@ -1213,6 +1320,8 @@ const pickBackendState = (state: AppState): BackendState => ({
   activeSiteId: state.activeSiteId,
   partnerCustomers: state.partnerCustomers,
   partnerProjects: state.partnerProjects,
+  partnerBillingPlans: state.partnerBillingPlans,
+  partnerInvoices: state.partnerInvoices,
   whiteLabelConfig: state.whiteLabelConfig,
   users: state.users,
   accesses: state.accesses,
@@ -1310,6 +1419,8 @@ export const useAppStore = create<AppState>()(
             activeSiteId,
             partnerCustomers: mergeDefaultPartnerCustomers(state?.partnerCustomers),
             partnerProjects: mergeDefaultPartnerProjects(state?.partnerProjects),
+            partnerBillingPlans: mergeDefaultPartnerBillingPlans(state?.partnerBillingPlans),
+            partnerInvoices: mergeDefaultPartnerInvoices(state?.partnerInvoices),
             whiteLabelConfig: { ...DEFAULT_WHITE_LABEL_CONFIG, ...(state?.whiteLabelConfig || {}) },
             securitySettings: { ...DEFAULT_SECURITY_SETTINGS, ...(state?.securitySettings || {}) },
             charts: mergeDefaultCharts(state?.charts),
@@ -1668,6 +1779,8 @@ export const useAppStore = create<AppState>()(
 
       partnerCustomers: DEFAULT_PARTNER_CUSTOMERS,
       partnerProjects: DEFAULT_PARTNER_PROJECTS,
+      partnerBillingPlans: DEFAULT_PARTNER_BILLING_PLANS,
+      partnerInvoices: DEFAULT_PARTNER_INVOICES,
       whiteLabelConfig: DEFAULT_WHITE_LABEL_CONFIG,
       addPartnerCustomer: (customer) => set((state) => ({
         partnerCustomers: [customer, ...state.partnerCustomers],
@@ -1682,6 +1795,9 @@ export const useAppStore = create<AppState>()(
         partnerProjects: state.partnerProjects.map((project) => (
           project.customerId === id ? { ...project, customerId: '', updatedAt: new Date().toISOString() } : project
         )),
+        partnerInvoices: state.partnerInvoices.map((invoice) => (
+          invoice.customerId === id ? { ...invoice, customerId: '', updatedAt: new Date().toISOString() } : invoice
+        )),
       })),
       addPartnerProject: (project) => set((state) => ({
         partnerProjects: [project, ...state.partnerProjects],
@@ -1693,6 +1809,31 @@ export const useAppStore = create<AppState>()(
       })),
       deletePartnerProject: (id) => set((state) => ({
         partnerProjects: state.partnerProjects.filter((item) => item.id !== id),
+      })),
+      addPartnerBillingPlan: (plan) => set((state) => ({
+        partnerBillingPlans: [plan, ...state.partnerBillingPlans],
+      })),
+      updatePartnerBillingPlan: (id, plan) => set((state) => ({
+        partnerBillingPlans: state.partnerBillingPlans.map((item) => (
+          item.id === id ? { ...item, ...plan, updatedAt: new Date().toISOString() } : item
+        )),
+      })),
+      deletePartnerBillingPlan: (id) => set((state) => ({
+        partnerBillingPlans: state.partnerBillingPlans.filter((item) => item.id !== id),
+        partnerInvoices: state.partnerInvoices.map((invoice) => (
+          invoice.planId === id ? { ...invoice, planId: undefined, updatedAt: new Date().toISOString() } : invoice
+        )),
+      })),
+      addPartnerInvoice: (invoice) => set((state) => ({
+        partnerInvoices: [invoice, ...state.partnerInvoices],
+      })),
+      updatePartnerInvoice: (id, invoice) => set((state) => ({
+        partnerInvoices: state.partnerInvoices.map((item) => (
+          item.id === id ? { ...item, ...invoice, updatedAt: new Date().toISOString() } : item
+        )),
+      })),
+      deletePartnerInvoice: (id) => set((state) => ({
+        partnerInvoices: state.partnerInvoices.filter((item) => item.id !== id),
       })),
       updateWhiteLabelConfig: (config) => set((state) => ({
         whiteLabelConfig: { ...state.whiteLabelConfig, ...config, updatedAt: new Date().toISOString() },

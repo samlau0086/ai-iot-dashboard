@@ -3,10 +3,12 @@ import {
   Building2,
   CheckCircle2,
   Copy,
+  CreditCard,
   Globe2,
   Handshake,
   Palette,
   Plus,
+  ReceiptText,
   ShieldCheck,
   Trash2,
   UserPlus,
@@ -14,7 +16,9 @@ import {
 } from 'lucide-react';
 import {
   useAppStore,
+  type PartnerBillingPlan,
   type PartnerCustomer,
+  type PartnerInvoice,
   type PartnerProject,
   type User,
   type WhiteLabelConfig,
@@ -28,6 +32,9 @@ const CUSTOMER_STATUSES: PartnerCustomer['status'][] = ['prospect', 'active', 'p
 const CUSTOMER_PLANS: PartnerCustomer['plan'][] = ['starter', 'operations', 'automation', 'enterprise'];
 const PROJECT_TYPES: PartnerProject['type'][] = ['deployment', 'maintenance', 'retrofit', 'integration', 'support'];
 const PROJECT_STATUSES: PartnerProject['status'][] = ['draft', 'quoted', 'won', 'in_progress', 'delivered', 'lost'];
+const BILLING_CYCLES: PartnerBillingPlan['billingCycle'][] = ['monthly', 'quarterly', 'yearly', 'one_time'];
+const BILLING_PLAN_STATUSES: PartnerBillingPlan['status'][] = ['active', 'draft', 'archived'];
+const INVOICE_STATUSES: PartnerInvoice['status'][] = ['draft', 'open', 'paid', 'overdue', 'void'];
 const DOMAIN_STATUSES: WhiteLabelConfig['domainStatus'][] = ['not_configured', 'pending_dns', 'active', 'error'];
 const CUSTOMER_ACCOUNT_ROLES = ['Customer', 'Operator', 'Viewer'] as const;
 
@@ -35,16 +42,22 @@ const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toStr
 
 const splitCsv = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
 
-const money = (value?: number, currency = 'USD') => (
-  Number.isFinite(Number(value))
-    ? new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(value))
-    : '-'
-);
+const money = (value?: number, currency = 'USD') => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '-';
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD' }).format(amount);
+  } catch {
+    return `${currency || 'USD'} ${amount.toLocaleString('en-US')}`;
+  }
+};
 
 export function PartnerPortal() {
   const {
     partnerCustomers,
     partnerProjects,
+    partnerBillingPlans,
+    partnerInvoices,
     whiteLabelConfig,
     sites,
     users,
@@ -55,6 +68,12 @@ export function PartnerPortal() {
     addPartnerProject,
     updatePartnerProject,
     deletePartnerProject,
+    addPartnerBillingPlan,
+    updatePartnerBillingPlan,
+    deletePartnerBillingPlan,
+    addPartnerInvoice,
+    updatePartnerInvoice,
+    deletePartnerInvoice,
     updateWhiteLabelConfig,
     addUser,
     updateUser,
@@ -62,7 +81,7 @@ export function PartnerPortal() {
     approveUser,
   } = useAppStore();
 
-  const [activeTab, setActiveTab] = useState<'customers' | 'accounts' | 'projects' | 'branding' | 'permissions'>('customers');
+  const [activeTab, setActiveTab] = useState<'customers' | 'accounts' | 'projects' | 'billing' | 'branding' | 'permissions'>('customers');
   const [customerDraft, setCustomerDraft] = useState({
     name: '',
     contactName: '',
@@ -85,6 +104,32 @@ export function PartnerPortal() {
     ownerUserId: '',
     quoteNo: '',
     nextStep: '',
+  });
+  const [billingPlanDraft, setBillingPlanDraft] = useState({
+    name: '',
+    code: '',
+    billingCycle: 'monthly' as PartnerBillingPlan['billingCycle'],
+    basePrice: '',
+    currency: 'USD',
+    includedSites: '1',
+    includedDevices: '10',
+    overageDevicePrice: '',
+    features: '',
+    status: 'active' as PartnerBillingPlan['status'],
+  });
+  const [invoiceDraft, setInvoiceDraft] = useState({
+    customerId: partnerCustomers[0]?.id || '',
+    planId: partnerBillingPlans[0]?.id || '',
+    invoiceNo: '',
+    status: 'open' as PartnerInvoice['status'],
+    issueDate: new Date().toISOString().slice(0, 10),
+    dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    currency: 'USD',
+    description: '',
+    quantity: '1',
+    unitPrice: '',
+    tax: '0',
+    notes: '',
   });
   const [accountDraft, setAccountDraft] = useState({
     customerId: partnerCustomers[0]?.id || '',
@@ -121,6 +166,12 @@ export function PartnerPortal() {
   const projectPipeline = partnerProjects
     .filter((project) => !['lost', 'delivered'].includes(project.status))
     .reduce((sum, project) => sum + (Number(project.value) || 0), 0);
+  const openInvoiceTotal = partnerInvoices
+    .filter((invoice) => ['open', 'overdue'].includes(invoice.status))
+    .reduce((sum, invoice) => sum + (Number(invoice.total) || 0), 0);
+  const paidInvoiceTotal = partnerInvoices
+    .filter((invoice) => invoice.status === 'paid')
+    .reduce((sum, invoice) => sum + (Number(invoice.total) || 0), 0);
   const managedSiteIds = new Set(partnerCustomers.flatMap((customer) => customer.siteIds));
   const managedDevices = devices.filter((device) => managedSiteIds.has(device.siteId || '')).length;
   const customerAccounts = users.filter((user) => (
@@ -132,6 +183,7 @@ export function PartnerPortal() {
     { id: 'customers', label: 'Customers', icon: Building2 },
     { id: 'accounts', label: 'Customer Accounts', icon: UsersRound },
     { id: 'projects', label: 'Projects & Quotes', icon: Handshake },
+    { id: 'billing', label: 'Billing', icon: CreditCard },
     { id: 'branding', label: 'White Label', icon: Palette },
     { id: 'permissions', label: 'RBAC Matrix', icon: ShieldCheck },
   ] as const;
@@ -262,6 +314,86 @@ export function PartnerPortal() {
     notifySuccess('Project created successfully.');
   };
 
+  const handleAddBillingPlan = () => {
+    if (!billingPlanDraft.name.trim()) return;
+    const code = billingPlanDraft.code.trim() || billingPlanDraft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    addPartnerBillingPlan({
+      id: newId('plan'),
+      name: billingPlanDraft.name.trim(),
+      code,
+      billingCycle: billingPlanDraft.billingCycle,
+      basePrice: Number(billingPlanDraft.basePrice) || 0,
+      currency: billingPlanDraft.currency.trim() || 'USD',
+      includedSites: Number(billingPlanDraft.includedSites) || undefined,
+      includedDevices: Number(billingPlanDraft.includedDevices) || undefined,
+      overageDevicePrice: Number(billingPlanDraft.overageDevicePrice) || undefined,
+      features: splitCsv(billingPlanDraft.features),
+      status: billingPlanDraft.status,
+      createdAt: new Date().toISOString(),
+    });
+    setBillingPlanDraft({
+      name: '',
+      code: '',
+      billingCycle: 'monthly',
+      basePrice: '',
+      currency: 'USD',
+      includedSites: '1',
+      includedDevices: '10',
+      overageDevicePrice: '',
+      features: '',
+      status: 'active',
+    });
+    notifySuccess('Billing plan created successfully.');
+  };
+
+  const handleAddInvoice = () => {
+    const selectedPlan = partnerBillingPlans.find((plan) => plan.id === invoiceDraft.planId);
+    const description = invoiceDraft.description.trim() || selectedPlan?.name || '';
+    if (!invoiceDraft.customerId || !description) return;
+    const quantity = Number(invoiceDraft.quantity) || 1;
+    const unitPrice = Number(invoiceDraft.unitPrice) || selectedPlan?.basePrice || 0;
+    const tax = Number(invoiceDraft.tax) || 0;
+    const subtotal = quantity * unitPrice;
+    const total = subtotal + tax;
+    const invoiceNo = invoiceDraft.invoiceNo.trim() || `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+    addPartnerInvoice({
+      id: newId('invoice'),
+      invoiceNo,
+      customerId: invoiceDraft.customerId,
+      planId: invoiceDraft.planId || undefined,
+      status: invoiceDraft.status,
+      issueDate: invoiceDraft.issueDate,
+      dueDate: invoiceDraft.dueDate,
+      paidAt: invoiceDraft.status === 'paid' ? new Date().toISOString() : undefined,
+      currency: invoiceDraft.currency.trim() || 'USD',
+      subtotal,
+      tax,
+      total,
+      notes: invoiceDraft.notes.trim(),
+      lineItems: [{
+        id: newId('invoice-line'),
+        description,
+        quantity,
+        unitPrice,
+        amount: subtotal,
+      }],
+      createdAt: new Date().toISOString(),
+    });
+    setInvoiceDraft((current) => ({
+      ...current,
+      invoiceNo: '',
+      status: 'open',
+      issueDate: new Date().toISOString().slice(0, 10),
+      dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      description: '',
+      quantity: '1',
+      unitPrice: '',
+      tax: '0',
+      notes: '',
+    }));
+    notifySuccess('Invoice created successfully.');
+  };
+
   const saveBranding = () => {
     updateWhiteLabelConfig(brandDraft);
     notifySuccess('White label configuration saved successfully.');
@@ -290,13 +422,15 @@ export function PartnerPortal() {
             Manage customer accounts, projects, branding, domains, and delivery permissions for partner-led deployments.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 xl:grid-cols-7">
           {[
             ['Customers', partnerCustomers.length],
             ['Active', activeCustomers],
             ['Accounts', customerAccounts.length],
             ['Managed Sites', managedSiteIds.size],
             ['Devices', managedDevices],
+            ['Open Invoices', money(openInvoiceTotal, 'USD')],
+            ['Paid Revenue', money(paidInvoiceTotal, 'USD')],
           ].map(([label, value]) => (
             <div key={String(label)} className="rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-[#1c2128]">
               <p className="text-slate-500">{label}</p>
@@ -686,6 +820,185 @@ export function PartnerPortal() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'billing' && (
+            <div className="space-y-6">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  ['Plans', partnerBillingPlans.length],
+                  ['Invoices', partnerInvoices.length],
+                  ['Open', money(openInvoiceTotal, 'USD')],
+                  ['Paid', money(paidInvoiceTotal, 'USD')],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                    <p className="text-xs uppercase tracking-wider text-slate-500">{label}</p>
+                    <p className="mt-2 text-xl font-bold text-slate-900 dark:text-white">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
+                <section className="space-y-4">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                    <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+                      <CreditCard className="h-4 w-4 text-orange-500" />
+                      Billing Plans
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <input value={billingPlanDraft.name} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Plan name" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={billingPlanDraft.code} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, code: event.target.value }))} placeholder="Plan code, auto if blank" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <select value={billingPlanDraft.billingCycle} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, billingCycle: event.target.value as PartnerBillingPlan['billingCycle'] }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                        {BILLING_CYCLES.map((cycle) => <option key={cycle} value={cycle}>{cycle}</option>)}
+                      </select>
+                      <select value={billingPlanDraft.status} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, status: event.target.value as PartnerBillingPlan['status'] }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                        {BILLING_PLAN_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                      <input value={billingPlanDraft.basePrice} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, basePrice: event.target.value }))} placeholder="Base price" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={billingPlanDraft.currency} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} placeholder="Currency" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={billingPlanDraft.includedSites} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, includedSites: event.target.value }))} placeholder="Included sites" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={billingPlanDraft.includedDevices} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, includedDevices: event.target.value }))} placeholder="Included devices" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={billingPlanDraft.overageDevicePrice} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, overageDevicePrice: event.target.value }))} placeholder="Overage price / device" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={billingPlanDraft.features} onChange={(event) => setBillingPlanDraft((current) => ({ ...current, features: event.target.value }))} placeholder="Features, comma separated" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <button type="button" onClick={handleAddBillingPlan} className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500 md:col-span-2">
+                        <Plus className="h-4 w-4" />
+                        Add Plan
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {partnerBillingPlans.map((plan) => (
+                      <div key={plan.id} className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <input value={plan.name} onChange={(event) => updatePartnerBillingPlan(plan.id, { name: event.target.value, updatedAt: new Date().toISOString() })} className="w-full rounded border-0 bg-transparent px-1 py-0.5 text-base font-semibold text-slate-900 ring-1 ring-transparent focus:ring-orange-500 dark:text-white" />
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                              <span className="font-mono">{plan.code}</span>
+                              <span>{plan.billingCycle}</span>
+                              <span>{money(plan.basePrice, plan.currency)}</span>
+                            </div>
+                          </div>
+                          <button type="button" onClick={async () => {
+                            if (await confirmDelete({ title: 'Delete billing plan', itemName: plan.name, description: 'Existing invoices will keep their amounts, but their plan link will be cleared.' })) deletePartnerBillingPlan(plan.id);
+                          }} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                          <select value={plan.status} onChange={(event) => updatePartnerBillingPlan(plan.id, { status: event.target.value as PartnerBillingPlan['status'], updatedAt: new Date().toISOString() })} className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700">
+                            {BILLING_PLAN_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                          </select>
+                          <select value={plan.billingCycle} onChange={(event) => updatePartnerBillingPlan(plan.id, { billingCycle: event.target.value as PartnerBillingPlan['billingCycle'], updatedAt: new Date().toISOString() })} className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700">
+                            {BILLING_CYCLES.map((cycle) => <option key={cycle} value={cycle}>{cycle}</option>)}
+                          </select>
+                          <input value={plan.basePrice} onChange={(event) => updatePartnerBillingPlan(plan.id, { basePrice: Number(event.target.value) || 0, updatedAt: new Date().toISOString() })} className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700" />
+                          <input value={plan.currency} onChange={(event) => updatePartnerBillingPlan(plan.id, { currency: event.target.value.toUpperCase(), updatedAt: new Date().toISOString() })} className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700" />
+                          <input value={plan.includedSites || ''} onChange={(event) => updatePartnerBillingPlan(plan.id, { includedSites: Number(event.target.value) || undefined, updatedAt: new Date().toISOString() })} placeholder="Included sites" className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700" />
+                          <input value={plan.includedDevices || ''} onChange={(event) => updatePartnerBillingPlan(plan.id, { includedDevices: Number(event.target.value) || undefined, updatedAt: new Date().toISOString() })} placeholder="Included devices" className="rounded-md border-0 bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-orange-500 dark:bg-slate-900 dark:ring-slate-700" />
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-1">
+                          {plan.features.map((feature) => (
+                            <span key={feature} className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{feature}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="space-y-4">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                    <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+                      <ReceiptText className="h-4 w-4 text-orange-500" />
+                      Invoices
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <select value={invoiceDraft.customerId} onChange={(event) => setInvoiceDraft((current) => ({ ...current, customerId: event.target.value }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                        <option value="">Select customer</option>
+                        {partnerCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+                      </select>
+                      <select value={invoiceDraft.planId} onChange={(event) => {
+                        const plan = partnerBillingPlans.find((item) => item.id === event.target.value);
+                        setInvoiceDraft((current) => ({
+                          ...current,
+                          planId: event.target.value,
+                          currency: plan?.currency || current.currency,
+                          unitPrice: plan ? String(plan.basePrice) : current.unitPrice,
+                          description: current.description || plan?.name || '',
+                        }));
+                      }} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                        <option value="">No plan</option>
+                        {partnerBillingPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
+                      </select>
+                      <input value={invoiceDraft.invoiceNo} onChange={(event) => setInvoiceDraft((current) => ({ ...current, invoiceNo: event.target.value }))} placeholder="Invoice no, auto if blank" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <select value={invoiceDraft.status} onChange={(event) => setInvoiceDraft((current) => ({ ...current, status: event.target.value as PartnerInvoice['status'] }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700">
+                        {INVOICE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                      <input type="date" value={invoiceDraft.issueDate} onChange={(event) => setInvoiceDraft((current) => ({ ...current, issueDate: event.target.value }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input type="date" value={invoiceDraft.dueDate} onChange={(event) => setInvoiceDraft((current) => ({ ...current, dueDate: event.target.value }))} className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={invoiceDraft.description} onChange={(event) => setInvoiceDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Line item description" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={invoiceDraft.quantity} onChange={(event) => setInvoiceDraft((current) => ({ ...current, quantity: event.target.value }))} placeholder="Quantity" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={invoiceDraft.unitPrice} onChange={(event) => setInvoiceDraft((current) => ({ ...current, unitPrice: event.target.value }))} placeholder="Unit price" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={invoiceDraft.tax} onChange={(event) => setInvoiceDraft((current) => ({ ...current, tax: event.target.value }))} placeholder="Tax" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={invoiceDraft.currency} onChange={(event) => setInvoiceDraft((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} placeholder="Currency" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={invoiceDraft.notes} onChange={(event) => setInvoiceDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Notes" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <button type="button" onClick={handleAddInvoice} className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500 md:col-span-3">
+                        <Plus className="h-4 w-4" />
+                        Add Invoice
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                    <table className="min-w-full text-left text-sm">
+                      <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                        <tr>
+                          <th className="px-4 py-3">Invoice</th>
+                          <th className="px-4 py-3">Customer</th>
+                          <th className="px-4 py-3">Status</th>
+                          <th className="px-4 py-3">Due</th>
+                          <th className="px-4 py-3 text-right">Total</th>
+                          <th className="px-4 py-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {partnerInvoices.map((invoice) => (
+                          <tr key={invoice.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                            <td className="px-4 py-3">
+                              <input value={invoice.invoiceNo} onChange={(event) => updatePartnerInvoice(invoice.id, { invoiceNo: event.target.value, updatedAt: new Date().toISOString() })} className="block w-40 rounded border-0 bg-transparent px-2 py-1 font-semibold text-slate-900 ring-1 ring-transparent focus:ring-orange-500 dark:text-white" />
+                              <p className="mt-1 text-xs text-slate-500">{partnerBillingPlans.find((plan) => plan.id === invoice.planId)?.name || invoice.lineItems[0]?.description || 'No plan'}</p>
+                            </td>
+                            <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{customerById.get(invoice.customerId)?.name || 'Unassigned'}</td>
+                            <td className="px-4 py-3">
+                              <select value={invoice.status} onChange={(event) => {
+                                const status = event.target.value as PartnerInvoice['status'];
+                                updatePartnerInvoice(invoice.id, {
+                                  status,
+                                  paidAt: status === 'paid' ? invoice.paidAt || new Date().toISOString() : undefined,
+                                  updatedAt: new Date().toISOString(),
+                                });
+                              }} className="rounded-md border-0 bg-transparent px-2 py-1 ring-1 ring-slate-300 focus:ring-orange-500 dark:ring-slate-700">
+                                {INVOICE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                              </select>
+                            </td>
+                            <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{invoice.dueDate || '-'}</td>
+                            <td className="px-4 py-3 text-right font-semibold text-slate-900 dark:text-white">{money(invoice.total, invoice.currency)}</td>
+                            <td className="px-4 py-3 text-right">
+                              <button type="button" onClick={async () => {
+                                if (await confirmDelete({ title: 'Delete invoice', itemName: invoice.invoiceNo, description: 'This invoice record will be permanently removed.' })) deletePartnerInvoice(invoice.id);
+                              }} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
               </div>
             </div>
           )}
