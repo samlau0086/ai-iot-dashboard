@@ -58,6 +58,7 @@ const timescaleEnabled = process.env.TIMESCALEDB_ENABLED === 'true';
 const timescaleCompressionEnabled = process.env.TIMESCALEDB_COMPRESSION_ENABLED !== 'false';
 const timescaleRawCompressionAfterDays = Math.max(1, Number(process.env.TIMESCALEDB_RAW_COMPRESSION_AFTER_DAYS || 7));
 const timescaleRollupCompressionAfterDays = Math.max(1, Number(process.env.TIMESCALEDB_ROLLUP_COMPRESSION_AFTER_DAYS || 30));
+const billingWebhookToken = String(process.env.BILLING_WEBHOOK_TOKEN || '').trim();
 const authFailedLoginWindowMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_WINDOW_MS || 10 * 60 * 1000));
 const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LOGIN_MAX_ATTEMPTS || 5));
 const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
@@ -1303,6 +1304,114 @@ const findDeviceByApiPath = async (requestPath) => {
 };
 
 const getDashboardState = async () => await getAppState('dashboard_state') || {};
+
+const timingSafeEqualText = (first, second) => {
+  const firstBuffer = Buffer.from(String(first || ''));
+  const secondBuffer = Buffer.from(String(second || ''));
+  return firstBuffer.length === secondBuffer.length && crypto.timingSafeEqual(firstBuffer, secondBuffer);
+};
+
+const getProvidedBillingWebhookToken = (req) => {
+  const authorization = req.get('authorization') || '';
+  const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
+  return String(
+    req.get('x-billing-webhook-token')
+    || (bearerMatch ? bearerMatch[1] : '')
+    || req.query.token
+    || req.body?.token
+    || ''
+  ).trim();
+};
+
+const verifyBillingWebhookToken = (req, state = {}) => {
+  const expectedToken = billingWebhookToken || String(state.partnerBillingIntegration?.webhookToken || '').trim();
+  if (!expectedToken) {
+    return {ok: false, status: 428, message: 'Billing webhook token is not configured.'};
+  }
+  const providedToken = getProvidedBillingWebhookToken(req);
+  if (!providedToken || !timingSafeEqualText(providedToken, expectedToken)) {
+    return {ok: false, status: 401, message: 'Invalid billing webhook token.'};
+  }
+  return {ok: true};
+};
+
+const normalizePartnerInvoiceStatus = (value, eventType = '') => {
+  const text = String(value || eventType || '').trim().toLowerCase();
+  if (['paid', 'succeeded', 'success', 'payment_succeeded', 'invoice.paid', 'checkout.session.completed', 'captured'].includes(text)) return 'paid';
+  if (['open', 'pending', 'unpaid', 'invoice.created', 'invoice.finalized'].includes(text)) return 'open';
+  if (['overdue', 'past_due', 'past-due'].includes(text)) return 'overdue';
+  if (['void', 'voided', 'cancelled', 'canceled'].includes(text)) return 'void';
+  if (['draft'].includes(text)) return 'draft';
+  return '';
+};
+
+const readNested = (value, pathValue) => pathValue.split('.').reduce((current, key) => (
+  current && typeof current === 'object' ? current[key] : undefined
+), value);
+
+const firstPayloadValue = (payload, paths) => {
+  for (const pathValue of paths) {
+    const value = readNested(payload, pathValue);
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return '';
+};
+
+const extractBillingWebhookEvent = (payload = {}) => {
+  const object = payload.data?.object || payload.object || payload.invoice || payload.payment || payload;
+  const metadata = object.metadata || payload.metadata || {};
+  const invoiceNo = firstPayloadValue({payload, object, metadata}, [
+    'payload.invoiceNo',
+    'payload.invoice_no',
+    'payload.invoiceNumber',
+    'payload.invoice_number',
+    'object.invoiceNo',
+    'object.invoice_no',
+    'object.number',
+    'object.client_reference_id',
+    'metadata.invoiceNo',
+    'metadata.invoice_no',
+    'metadata.invoiceNumber',
+  ]);
+  const invoiceId = firstPayloadValue({payload, object, metadata}, [
+    'payload.invoiceId',
+    'payload.invoice_id',
+    'object.invoiceId',
+    'object.invoice_id',
+    'object.id',
+    'metadata.invoiceId',
+    'metadata.invoice_id',
+  ]);
+  const externalPaymentId = firstPayloadValue({payload, object}, [
+    'payload.paymentId',
+    'payload.payment_id',
+    'payload.transactionId',
+    'payload.transaction_id',
+    'object.payment_intent',
+    'object.paymentId',
+    'object.payment_id',
+    'object.id',
+  ]);
+  const rawStatus = firstPayloadValue({payload, object}, [
+    'payload.status',
+    'payload.payment_status',
+    'payload.event',
+    'payload.type',
+    'object.status',
+    'object.payment_status',
+  ]);
+  const eventType = String(payload.type || payload.event || '').trim();
+  return {
+    invoiceNo: String(invoiceNo || '').trim(),
+    invoiceId: String(invoiceId || '').trim(),
+    status: normalizePartnerInvoiceStatus(rawStatus, eventType),
+    externalStatus: String(rawStatus || eventType || '').trim(),
+    externalPaymentId: String(externalPaymentId || '').trim(),
+    provider: String(payload.provider || payload.source || '').trim(),
+    amount: Number(firstPayloadValue({payload, object}, ['payload.amount', 'payload.total', 'object.amount_total', 'object.amount_paid', 'object.total'])),
+    currency: String(firstPayloadValue({payload, object}, ['payload.currency', 'object.currency']) || '').toUpperCase(),
+  };
+};
 
 const csvEscape = (value) => {
   const stringValue = String(value ?? '');
@@ -7592,6 +7701,104 @@ app.get('/api/reports/:reportId.csv', async (req, res) => {
     res.status(200).send(reportRowsToCsv(report.rows || []));
   } catch (error) {
     res.status(500).json({error: error.message});
+  }
+});
+
+app.post('/api/partner-billing/webhook', async (req, res) => {
+  const state = await getDashboardState();
+  const tokenCheck = verifyBillingWebhookToken(req, state);
+  if (!tokenCheck.ok) {
+    await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', '', 'failed', {
+      reason: tokenCheck.message,
+    });
+    res.status(tokenCheck.status).json({ok: false, message: tokenCheck.message});
+    return;
+  }
+
+  try {
+    const payload = req.body || {};
+    const event = extractBillingWebhookEvent(payload);
+    if (!event.status) {
+      await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', event.invoiceNo || event.invoiceId || '', 'failed', {
+        reason: 'Unsupported or missing invoice status.',
+        event,
+      });
+      res.status(400).json({ok: false, message: 'Unsupported or missing invoice status.', event});
+      return;
+    }
+
+    const partnerInvoices = Array.isArray(state.partnerInvoices) ? state.partnerInvoices : [];
+    const invoiceIndex = partnerInvoices.findIndex((invoice) => (
+      (event.invoiceNo && String(invoice.invoiceNo).toLowerCase() === event.invoiceNo.toLowerCase())
+      || (event.invoiceId && String(invoice.id) === event.invoiceId)
+      || (event.invoiceId && String(invoice.externalPaymentId || '') === event.invoiceId)
+    ));
+
+    if (invoiceIndex < 0) {
+      const integration = {
+        ...(state.partnerBillingIntegration || {}),
+        lastSyncStatus: 'failed',
+        lastSyncAt: new Date().toISOString(),
+        lastSyncMessage: `Billing webhook invoice not found: ${event.invoiceNo || event.invoiceId || 'unknown'}.`,
+      };
+      await setAppState('dashboard_state', {...state, partnerBillingIntegration: integration});
+      await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', event.invoiceNo || event.invoiceId || '', 'failed', {
+        reason: 'Invoice not found.',
+        event,
+      });
+      res.status(404).json({ok: false, message: 'Invoice not found.', event});
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const currentInvoice = partnerInvoices[invoiceIndex];
+    const nextInvoice = {
+      ...currentInvoice,
+      status: event.status,
+      paidAt: event.status === 'paid' ? (currentInvoice.paidAt || now) : currentInvoice.paidAt,
+      externalPaymentId: event.externalPaymentId || currentInvoice.externalPaymentId,
+      externalProvider: event.provider || payload.provider || state.partnerBillingIntegration?.provider || currentInvoice.externalProvider,
+      externalStatus: event.externalStatus || currentInvoice.externalStatus,
+      lastSyncedAt: now,
+      updatedAt: now,
+    };
+    const nextInvoices = [...partnerInvoices];
+    nextInvoices[invoiceIndex] = nextInvoice;
+
+    const integration = {
+      ...(state.partnerBillingIntegration || {}),
+      lastSyncStatus: 'success',
+      lastSyncAt: now,
+      lastSyncMessage: `Invoice ${nextInvoice.invoiceNo} updated to ${nextInvoice.status} by billing webhook.`,
+    };
+    const nextState = {
+      ...state,
+      partnerInvoices: nextInvoices,
+      partnerBillingIntegration: integration,
+    };
+    await setAppState('dashboard_state', nextState);
+    await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', nextInvoice.id, 'success', {
+      invoiceNo: nextInvoice.invoiceNo,
+      status: nextInvoice.status,
+      externalStatus: nextInvoice.externalStatus,
+      externalPaymentId: nextInvoice.externalPaymentId,
+    });
+
+    const notification = await persistSystemNotification({
+      title: 'Partner invoice updated',
+      message: `Invoice ${nextInvoice.invoiceNo} is now ${nextInvoice.status}.`,
+      level: nextInvoice.status === 'paid' ? 'Success' : 'Info',
+      source: 'partner-billing',
+      invoiceId: nextInvoice.id,
+      invoiceNo: nextInvoice.invoiceNo,
+    });
+    broadcastRealtimeEvent('partner_billing_invoice', {invoice: nextInvoice, notification});
+    res.status(200).json({ok: true, invoice: nextInvoice, event});
+  } catch (error) {
+    await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', '', 'failed', {
+      error: error.message,
+    });
+    res.status(500).json({ok: false, error: error.message});
   }
 });
 

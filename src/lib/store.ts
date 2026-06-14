@@ -237,6 +237,10 @@ export interface PartnerInvoice {
   tax?: number;
   total: number;
   notes?: string;
+  externalPaymentId?: string;
+  externalProvider?: string;
+  externalStatus?: string;
+  lastSyncedAt?: string;
   lineItems: PartnerInvoiceLineItem[];
   createdAt: string;
   updatedAt?: string;
@@ -247,6 +251,7 @@ export interface PartnerBillingIntegration {
   enabled: boolean;
   autoSync: boolean;
   apiBaseUrl?: string;
+  webhookToken?: string;
   paymentLinkTemplate?: string;
   erpCustomerField?: string;
   defaultTaxRate?: number;

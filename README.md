@@ -45,7 +45,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] AI Copilot 基础闭环已完成：支持基于当前 Site / 设备 / 告警 / 工作流 / 图表上下文进行自然语言查询、异常解释、建议动作、CSV 报表生成和工作流草稿生成。
 - [x] Partner / White Label 基础闭环已完成：支持客户管理、客户子账号、项目/报价记录、Partner Billing 套餐与发票、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
 - [x] Partner Billing 对接准备已完成：支持 Payment / ERP Integration 配置、发票 CSV 导出、外部同步 payload 复制、支付链接模板和同步配置检查。
-- [ ] 下一阶段重点：TimescaleDB continuous aggregates、更多现场协议连接器、外部队列 adapter、具体支付平台 webhook / ERP connector。
+- [x] Partner Billing Webhook 已完成：外部支付/ERP 系统可 POST 回调到 `/api/partner-billing/webhook`，校验 token 后自动更新发票状态、审计日志、系统通知和实时事件。
+- [ ] 下一阶段重点：TimescaleDB continuous aggregates、更多现场协议连接器、外部队列 adapter、具体支付平台专用 connector。
 
 ### V1: Energy Monitoring MVP
 
@@ -204,6 +205,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 项目报价记录
 - [x] Partner Billing 基础闭环：支持套餐、计费周期、包含站点/设备数量、超量价格、客户发票、发票状态和收入摘要
 - [x] Partner Billing Integration Profile：支持 Manual / Stripe / Paddle / Xero / QuickBooks / Kingdee / Custom 配置、Payment Link Template、CSV 导出和同步 payload
+- [x] Partner Billing Webhook：支持外部支付/ERP 回调更新发票状态，支持 token 校验、审计日志、系统通知和实时事件
 - [x] 基础角色权限：Owner、Admin、Engineer、Operator、Viewer、Demo、Partner、Customer
 - [x] Demo 账户本地演示模式：允许体验界面和配置流程，但不持久化到后端、不影响设备
 - [x] 基础 RBAC 权限矩阵说明：角色、App Profile、站点绑定和客户账号使用方式
@@ -615,11 +617,35 @@ AI_COPILOT_BASE_URL=         # OpenAI-compatible 或 custom provider 时可配�
 - **Customers**：添加、编辑、删除客户，配置客户联系人、Tenant ID、套餐、状态和绑定的 Site IDs。
 - **Customer Accounts**：为客户直接创建登录子账号，设置角色、App Profile、站点范围和审核状态；旧用户如果绑定到客户 Site，也会自动出现在对应账号列表中。
 - **Projects & Quotes**：记录客户项目、报价编号、项目类型、交付状态、金额、负责人、关联站点和下一步跟进事项。
-- **Billing**：维护合作伙伴套餐、计费周期、包含站点/设备数量、超量价格，并为客户创建发票、跟踪 Open / Paid / Overdue 等状态和收入摘要；同时可配置 Payment / ERP Integration、导出发票 CSV、复制同步 payload，并用 Payment Link Template 为发票生成付款链接。
+- **Billing**：维护合作伙伴套餐、计费周期、包含站点/设备数量、超量价格，并为客户创建发票、跟踪 Open / Paid / Overdue 等状态和收入摘要；同时可配置 Payment / ERP Integration、导出发票 CSV、复制同步 payload，并用 Payment Link Template 为发票生成付款链接。外部支付/ERP 系统可通过 Billing Webhook 回调更新发票状态。
 - **White Label**：配置产品名称、公司名称、Logo URL、主色、支持邮箱、自定义域名和域名状态。保存后侧边栏、移动端标题和登录页会使用新的系统标题和 Logo。
 - **RBAC Matrix**：查看不同角色与 App Profile 的推荐组合，例如 Partner 使用 Full Platform，Customer 使用 Simple Device App。
 
 白标的快速配置也可以在 **Settings -> General** 中修改；更完整的品牌、域名和客户交付配置建议在 **Partner** 页面维护。
+
+Partner Billing Webhook 测试示例：
+
+```bash
+curl -X POST "https://your-dashboard-domain.com/api/partner-billing/webhook?token=YOUR_BILLING_WEBHOOK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "custom",
+    "invoiceNo": "INV-2026-001",
+    "status": "paid",
+    "payment_id": "pay_test_001",
+    "amount": 299,
+    "currency": "USD"
+  }'
+```
+
+也可以使用 Header 传 token：
+
+```bash
+curl -X POST "https://your-dashboard-domain.com/api/partner-billing/webhook" \
+  -H "Content-Type: application/json" \
+  -H "x-billing-webhook-token: YOUR_BILLING_WEBHOOK_TOKEN" \
+  -d '{"invoiceNo":"INV-2026-001","status":"paid"}'
+```
 
 ### 配置通知和用户
 
