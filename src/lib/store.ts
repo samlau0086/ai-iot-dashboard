@@ -5,7 +5,7 @@ import { mockDevices } from './mockData';
 import { mergeTelemetryIntoDevices } from './deviceData';
 import type { DeviceTelemetryMessage } from '../types';
 import type { AppProfile, ControlAccessConfig, DataAccessConfig, FeatureAccessMap } from './featureAccess';
-import { apiJsonHeaders } from './apiAuth';
+import { apiActorHeaders, apiJsonHeaders, clearApiSessionToken, setApiSessionToken } from './apiAuth';
 
 export interface User {
   id: string;
@@ -1042,12 +1042,12 @@ interface AppState {
   // Users
   users: User[];
   addUser: (user: User) => void;
-  registerUser: (user: Omit<User, 'id' | 'role' | 'appProfile' | 'siteId' | 'status' | 'createdAt'> & { siteId?: string; appProfile?: AppProfile }) => { ok: boolean; message: string };
+  registerUser: (user: Omit<User, 'id' | 'role' | 'appProfile' | 'siteId' | 'status' | 'createdAt'> & { siteId?: string; appProfile?: AppProfile }) => Promise<{ ok: boolean; message: string }>;
   updateUser: (id: string, user: Partial<User>) => void;
   deleteUser: (id: string) => void;
   approveUser: (id: string, role: string, siteId: string, appProfile?: AppProfile) => void;
   rejectUser: (id: string) => void;
-  login: (email: string, password: string) => { ok: boolean; message: string };
+  login: (email: string, password: string) => Promise<{ ok: boolean; message: string }>;
   logout: () => void;
   // Profile
   currentUser: User | null;
@@ -1239,9 +1239,28 @@ export const useAppStore = create<AppState>()(
           const scadaScenesBySite = mergeDefaultScadaScenes(state?.scadaScenesBySite, sites);
           const scadaShapePresets = Array.isArray(state?.scadaShapePresets) ? state.scadaShapePresets : createDefaultScadaShapePresets();
           const sessionUserId = getStoredSessionUserId();
-          const sessionUser = sessionUserId
+          let sessionUser = sessionUserId
             ? users.find((user) => user.id === sessionUserId && user.status === 'approved') || null
             : null;
+
+          try {
+            const sessionResponse = await fetch('/api/auth/session', { headers: apiActorHeaders(null) });
+            if (sessionResponse.ok) {
+              const sessionPayload = await sessionResponse.json();
+              if (sessionPayload.user) {
+                sessionUser = sessionPayload.user;
+                setStoredSessionUserId(sessionPayload.user.id);
+              }
+            } else {
+              clearApiSessionToken();
+              clearStoredSessionUserId();
+              sessionUser = null;
+            }
+          } catch {
+            clearApiSessionToken();
+            clearStoredSessionUserId();
+            sessionUser = null;
+          }
 
           if (sessionUserId && !sessionUser) {
             clearStoredSessionUserId();
@@ -1274,9 +1293,27 @@ export const useAppStore = create<AppState>()(
         } catch (error) {
           console.error(error);
           const sessionUserId = getStoredSessionUserId();
-          const sessionUser = sessionUserId
+          let sessionUser = sessionUserId
             ? useAppStore.getState().users.find((user) => user.id === sessionUserId && user.status === 'approved') || null
             : null;
+          try {
+            const sessionResponse = await fetch('/api/auth/session', { headers: apiActorHeaders(null) });
+            if (sessionResponse.ok) {
+              const sessionPayload = await sessionResponse.json();
+              if (sessionPayload.user) {
+                sessionUser = sessionPayload.user;
+                setStoredSessionUserId(sessionPayload.user.id);
+              }
+            } else {
+              clearApiSessionToken();
+              clearStoredSessionUserId();
+              sessionUser = null;
+            }
+          } catch {
+            clearApiSessionToken();
+            clearStoredSessionUserId();
+            sessionUser = null;
+          }
           if (sessionUserId && !sessionUser) {
             clearStoredSessionUserId();
           }
@@ -1643,25 +1680,24 @@ export const useAppStore = create<AppState>()(
 
       users: DEFAULT_USERS,
       addUser: (user) => set((state) => ({ users: [...state.users, user] })),
-      registerUser: (user) => {
-        const email = user.email.trim().toLowerCase();
-        const exists = useAppStore.getState().users.some((item) => item.email.toLowerCase() === email);
-        if (exists) return { ok: false, message: 'This email is already registered.' };
-
-        const pendingUser: User = {
-          id: `user-${Date.now()}`,
-          name: user.name.trim(),
-          email,
-          password: user.password,
-          role: 'Viewer',
-          appProfile: user.appProfile || 'simple',
-          siteId: user.siteId?.trim() || 'factory-a',
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-        };
-
-        set((state) => ({ users: [...state.users, pendingUser] }));
-        return { ok: true, message: 'Registration submitted. Please wait for administrator approval.' };
+      registerUser: async (user) => {
+        try {
+          const response = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(user),
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            return { ok: false, message: payload.message || 'Registration failed.' };
+          }
+          if (payload.user) {
+            set((state) => ({ users: [...state.users, payload.user] }));
+          }
+          return { ok: true, message: payload.message || 'Registration submitted. Please wait for administrator approval.' };
+        } catch {
+          return { ok: false, message: 'Unable to reach registration service.' };
+        }
       },
       updateUser: (id, user) => set((state) => ({
         users: state.users.map(u => u.id === id ? { ...u, ...user } : u),
@@ -1690,16 +1726,28 @@ export const useAppStore = create<AppState>()(
           currentUser: state.currentUser && state.currentUser.id === id ? null : state.currentUser
         }));
       },
-      login: (email, password) => {
-        const user = useAppStore.getState().users.find((item) => item.email.toLowerCase() === email.trim().toLowerCase());
-        if (!user || user.password !== password) return { ok: false, message: 'Invalid email or password.' };
-        if (user.status !== 'approved') return { ok: false, message: 'Your account is waiting for approval.' };
+      login: async (email, password) => {
+        try {
+          const response = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok || !payload.user || !payload.sessionToken) {
+            return { ok: false, message: payload.message || 'Invalid email or password.' };
+          }
 
-        setStoredSessionUserId(user.id);
-        set({ currentUser: user });
-        return { ok: true, message: 'Signed in.' };
+          setApiSessionToken(payload.sessionToken);
+          setStoredSessionUserId(payload.user.id);
+          set({ currentUser: payload.user });
+          return { ok: true, message: payload.message || 'Signed in.' };
+        } catch {
+          return { ok: false, message: 'Unable to reach authentication service.' };
+        }
       },
       logout: () => {
+        clearApiSessionToken();
         clearStoredSessionUserId();
         set({ currentUser: null });
       },

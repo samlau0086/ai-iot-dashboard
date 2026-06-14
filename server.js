@@ -41,6 +41,30 @@ const splitList = (value) => Array.isArray(value)
   : String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
 const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+const authSessionSecret = process.env.AUTH_SESSION_SECRET || process.env.JWT_SECRET || 'dev-session-secret-change-me';
+const authSessionTtlSeconds = Math.max(300, Number(process.env.AUTH_SESSION_TTL_SECONDS || 43200));
+const defaultAuthUsers = [
+  {
+    id: '1',
+    name: 'Admin User',
+    email: 'admin@factory.com',
+    role: 'Admin',
+    appProfile: 'full',
+    siteId: 'factory-a',
+    password: 'password123',
+    status: 'approved',
+  },
+  {
+    id: 'demo-user',
+    name: 'Demo User',
+    email: 'demo@factory.com',
+    role: 'Demo',
+    appProfile: 'full',
+    siteId: 'factory-a',
+    password: 'demo123',
+    status: 'approved',
+  },
+];
 const isHex = (value, length = null) => {
   const text = String(value || '').trim();
   return /^[0-9a-f]+$/i.test(text) && (length === null || text.length === length);
@@ -517,14 +541,93 @@ const decodeHeaderValue = (value) => {
   }
 };
 
-const getApiActor = (req) => ({
-  id: String(req.get('x-iot-user-id') || '').trim(),
-  name: decodeHeaderValue(req.get('x-iot-user-name')),
-  role: String(req.get('x-iot-user-role') || '').trim(),
-});
+const encodeSessionPart = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+const signSessionBody = (body) => crypto.createHmac('sha256', authSessionSecret).update(body).digest('base64url');
 
-const requireApiActorRole = (req, res, allowedRoles, actionLabel = 'this action') => {
-  const actor = getApiActor(req);
+const publicAuthUser = (user) => user ? {
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  appProfile: user.appProfile,
+  featureAccess: user.featureAccess,
+  controlAccess: user.controlAccess,
+  dataAccess: user.dataAccess,
+  siteId: user.siteId,
+  customerId: user.customerId,
+  status: user.status,
+  createdAt: user.createdAt,
+  approvedAt: user.approvedAt,
+} : null;
+
+const mergeDefaultAuthUsers = (users = []) => {
+  const existingEmails = new Set(users.map((user) => String(user.email || '').toLowerCase()));
+  return [
+    ...users,
+    ...defaultAuthUsers.filter((user) => !existingEmails.has(user.email.toLowerCase())),
+  ];
+};
+
+const getAuthUsers = async () => {
+  const state = await getDashboardState();
+  return mergeDefaultAuthUsers(Array.isArray(state.users) ? state.users : []);
+};
+
+const createSessionToken = (user) => {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    sub: user.id,
+    iat: now,
+    exp: now + authSessionTtlSeconds,
+  };
+  const body = encodeSessionPart({alg: 'HS256', typ: 'AI-IOT-SESSION'}) + '.' + encodeSessionPart(payload);
+  return `${body}.${signSessionBody(body)}`;
+};
+
+const getSessionTokenFromRequest = (req) => {
+  const explicit = req.get('x-iot-session-token');
+  if (explicit) return explicit.trim();
+  const authorization = req.get('authorization') || '';
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : '';
+};
+
+const verifySessionToken = async (token) => {
+  if (!token) return null;
+  const parts = String(token).split('.');
+  if (parts.length !== 3) return null;
+  const [header, payload, signature] = parts;
+  const body = `${header}.${payload}`;
+  const expected = signSessionBody(body);
+  const expectedBuffer = Buffer.from(expected);
+  const signatureBuffer = Buffer.from(signature);
+  if (expectedBuffer.length !== signatureBuffer.length || !crypto.timingSafeEqual(expectedBuffer, signatureBuffer)) return null;
+
+  let decodedPayload = null;
+  try {
+    decodedPayload = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!decodedPayload?.sub || Number(decodedPayload.exp || 0) < Math.floor(Date.now() / 1000)) return null;
+
+  const users = await getAuthUsers();
+  const user = users.find((item) => item.id === decodedPayload.sub && item.status === 'approved');
+  return publicAuthUser(user);
+};
+
+const getApiActor = async (req) => {
+  const sessionUser = await verifySessionToken(getSessionTokenFromRequest(req));
+  if (sessionUser) return sessionUser;
+  return {
+    id: '',
+    name: decodeHeaderValue(req.get('x-iot-user-name')),
+    role: '',
+  };
+};
+
+const requireApiActorRole = async (req, res, allowedRoles, actionLabel = 'this action') => {
+  const actor = await getApiActor(req);
   if (!actor.id || !actor.role) {
     res.status(401).json({error: `login required to perform ${actionLabel}`});
     return null;
@@ -4012,14 +4115,98 @@ app.get('/health', (_req, res) => {
   res.status(200).json({status: 'ok'});
 });
 
-app.get('/api/ingest-tokens', (req, res) => {
-  if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view ingest tokens')) return;
-  res.status(200).json({tokens: ingestTokens.map(publicIngestToken)});
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const email = String(payload.email || '').trim().toLowerCase();
+    const name = String(payload.name || '').trim();
+    const password = String(payload.password || '');
+    if (!email || !name || !password) {
+      res.status(400).json({ok: false, message: 'Name, email, and password are required.'});
+      return;
+    }
+
+    const state = await getDashboardState();
+    const users = mergeDefaultAuthUsers(Array.isArray(state.users) ? state.users : []);
+    if (users.some((user) => String(user.email || '').toLowerCase() === email)) {
+      res.status(409).json({ok: false, message: 'This email is already registered.'});
+      return;
+    }
+
+    const pendingUser = {
+      id: createId('user'),
+      name,
+      email,
+      password,
+      role: 'Viewer',
+      appProfile: payload.appProfile || 'simple',
+      siteId: String(payload.siteId || 'factory-a').trim() || 'factory-a',
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    const nextState = {
+      ...state,
+      users: [...(Array.isArray(state.users) ? state.users : []), pendingUser],
+    };
+    await setAppState('dashboard_state', nextState);
+    res.status(201).json({ok: true, message: 'Registration submitted. Please wait for administrator approval.', user: publicAuthUser(pendingUser)});
+  } catch (error) {
+    res.status(500).json({ok: false, message: error.message});
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const users = await getAuthUsers();
+    const user = users.find((item) => String(item.email || '').toLowerCase() === email);
+    if (!user || user.password !== password) {
+      res.status(401).json({ok: false, message: 'Invalid email or password.'});
+      return;
+    }
+    if (user.status !== 'approved') {
+      res.status(403).json({ok: false, message: 'Your account is waiting for approval.'});
+      return;
+    }
+
+    res.status(200).json({
+      ok: true,
+      message: 'Signed in.',
+      user: publicAuthUser(user),
+      sessionToken: createSessionToken(user),
+      expiresIn: authSessionTtlSeconds,
+    });
+  } catch (error) {
+    res.status(500).json({ok: false, message: error.message});
+  }
+});
+
+app.get('/api/auth/session', async (req, res) => {
+  try {
+    const user = await verifySessionToken(getSessionTokenFromRequest(req));
+    if (!user) {
+      res.status(401).json({ok: false, message: 'Session expired or invalid.'});
+      return;
+    }
+    res.status(200).json({ok: true, user});
+  } catch (error) {
+    res.status(500).json({ok: false, message: error.message});
+  }
+});
+
+app.get('/api/ingest-tokens', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view ingest tokens'))) return;
+    res.status(200).json({tokens: ingestTokens.map(publicIngestToken)});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
 });
 
 app.post('/api/ingest-tokens', async (req, res) => {
   try {
-    const actor = requireApiActorRole(req, res, ['Owner', 'Admin'], 'generate ingest tokens');
+    const actor = await requireApiActorRole(req, res, ['Owner', 'Admin'], 'generate ingest tokens');
     if (!actor) return;
     const payload = req.body || {};
     const token = {
@@ -4046,7 +4233,7 @@ app.post('/api/ingest-tokens', async (req, res) => {
 
 app.post('/api/ingest-tokens/:tokenId/revoke', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin'], 'revoke ingest tokens')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin'], 'revoke ingest tokens'))) return;
     const revokedAt = new Date().toISOString();
     let found = false;
     ingestTokens = ingestTokens.map((token) => {
@@ -4076,7 +4263,7 @@ app.get('/api/data-sources', (_req, res) => {
 
 app.post('/api/data-sources', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'save data sources')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'save data sources'))) return;
     const payload = req.body || {};
     const previousMqttById = new Map(mqttChannels.map((channel) => [channel.id, channel]));
     httpPushChannels = Array.isArray(payload.httpPushChannels)
@@ -4106,7 +4293,7 @@ app.post('/api/data-sources', async (req, res) => {
 
 app.get('/api/accesses', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access control entries')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access control entries'))) return;
     const {accesses, accessCredentials} = await getAccessState();
     res.status(200).json({
       accesses,
@@ -4119,7 +4306,7 @@ app.get('/api/accesses', async (req, res) => {
 
 app.post('/api/accesses', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'create access control entries')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'create access control entries'))) return;
     const {accesses, accessCredentials} = await getAccessState();
     const now = new Date().toISOString();
     const payload = req.body || {};
@@ -4144,7 +4331,7 @@ app.post('/api/accesses', async (req, res) => {
 
 app.put('/api/accesses/:accessId', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'update access control entries')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'update access control entries'))) return;
     const {accesses, accessCredentials} = await getAccessState();
     const patch = req.body || {};
     let found = false;
@@ -4169,7 +4356,7 @@ app.put('/api/accesses/:accessId', async (req, res) => {
 
 app.delete('/api/accesses/:accessId', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'delete access control entries')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'delete access control entries'))) return;
     const {accesses, accessCredentials} = await getAccessState();
     const nextAccesses = accesses.filter((access) => access.id !== req.params.accessId);
     const nextCredentials = accessCredentials.filter((credential) => credential.accessId !== req.params.accessId);
@@ -4182,7 +4369,7 @@ app.delete('/api/accesses/:accessId', async (req, res) => {
 
 app.post('/api/accesses/:accessId/credentials', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'create access credentials')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'create access credentials'))) return;
     const {accesses, accessCredentials} = await getAccessState();
     const access = accesses.find((item) => item.id === req.params.accessId);
     if (!access) {
@@ -4238,7 +4425,7 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
 
 app.put('/api/access-credentials/:credentialId', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'update access credentials')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'update access credentials'))) return;
     const {accesses, accessCredentials} = await getAccessState();
     const patch = req.body || {};
     let found = false;
@@ -4292,7 +4479,7 @@ app.put('/api/access-credentials/:credentialId', async (req, res) => {
 
 app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access credential links')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access credential links'))) return;
     const {accesses, accessCredentials} = await getAccessState();
     const credential = accessCredentials.find((item) => item.id === req.params.credentialId);
     if (!credential) {
@@ -4325,7 +4512,7 @@ app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
 
 app.delete('/api/access-credentials/:credentialId', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'delete access credentials')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'delete access credentials'))) return;
     const {accesses, accessCredentials} = await getAccessState();
     const nextCredentials = accessCredentials.filter((credential) => credential.id !== req.params.credentialId);
     await patchAccessState({accesses, accessCredentials: nextCredentials});
@@ -4344,7 +4531,7 @@ app.delete('/api/access-credentials/:credentialId', async (req, res) => {
 
 app.get('/api/access-events', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access records')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access records'))) return;
     const accessId = typeof req.query.accessId === 'string' ? req.query.accessId.trim() : '';
     const credentialId = typeof req.query.credentialId === 'string' ? req.query.credentialId.trim() : '';
     const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
@@ -4400,7 +4587,7 @@ app.get('/api/access-events', async (req, res) => {
 
 app.delete('/api/access-events', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'clear access records')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'clear access records'))) return;
     const accessId = typeof req.query.accessId === 'string' ? req.query.accessId.trim() : '';
     const credentialId = typeof req.query.credentialId === 'string' ? req.query.credentialId.trim() : '';
     if (!accessId && !credentialId) {
@@ -4450,7 +4637,7 @@ app.get('/api/mqtt/config', (_req, res) => {
 
 app.post('/api/mqtt/config', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'save MQTT config')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'save MQTT config'))) return;
     const nextConfig = req.body || {};
     mqttChannels = [sanitizeMqttChannel({
       id: mqttChannels[0]?.id || 'mqtt-default',
@@ -4798,7 +4985,7 @@ app.post('/api/device-commands/:commandId/ack', async (req, res) => {
 app.post('/api/device-commands', async (req, res) => {
   try {
     const payload = req.body || {};
-    const actor = requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Customer'], 'issue device control commands');
+    const actor = await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Customer'], 'issue device control commands');
     if (!actor) return;
 
     const command = await createDeviceControlCommand({
@@ -4818,7 +5005,7 @@ app.post('/api/device-commands', async (req, res) => {
 
 app.post('/api/notification-channels/test', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'test notification channels')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'test notification channels'))) return;
     const channel = req.body?.channel;
     if (!channel || typeof channel !== 'object') {
       res.status(400).json({ok: false, message: 'Notification channel payload is required.'});
@@ -4881,7 +5068,7 @@ app.get('/api/state', async (_req, res) => {
 
 app.put('/api/state', async (req, res) => {
   try {
-    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'], 'save dashboard state')) return;
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'], 'save dashboard state'))) return;
     const incomingState = req.body || {};
     const currentState = await getDashboardState();
     if (Array.isArray(incomingState.accessCredentials) && Array.isArray(currentState.accessCredentials)) {

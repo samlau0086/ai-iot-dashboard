@@ -11,6 +11,7 @@ export function Auth({ mode }: { mode: AuthMode }) {
   const location = useLocation();
   const { currentUser, login, registerUser, whiteLabelConfig } = useAppStore();
   const [message, setMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -32,20 +33,30 @@ export function Auth({ mode }: { mode: AuthMode }) {
     setFormData((current) => ({ ...current, [event.target.name]: event.target.value }));
   };
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     if (mode === 'login') {
-      const result = login(formData.email, formData.password);
-      setMessage(result.message);
+      setIsSubmitting(true);
+      try {
+        const result = await login(formData.email, formData.password);
+        setMessage(result.message);
+      } finally {
+        setIsSubmitting(false);
+      }
       return;
     }
 
-    const result = registerUser(formData);
-    setMessage(result.message);
-    if (result.ok) {
-      setFormData({ name: '', email: '', password: '', siteId: 'factory-a' });
-      window.setTimeout(() => navigate('/login'), 900);
+    setIsSubmitting(true);
+    try {
+      const result = await registerUser(formData);
+      setMessage(result.message);
+      if (result.ok) {
+        setFormData({ name: '', email: '', password: '', siteId: 'factory-a' });
+        window.setTimeout(() => navigate('/login'), 900);
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -189,9 +200,10 @@ export function Auth({ mode }: { mode: AuthMode }) {
 
               <button
                 type="submit"
+                disabled={isSubmitting}
                 className="w-full rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500"
               >
-                {mode === 'login' ? 'Sign in' : 'Submit for approval'}
+                {isSubmitting ? 'Signing in...' : mode === 'login' ? 'Sign in' : 'Submit for approval'}
               </button>
             </form>
 
