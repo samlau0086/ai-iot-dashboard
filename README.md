@@ -123,7 +123,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 权限控制
 - [x] Demo 角色禁止下发真实设备命令
 - [x] 二次确认
-- [ ] 危险操作审批
+- [x] 危险操作审批：非 Owner/Admin 发起高风险命令时进入 pending_approval，审批后才会下发
 - [ ] 失败回滚
 - [ ] 本地手动优先机制
 
@@ -440,6 +440,13 @@ curl -X POST "http://localhost:3006/api/device-commands/batch" \
 ```
 
 批量控制会为每台设备分别创建命令，并分别尝试 MQTT / HTTP / pending queue 下发，因此某一台设备失败不会阻塞其他设备。
+
+危险操作审批：
+
+- 后端会识别 `power_on`、`power_off`、`restart`、`reset`、`relay`、`output`、`valve`、`motor`、`pump`、`frequency`、`pressure`、`speed`、`position`、`write` 等高风险控制命令。
+- Owner / Admin 发起的命令会直接按配置下发。
+- Engineer / Operator / Customer 发起的高风险命令会先保存为 `pending_approval`，不会触发 MQTT / HTTP / pending queue。
+- Owner / Admin 可在 Control Center 的 Control Log 中 Approve 或 Reject。Approve 后才会真正走 MQTT / HTTP / pending queue 下发。
 
 ### 查看操作审计日志
 

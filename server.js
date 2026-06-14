@@ -2016,6 +2016,23 @@ const dispatchDeviceControlCommand = async (command, device) => {
   }) || command;
 };
 
+const canApproveDeviceCommand = (role) => ['Owner', 'Admin'].includes(String(role || ''));
+
+const isDangerousDeviceCommand = (command, parameters = {}) => {
+  const text = [
+    command,
+    ...Object.keys(parameters || {}),
+    ...Object.values(parameters || {}).map((value) => typeof value === 'object' ? JSON.stringify(value) : String(value)),
+  ].join(' ').toLowerCase();
+  return /power_on|power_off|restart|reset|stop|shutdown|start|enable|disable|unlock|lock|open|close|relay|output|valve|motor|pump|drain|pulse|frequency|pressure|speed|position|write/.test(text);
+};
+
+const shouldRequireDeviceCommandApproval = (command) => (
+  command.status !== 'rejected'
+  && !canApproveDeviceCommand(command.requestedByRole)
+  && isDangerousDeviceCommand(command.command, command.parameters)
+);
+
 const createDeviceControlCommand = async ({
   deviceId,
   command,
@@ -2043,7 +2060,13 @@ const createDeviceControlCommand = async ({
     updatedAt: createdAt,
   };
 
+  if (shouldRequireDeviceCommandApproval(normalizedCommand)) {
+    normalizedCommand.status = 'pending_approval';
+    normalizedCommand.result = 'Dangerous operation is waiting for Owner/Admin approval. No command has been sent to the device.';
+  }
+
   await persistDeviceControlCommand(normalizedCommand);
+  if (normalizedCommand.status === 'pending_approval') return normalizedCommand;
   return await dispatchDeviceControlCommand(normalizedCommand, device);
 };
 
@@ -5716,6 +5739,78 @@ app.post('/api/device-commands/:commandId/ack', async (req, res) => {
       return;
     }
 
+    res.status(200).json({command});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.post('/api/device-commands/:commandId/approve', async (req, res) => {
+  try {
+    const actor = await requireApiActorRole(req, res, ['Owner', 'Admin'], 'approve dangerous device control commands');
+    if (!actor) return;
+
+    const existingCommand = await findDeviceControlCommandById(req.params.commandId);
+    if (!existingCommand) {
+      res.status(404).json({error: 'command not found'});
+      return;
+    }
+    if (existingCommand.status !== 'pending_approval') {
+      res.status(400).json({error: 'command is not waiting for approval', command: existingCommand});
+      return;
+    }
+
+    const device = await findDashboardDevice(existingCommand.deviceId);
+    if (!device) {
+      const command = await updateDeviceControlCommand(existingCommand.id, {
+        status: 'rejected',
+        result: 'Approval failed because the target device no longer exists.',
+      });
+      res.status(404).json({error: 'device not found', command});
+      return;
+    }
+
+    const approvedCommand = await updateDeviceControlCommand(existingCommand.id, {
+      status: 'queued',
+      result: `Approved by ${actor.name || actor.email || actor.id}. Dispatching through configured connector.`,
+    });
+    const command = await dispatchDeviceControlCommand(approvedCommand || existingCommand, device);
+
+    await writeAuditLog(req, actor, 'device_command.approve', 'device_command', existingCommand.id, 'success', {
+      deviceId: existingCommand.deviceId,
+      command: existingCommand.command,
+      status: command.status,
+    });
+    res.status(200).json({command});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.post('/api/device-commands/:commandId/reject', async (req, res) => {
+  try {
+    const actor = await requireApiActorRole(req, res, ['Owner', 'Admin'], 'reject dangerous device control commands');
+    if (!actor) return;
+
+    const existingCommand = await findDeviceControlCommandById(req.params.commandId);
+    if (!existingCommand) {
+      res.status(404).json({error: 'command not found'});
+      return;
+    }
+    if (existingCommand.status !== 'pending_approval') {
+      res.status(400).json({error: 'command is not waiting for approval', command: existingCommand});
+      return;
+    }
+
+    const command = await updateDeviceControlCommand(existingCommand.id, {
+      status: 'rejected',
+      result: `Rejected by ${actor.name || actor.email || actor.id}. Command was not sent to the device.`,
+    });
+
+    await writeAuditLog(req, actor, 'device_command.reject', 'device_command', existingCommand.id, 'success', {
+      deviceId: existingCommand.deviceId,
+      command: existingCommand.command,
+    });
     res.status(200).json({command});
   } catch (error) {
     res.status(500).json({error: error.message});

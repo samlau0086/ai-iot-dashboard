@@ -7,6 +7,7 @@ import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 import { canIssueControlCommand, getAccessibleDevices, getAccessibleSites, hasFullDataAccess } from '../lib/featureAccess';
 import { apiJsonHeaders } from '../lib/apiAuth';
+import { confirmDelete } from '../lib/confirm';
 
 type ControlCommand = {
   id: string;
@@ -17,7 +18,7 @@ type ControlCommand = {
   requestedBy: string;
   requestedByRole: string;
   source: string;
-  status: 'queued' | 'sent' | 'success' | 'failed' | 'rejected';
+  status: 'queued' | 'sent' | 'success' | 'failed' | 'rejected' | 'pending_approval';
   result?: string;
   createdAt: string;
   updatedAt: string;
@@ -41,6 +42,7 @@ export function ControlCenter() {
 
   const isDemoUser = currentUser?.role === 'Demo';
   const canControl = canIssueControlCommand(currentUser);
+  const canApproveCommands = currentUser?.role === 'Owner' || currentUser?.role === 'Admin';
   const siteOptions = useMemo(() => (
     [...(hasFullDataAccess(currentUser) ? [{ id: 'All', name: 'All Sites' }] : []), ...accessibleSites]
   ), [accessibleSites, currentUser]);
@@ -147,16 +149,18 @@ export function ControlCenter() {
       if (!response.ok) {
         setMessage(payload.error || 'Control command rejected.');
       } else {
-        setMessage(`Command queued: ${payload.command?.id}`);
-        updateDevice(selectedDevice.id, {
-          config: {
-            ...(selectedDevice.config || {}),
-            controlState: {
-              ...(selectedDevice.config?.controlState || {}),
-              ...buildControlStatePatch(definition, nextControlValues, parameters),
+        setMessage(`Command submitted: ${payload.command?.status || 'queued'} / ${payload.command?.id}`);
+        if (payload.command?.status !== 'pending_approval' && payload.command?.status !== 'rejected') {
+          updateDevice(selectedDevice.id, {
+            config: {
+              ...(selectedDevice.config || {}),
+              controlState: {
+                ...(selectedDevice.config?.controlState || {}),
+                ...buildControlStatePatch(definition, nextControlValues, parameters),
+              },
             },
-          },
-        });
+          });
+        }
         setConfirmChecked(false);
         await loadCommands();
       }
@@ -198,7 +202,11 @@ export function ControlCenter() {
           acc[command.status] = (acc[command.status] || 0) + 1;
           return acc;
         }, {});
+        const approvedTargetIds = new Set((Array.isArray(payload.commands) ? payload.commands : [])
+          .filter((command: ControlCommand) => command.status !== 'pending_approval' && command.status !== 'rejected')
+          .map((command: ControlCommand) => command.deviceId));
         targetIds.forEach((deviceId) => {
+          if (!approvedTargetIds.has(deviceId)) return;
           const device = scopedDevices.find((item) => item.id === deviceId);
           if (!device) return;
           updateDevice(device.id, {
@@ -225,6 +233,34 @@ export function ControlCenter() {
 
   const selectedOption = commandOptions.find((option) => option.id === selectedCommand) || commandOptions[0];
   const SelectedIcon = selectedOption?.icon || SlidersHorizontal;
+
+  const reviewCommand = async (command: ControlCommand, action: 'approve' | 'reject') => {
+    const confirmed = await confirmDelete({
+      title: action === 'approve' ? 'Approve dangerous command' : 'Reject dangerous command',
+      itemName: `${command.deviceName} / ${command.command}`,
+      description: action === 'approve'
+        ? 'After approval, the command will be dispatched through the configured MQTT/HTTP connector or gateway queue.'
+        : 'The command will be marked rejected and will not be sent to the device.',
+      confirmLabel: action === 'approve' ? 'Approve' : 'Reject',
+    });
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`/api/device-commands/${command.id}/${action}`, {
+        method: 'POST',
+        headers: apiJsonHeaders(currentUser),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setMessage(payload.error || `Failed to ${action} command.`);
+        return;
+      }
+      setMessage(`Command ${action}ed: ${payload.command?.status || 'updated'}.`);
+      await loadCommands();
+    } catch (error) {
+      setMessage(`Failed to ${action} command.`);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -536,14 +572,34 @@ export function ControlCenter() {
                       "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
                       command.status === 'rejected' || command.status === 'failed'
                         ? "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"
-                        : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+                        : command.status === 'pending_approval'
+                          ? "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300"
+                          : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
                     )}>
-                      {command.status === 'rejected' || command.status === 'failed' ? <AlertTriangle className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                      {command.status === 'rejected' || command.status === 'failed' || command.status === 'pending_approval' ? <AlertTriangle className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
                       {command.status}
                     </span>
                   </div>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{command.result}</p>
                   <p className="mt-2 truncate text-[11px] font-mono text-slate-400">{JSON.stringify(command.parameters || {})}</p>
+                  {canApproveCommands && command.status === 'pending_approval' && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => reviewCommand(command, 'approve')}
+                        className="inline-flex h-8 items-center rounded border border-emerald-500 bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-500"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => reviewCommand(command, 'reject')}
+                        className="inline-flex h-8 items-center rounded border border-red-300 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-50 dark:border-red-500/40 dark:bg-slate-950 dark:text-red-300 dark:hover:bg-red-500/10"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="text-left text-xs text-slate-500 md:text-right">
                   <div>{new Date(command.createdAt).toLocaleString()}</div>
