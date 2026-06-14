@@ -44,7 +44,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 工作流条件节点已调整为 IF / ELIF / ELSE 分支语义；多个 Trigger 采用任一触发即可进入后续流程。
 - [x] AI Copilot 基础闭环已完成：支持基于当前 Site / 设备 / 告警 / 工作流 / 图表上下文进行自然语言查询、异常解释、建议动作、CSV 报表生成和工作流草稿生成。
 - [x] Partner / White Label 基础闭环已完成：支持客户管理、客户子账号、项目/报价记录、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
-- [ ] 下一阶段重点：Partner 计费、TimescaleDB/Redis 生产化、更多现场协议连接器和生产级队列。
+- [ ] 下一阶段重点：Partner 计费、TimescaleDB hypertable/retention policy、更多现场协议连接器和外部队列 adapter。
 
 ### V1: Energy Monitoring MVP
 
@@ -106,6 +106,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Device Ingest Diagnostics：设备详情页可诊断 MQTT/HTTP 绑定、最近 raw telemetry、mapping 覆盖率，并生成测试请求；Raw Data 可显示匹配设备或未匹配原因
 - [x] Device Provisioning：支持设备型号模板、生产设备库存、CSV 批量导入、Claim Code 安全认领、撤销认领和审计日志，以及在添加设备时通过 MAC / IMEI / Serial Number 自动配置设备
 - [x] SQL-like Query / Metric Builder：Analytics 支持安全查询构建器、聚合分组、SQL-like 预览和 CSV 导出
+- [x] Telemetry Rollups：写入原始 telemetry 时同步维护分钟/小时聚合表，支持按 Site、设备、metric、source 和时间范围查询 count/min/max/avg/latest，减少历史图表和报表扫描原始大表的压力
 
 ### V4: Control Center
 
@@ -381,6 +382,14 @@ Simple 用户适合只需要设备绑定、设备查看和设备操作的客户�
 ```text
 GET /api/telemetry?deviceId=AIR-COMP-001&metric=pressure&source=mqtt&from=2026-06-01T00:00:00.000Z&to=2026-06-07T23:59:59.000Z&limit=200
 ```
+
+生产数据量较大时，建议优先使用聚合接口查询趋势。系统会在写入原始 `telemetry_messages` 时同步维护 `telemetry_metric_rollups`，当前内置 `minute` 和 `hour` 两种粒度：
+
+```text
+GET /api/telemetry/rollups?siteId=factory-a&deviceId=AIR-COMP-001&metric=pressure&interval=hour&from=2026-06-01T00:00:00.000Z&to=2026-06-07T23:59:59.000Z&limit=500
+```
+
+返回字段包括 `count`、`min`、`max`、`sum`、`avg`、`latest` 和 `lastReceivedAt`。未配置 PostgreSQL 时，接口会从当前内存 telemetry buffer 临时聚合，适合本地 demo；生产环境建议配置 PostgreSQL，并后续结合 TimescaleDB hypertable、压缩和 retention policy 管理原始数据生命周期。
 
 ### 配置自动化工作流
 

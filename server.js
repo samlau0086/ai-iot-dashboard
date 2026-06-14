@@ -544,6 +544,24 @@ const initDatabase = async () => {
     )
   `);
   await queryDb(`
+    CREATE TABLE IF NOT EXISTS telemetry_metric_rollups (
+      bucket_interval text NOT NULL,
+      bucket_start timestamptz NOT NULL,
+      device_id text NOT NULL,
+      site_id text,
+      metric text NOT NULL,
+      source text NOT NULL,
+      count integer NOT NULL DEFAULT 0,
+      min_value double precision NOT NULL,
+      max_value double precision NOT NULL,
+      sum_value double precision NOT NULL,
+      latest_value double precision NOT NULL,
+      last_received_at timestamptz NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (bucket_interval, bucket_start, device_id, metric, source)
+    )
+  `);
+  await queryDb(`
     CREATE TABLE IF NOT EXISTS workflow_webhook_events (
       id bigserial PRIMARY KEY,
       workflow_id text NOT NULL,
@@ -637,6 +655,8 @@ const initDatabase = async () => {
   `);
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_device_received ON telemetry_messages (device_id, received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_received ON telemetry_messages (received_at DESC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_rollups_lookup ON telemetry_metric_rollups (bucket_interval, device_id, metric, bucket_start ASC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_rollups_site_lookup ON telemetry_metric_rollups (bucket_interval, site_id, metric, bucket_start ASC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_webhook_events_received ON workflow_webhook_events (workflow_id, received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_started ON workflow_runs (workflow_id, started_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_queue_status_enqueued ON workflow_queue_jobs (status, enqueued_at ASC)');
@@ -5182,6 +5202,114 @@ const rememberMqttTopic = (runtime, topic) => {
   }
 };
 
+const telemetryRollupIntervals = [
+  {name: 'minute', ms: 60 * 1000},
+  {name: 'hour', ms: 60 * 60 * 1000},
+];
+
+const floorTimestampToBucket = (value, bucketMs) => {
+  const timestamp = new Date(value || Date.now()).getTime();
+  const safeTimestamp = Number.isFinite(timestamp) ? timestamp : Date.now();
+  return new Date(Math.floor(safeTimestamp / bucketMs) * bucketMs).toISOString();
+};
+
+const buildTelemetryRollups = (messages = [], source = 'http') => {
+  const rollups = new Map();
+  for (const message of messages) {
+    const deviceId = message.device_id || message.deviceId || message.id;
+    if (!deviceId) continue;
+    const siteId = message.site_id || message.siteId || '';
+    const metrics = message.metrics || {};
+    const receivedAt = message.received_at || new Date().toISOString();
+    const receivedMs = new Date(receivedAt).getTime();
+    const rollupSource = message.source || source;
+    for (const [metric, rawValue] of Object.entries(metrics)) {
+      const value = Number(rawValue);
+      if (!Number.isFinite(value)) continue;
+      for (const interval of telemetryRollupIntervals) {
+        const bucketStart = floorTimestampToBucket(receivedAt, interval.ms);
+        const key = [interval.name, bucketStart, deviceId, metric, rollupSource].join('|');
+        const current = rollups.get(key);
+        if (!current) {
+          rollups.set(key, {
+            bucketInterval: interval.name,
+            bucketStart,
+            deviceId,
+            siteId,
+            metric,
+            source: rollupSource,
+            count: 1,
+            minValue: value,
+            maxValue: value,
+            sumValue: value,
+            latestValue: value,
+            lastReceivedAt: receivedAt,
+            lastReceivedMs: Number.isFinite(receivedMs) ? receivedMs : 0,
+          });
+          continue;
+        }
+        current.count += 1;
+        current.minValue = Math.min(current.minValue, value);
+        current.maxValue = Math.max(current.maxValue, value);
+        current.sumValue += value;
+        if ((Number.isFinite(receivedMs) ? receivedMs : 0) >= current.lastReceivedMs) {
+          current.latestValue = value;
+          current.lastReceivedAt = receivedAt;
+          current.lastReceivedMs = Number.isFinite(receivedMs) ? receivedMs : current.lastReceivedMs;
+        }
+        if (!current.siteId && siteId) current.siteId = siteId;
+      }
+    }
+  }
+  return Array.from(rollups.values());
+};
+
+const persistTelemetryRollups = async (messages, source = 'http') => {
+  if (!db || messages.length === 0) return;
+  const rollups = buildTelemetryRollups(messages, source);
+  if (rollups.length === 0) return;
+
+  const values = [];
+  const placeholders = rollups.map((rollup, index) => {
+    const offset = index * 12;
+    values.push(
+      rollup.bucketInterval,
+      rollup.bucketStart,
+      rollup.deviceId,
+      rollup.siteId || null,
+      rollup.metric,
+      rollup.source,
+      rollup.count,
+      rollup.minValue,
+      rollup.maxValue,
+      rollup.sumValue,
+      rollup.latestValue,
+      rollup.lastReceivedAt
+    );
+    return `($${offset + 1}, $${offset + 2}::timestamptz, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11}, $${offset + 12}::timestamptz)`;
+  }).join(', ');
+
+  await queryDb(
+    `INSERT INTO telemetry_metric_rollups
+       (bucket_interval, bucket_start, device_id, site_id, metric, source, count, min_value, max_value, sum_value, latest_value, last_received_at)
+     VALUES ${placeholders}
+     ON CONFLICT (bucket_interval, bucket_start, device_id, metric, source)
+     DO UPDATE SET
+       site_id = COALESCE(telemetry_metric_rollups.site_id, EXCLUDED.site_id),
+       count = telemetry_metric_rollups.count + EXCLUDED.count,
+       min_value = LEAST(telemetry_metric_rollups.min_value, EXCLUDED.min_value),
+       max_value = GREATEST(telemetry_metric_rollups.max_value, EXCLUDED.max_value),
+       sum_value = telemetry_metric_rollups.sum_value + EXCLUDED.sum_value,
+       latest_value = CASE
+         WHEN EXCLUDED.last_received_at >= telemetry_metric_rollups.last_received_at THEN EXCLUDED.latest_value
+         ELSE telemetry_metric_rollups.latest_value
+       END,
+       last_received_at = GREATEST(telemetry_metric_rollups.last_received_at, EXCLUDED.last_received_at),
+       updated_at = now()`,
+    values
+  );
+};
+
 const persistTelemetryMessages = async (messages, source = 'http') => {
   if (!db || messages.length === 0) return;
 
@@ -5204,6 +5332,7 @@ const persistTelemetryMessages = async (messages, source = 'http') => {
      VALUES ${placeholders}`,
     values
   );
+  await persistTelemetryRollups(messages, source);
 };
 
 const ingestTelemetryPayload = async (payload, source = 'http') => {
@@ -5221,6 +5350,8 @@ const ingestTelemetryPayload = async (payload, source = 'http') => {
     accepted.push({
       ...normalizedMessage,
       device_id: deviceId,
+      site_id: normalizedMessage.site_id || normalizedMessage.siteId || device?.siteId || '',
+      tenant_id: normalizedMessage.tenant_id || normalizedMessage.tenantId || device?.tenantId || '',
       metrics,
       source,
       received_at: new Date().toISOString(),
@@ -6347,6 +6478,95 @@ app.get('/api/telemetry/days', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({error: error.message, days: []});
+  }
+});
+
+app.get('/api/telemetry/rollups', async (req, res) => {
+  try {
+    const interval = ['minute', 'hour'].includes(String(req.query.interval || 'hour')) ? String(req.query.interval || 'hour') : 'hour';
+    const from = typeof req.query.from === 'string' ? req.query.from.trim() : '';
+    const to = typeof req.query.to === 'string' ? req.query.to.trim() : '';
+    const deviceId = typeof req.query.deviceId === 'string' ? req.query.deviceId.trim() : '';
+    const siteId = typeof req.query.siteId === 'string' ? req.query.siteId.trim() : '';
+    const metric = typeof req.query.metric === 'string' ? req.query.metric.trim() : '';
+    const source = typeof req.query.source === 'string' ? req.query.source.trim() : '';
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 500), 5000));
+
+    if (db) {
+      const where = [`bucket_interval = $1`];
+      const values = [interval];
+      const addParam = (value) => {
+        values.push(value);
+        return `$${values.length}`;
+      };
+
+      if (from) where.push(`bucket_start >= ${addParam(from)}::timestamptz`);
+      if (to) where.push(`bucket_start <= ${addParam(to)}::timestamptz`);
+      if (deviceId) where.push(`device_id = ${addParam(deviceId)}`);
+      if (siteId) where.push(`site_id = ${addParam(siteId)}`);
+      if (metric) where.push(`metric = ${addParam(metric)}`);
+      if (source) where.push(`source ILIKE ${addParam(`%${source}%`)}`);
+      values.push(limit);
+
+      const result = await queryDb(
+        `SELECT bucket_interval AS "interval",
+                bucket_start AS "bucketStart",
+                device_id AS "deviceId",
+                site_id AS "siteId",
+                metric,
+                source,
+                count,
+                min_value AS "min",
+                max_value AS "max",
+                sum_value AS "sum",
+                CASE WHEN count > 0 THEN sum_value / count ELSE 0 END AS "avg",
+                latest_value AS "latest",
+                last_received_at AS "lastReceivedAt"
+         FROM telemetry_metric_rollups
+         WHERE ${where.join(' AND ')}
+         ORDER BY bucket_start ASC
+         LIMIT $${values.length}`,
+        values
+      );
+      res.status(200).json({rollups: result.rows});
+      return;
+    }
+
+    const intervalConfig = telemetryRollupIntervals.find((item) => item.name === interval) || telemetryRollupIntervals[1];
+    const filteredMessages = telemetryMessages
+      .filter((message) => !from || message.received_at >= from)
+      .filter((message) => !to || message.received_at <= to)
+      .filter((message) => !deviceId || (message.device_id || message.deviceId || message.id) === deviceId)
+      .filter((message) => !siteId || (message.site_id || message.siteId) === siteId)
+      .filter((message) => !source || String(message.source || '').toLowerCase().includes(source.toLowerCase()))
+      .map((message) => ({
+        ...message,
+        metrics: metric
+          ? Object.fromEntries(Object.entries(message.metrics || {}).filter(([key]) => key === metric))
+          : message.metrics || {},
+      }));
+    const rollups = buildTelemetryRollups(filteredMessages, source || 'memory')
+      .filter((rollup) => rollup.bucketInterval === intervalConfig.name)
+      .sort((first, second) => new Date(first.bucketStart).getTime() - new Date(second.bucketStart).getTime())
+      .slice(0, limit)
+      .map((rollup) => ({
+        interval: rollup.bucketInterval,
+        bucketStart: rollup.bucketStart,
+        deviceId: rollup.deviceId,
+        siteId: rollup.siteId,
+        metric: rollup.metric,
+        source: rollup.source,
+        count: rollup.count,
+        min: rollup.minValue,
+        max: rollup.maxValue,
+        sum: rollup.sumValue,
+        avg: rollup.count ? rollup.sumValue / rollup.count : 0,
+        latest: rollup.latestValue,
+        lastReceivedAt: rollup.lastReceivedAt,
+      }));
+    res.status(200).json({rollups});
+  } catch (error) {
+    res.status(500).json({error: error.message, rollups: []});
   }
 });
 
