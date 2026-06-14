@@ -10,6 +10,7 @@ import { apiActorHeaders, apiJsonHeaders } from '../lib/apiAuth';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 import { generateClaimCode, generateClaimToken } from '../lib/deviceProvisioning';
 import { APP_PROFILE_OPTIONS, FEATURE_ACCESS_OPTIONS, getUserAppProfile, getUserFeatureAccess, type AppProfile, type FeatureNavKey } from '../lib/featureAccess';
+import { PASSWORD_POLICY_DESCRIPTION, validatePasswordPolicy } from '../lib/passwordPolicy';
 
 const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
@@ -277,6 +278,7 @@ export function Settings() {
   const [auditFilters, setAuditFilters] = useState({ action: '', result: '', actorId: '', limit: '100' });
   const [auditMessage, setAuditMessage] = useState('');
   const [auditLoading, setAuditLoading] = useState(false);
+  const [userMessage, setUserMessage] = useState('');
   const [testingNotificationIds, setTestingNotificationIds] = useState<string[]>([]);
   const [channelDraft, setChannelDraft] = useState({
     type: 'email' as NotificationChannel['type'],
@@ -486,6 +488,11 @@ export function Settings() {
 
   const handleAddUser = () => {
     if (!userDraft.name.trim() || !userDraft.email.trim() || !userDraft.password.trim()) return;
+    const passwordPolicy = validatePasswordPolicy(userDraft.password, `${userDraft.name} ${userDraft.email}`);
+    if (!passwordPolicy.ok) {
+      setUserMessage(passwordPolicy.message);
+      return;
+    }
 
     addUser({
       id: newId('user'),
@@ -499,6 +506,7 @@ export function Settings() {
       createdAt: new Date().toISOString(),
       approvedAt: new Date().toISOString(),
     });
+    setUserMessage('User added. Remember to save settings to persist this account.');
     setUserDraft({ name: '', email: '', password: '', role: 'Operator', appProfile: 'operations', siteId: sites[0]?.id || 'factory-a' });
   };
 
@@ -2524,6 +2532,10 @@ export function Settings() {
                   <Plus className="h-4 w-4" />
                   Add
                 </button>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-400">
+                Password policy: {PASSWORD_POLICY_DESCRIPTION}
+                {userMessage && <span className="ml-2 font-medium text-orange-600 dark:text-orange-400">{userMessage}</span>}
               </div>
 
               <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">

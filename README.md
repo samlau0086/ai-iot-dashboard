@@ -207,7 +207,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 登录失败限流：按 IP + Email 限制失败登录次数，默认 10 分钟内 5 次失败后锁定 15 分钟
 - [x] 操作审计日志：登录、注册、Ingest Token、Data Source、Access Control、MQTT、设备控制、通知测试和状态保存等敏感操作会写入审计记录
 - [x] 服务端 HttpOnly Cookie Session：登录成功后后端设置 `SameSite=Lax` 的 session cookie，敏感 API 可从 cookie 或兼容 header 鉴权，登出时清理 cookie
-- [ ] 更完整的安全增强：刷新 Token、强制密码策略、审计日志导出和异常登录告警
+- [x] 强制密码策略：注册和后台新增用户默认要求至少 10 位，且满足大小写、数字、符号中的 3 类，并拦截常见弱密码和包含姓名/邮箱的密码
+- [ ] 更完整的安全增强：刷新 Token、审计日志导出和异常登录告警
 
 ### 技术演进方向
 
@@ -515,6 +516,8 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 | `AUTH_FAILED_LOGIN_WINDOW_MS` | 登录失败统计窗口，默认 `600000`。 |
 | `AUTH_FAILED_LOGIN_LOCK_MS` | 达到阈值后的锁定时间，默认 `900000`。 |
 | `AUTH_SESSION_COOKIE_NAME` | 服务端 HttpOnly Session Cookie 名称，默认 `ai_iot_session`。 |
+| `AUTH_PASSWORD_MIN_LENGTH` | 注册密码最小长度，默认 `10`，最低不小于 `8`。 |
+| `AUTH_PASSWORD_REQUIRED_CLASSES` | 注册密码需要满足的字符类别数量，默认 `3`，类别包括大写、小写、数字、符号。 |
 | `AUDIT_LOG_BUFFER_SIZE` | 未配置 PostgreSQL 时的内存审计日志保留条数，默认 `1000`。 |
 
 `VPS_DEPLOY_PATH` 指向的目录会由工作流自动执行 `mkdir -p` 创建，但 `VPS_USER` 必须有创建和写入权限。

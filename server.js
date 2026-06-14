@@ -39,6 +39,8 @@ const maxAuditLogs = Number(process.env.AUDIT_LOG_BUFFER_SIZE || 1000);
 const authFailedLoginWindowMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_WINDOW_MS || 10 * 60 * 1000));
 const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LOGIN_MAX_ATTEMPTS || 5));
 const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
+const authPasswordMinLength = Math.max(8, Number(process.env.AUTH_PASSWORD_MIN_LENGTH || 10));
+const authPasswordRequiredClasses = Math.max(1, Math.min(Number(process.env.AUTH_PASSWORD_REQUIRED_CLASSES || 3), 4));
 const authLoginFailures = new Map();
 const splitTopics = (value) => Array.isArray(value)
   ? value.map((topic) => String(topic).trim()).filter(Boolean)
@@ -91,6 +93,49 @@ const verifyPassword = (password, user) => {
     return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
   }
   return Boolean(user?.password) && user.password === password;
+};
+
+const commonWeakPasswords = new Set([
+  'password',
+  'password123',
+  'admin123',
+  'demo123',
+  '123456',
+  '12345678',
+  'qwerty123',
+  'letmein',
+  'welcome123',
+]);
+
+const validatePasswordPolicy = (password, identity = '') => {
+  const value = String(password || '');
+  const normalized = value.toLowerCase();
+  const identityParts = String(identity || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((part) => part.length >= 4);
+
+  if (value.length < authPasswordMinLength) {
+    return {ok: false, message: `Password must be at least ${authPasswordMinLength} characters.`};
+  }
+  if (commonWeakPasswords.has(normalized)) {
+    return {ok: false, message: 'Password is too common. Please choose a stronger password.'};
+  }
+  if (identityParts.some((part) => normalized.includes(part))) {
+    return {ok: false, message: 'Password should not contain your name or email.'};
+  }
+
+  const classCount = [
+    /[a-z]/.test(value),
+    /[A-Z]/.test(value),
+    /\d/.test(value),
+    /[^A-Za-z0-9]/.test(value),
+  ].filter(Boolean).length;
+
+  if (classCount < authPasswordRequiredClasses) {
+    return {ok: false, message: `Password must include at least ${authPasswordRequiredClasses} of: uppercase, lowercase, number, symbol.`};
+  }
+  return {ok: true, message: 'Password meets the security policy.'};
 };
 
 const sanitizeUserForStorage = (user) => {
@@ -4301,6 +4346,12 @@ app.post('/api/auth/register', async (req, res) => {
     const password = String(payload.password || '');
     if (!email || !name || !password) {
       res.status(400).json({ok: false, message: 'Name, email, and password are required.'});
+      return;
+    }
+    const passwordPolicy = validatePasswordPolicy(password, `${name} ${email}`);
+    if (!passwordPolicy.ok) {
+      await writeAuditLog(req, {id: null, name, role: null}, 'auth.register', 'user', email, 'failed', {reason: 'weak_password'});
+      res.status(400).json({ok: false, message: passwordPolicy.message});
       return;
     }
 

@@ -3,6 +3,7 @@ import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Cpu, Lock, Mail, User, Factory } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { canAccessPath, getDefaultRouteForUser } from '../lib/featureAccess';
+import { PASSWORD_POLICY_DESCRIPTION, validatePasswordPolicy } from '../lib/passwordPolicy';
 
 type AuthMode = 'login' | 'register';
 
@@ -44,6 +45,12 @@ export function Auth({ mode }: { mode: AuthMode }) {
       } finally {
         setIsSubmitting(false);
       }
+      return;
+    }
+
+    const passwordPolicy = validatePasswordPolicy(formData.password, `${formData.name} ${formData.email}`);
+    if (!passwordPolicy.ok) {
+      setMessage(passwordPolicy.message);
       return;
     }
 
@@ -172,8 +179,11 @@ export function Auth({ mode }: { mode: AuthMode }) {
                   value={formData.password}
                   onChange={handleChange}
                   className="block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-orange-500"
-                  placeholder="password123"
+                  placeholder="Strong password"
                 />
+                {mode === 'register' && (
+                  <p className="mt-1 text-xs leading-5 text-slate-500">{PASSWORD_POLICY_DESCRIPTION}</p>
+                )}
               </div>
 
               {mode === 'register' && (
