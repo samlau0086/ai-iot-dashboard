@@ -44,7 +44,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 工作流条件节点已调整为 IF / ELIF / ELSE 分支语义；多个 Trigger 采用任一触发即可进入后续流程。
 - [x] AI Copilot 基础闭环已完成：支持基于当前 Site / 设备 / 告警 / 工作流 / 图表上下文进行自然语言查询、异常解释、建议动作、CSV 报表生成和工作流草稿生成。
 - [x] Partner / White Label 基础闭环已完成：支持客户管理、客户子账号、项目/报价记录、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
-- [ ] 下一阶段重点：Partner 计费、TimescaleDB hypertable/retention policy、更多现场协议连接器和外部队列 adapter。
+- [ ] 下一阶段重点：Partner 计费、TimescaleDB hypertable/compression、更多现场协议连接器和外部队列 adapter。
 
 ### V1: Energy Monitoring MVP
 
@@ -107,6 +107,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Device Provisioning：支持设备型号模板、生产设备库存、CSV 批量导入、Claim Code 安全认领、撤销认领和审计日志，以及在添加设备时通过 MAC / IMEI / Serial Number 自动配置设备
 - [x] SQL-like Query / Metric Builder：Analytics 支持安全查询构建器、聚合分组、SQL-like 预览和 CSV 导出
 - [x] Telemetry Rollups：写入原始 telemetry 时同步维护分钟/小时聚合表，支持按 Site、设备、metric、source 和时间范围查询 count/min/max/avg/latest，减少历史图表和报表扫描原始大表的压力
+- [x] Telemetry Retention Policy：支持原始 telemetry、分钟 rollup、小时 rollup 分别配置保留天数，并提供自动清理 worker、状态接口和手动清理接口
 
 ### V4: Control Center
 
@@ -390,6 +391,18 @@ GET /api/telemetry/rollups?siteId=factory-a&deviceId=AIR-COMP-001&metric=pressur
 ```
 
 返回字段包括 `count`、`min`、`max`、`sum`、`avg`、`latest` 和 `lastReceivedAt`。未配置 PostgreSQL 时，接口会从当前内存 telemetry buffer 临时聚合，适合本地 demo；生产环境建议配置 PostgreSQL，并后续结合 TimescaleDB hypertable、压缩和 retention policy 管理原始数据生命周期。
+
+遥测保留策略默认开启，仅在 PostgreSQL 部署下执行。默认保留原始 telemetry `90` 天、分钟 rollup `30` 天、小时 rollup `730` 天：
+
+```env
+TELEMETRY_RETENTION_ENABLED=true
+TELEMETRY_RAW_RETENTION_DAYS=90
+TELEMETRY_MINUTE_ROLLUP_RETENTION_DAYS=30
+TELEMETRY_HOUR_ROLLUP_RETENTION_DAYS=730
+TELEMETRY_RETENTION_INTERVAL_MS=3600000
+```
+
+可以通过 `GET /api/telemetry/retention/status` 查看最近清理状态；Owner / Admin 可调用 `POST /api/telemetry/retention/run` 手动触发一次清理。`/health` 也会返回 retention 的简要状态。
 
 ### 配置自动化工作流
 

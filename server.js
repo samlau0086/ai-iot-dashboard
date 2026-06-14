@@ -49,6 +49,11 @@ const workflowQueueMaxPending = Math.max(50, Number(process.env.WORKFLOW_QUEUE_M
 const workflowQueuePollMs = Math.max(25, Number(process.env.WORKFLOW_QUEUE_POLL_MS || 100));
 const workflowQueueStaleMs = Math.max(60000, Number(process.env.WORKFLOW_QUEUE_STALE_MS || 10 * 60 * 1000));
 const workflowQueueMaxAttempts = Math.max(1, Number(process.env.WORKFLOW_QUEUE_MAX_ATTEMPTS || 3));
+const telemetryRetentionEnabled = process.env.TELEMETRY_RETENTION_ENABLED !== 'false';
+const telemetryRawRetentionDays = Math.max(1, Number(process.env.TELEMETRY_RAW_RETENTION_DAYS || 90));
+const telemetryMinuteRollupRetentionDays = Math.max(1, Number(process.env.TELEMETRY_MINUTE_ROLLUP_RETENTION_DAYS || 30));
+const telemetryHourRollupRetentionDays = Math.max(1, Number(process.env.TELEMETRY_HOUR_ROLLUP_RETENTION_DAYS || 730));
+const telemetryRetentionIntervalMs = Math.max(5 * 60 * 1000, Number(process.env.TELEMETRY_RETENTION_INTERVAL_MS || 60 * 60 * 1000));
 const authFailedLoginWindowMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_WINDOW_MS || 10 * 60 * 1000));
 const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LOGIN_MAX_ATTEMPTS || 5));
 const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
@@ -5335,6 +5340,78 @@ const persistTelemetryMessages = async (messages, source = 'http') => {
   await persistTelemetryRollups(messages, source);
 };
 
+const telemetryRetentionState = {
+  enabled: telemetryRetentionEnabled,
+  lastRunAt: null,
+  lastError: '',
+  deletedRaw: 0,
+  deletedMinuteRollups: 0,
+  deletedHourRollups: 0,
+};
+
+const getTelemetryRetentionStatus = () => ({
+  ...telemetryRetentionState,
+  rawRetentionDays: telemetryRawRetentionDays,
+  minuteRollupRetentionDays: telemetryMinuteRollupRetentionDays,
+  hourRollupRetentionDays: telemetryHourRollupRetentionDays,
+  intervalMs: telemetryRetentionIntervalMs,
+  databaseBacked: Boolean(db),
+});
+
+const runTelemetryRetentionCleanup = async () => {
+  if (!db || !telemetryRetentionEnabled) return getTelemetryRetentionStatus();
+  const rawResult = await queryDb(
+    `WITH deleted AS (
+       DELETE FROM telemetry_messages
+       WHERE received_at < now() - ($1::text || ' days')::interval
+       RETURNING 1
+     )
+     SELECT count(*)::int AS count FROM deleted`,
+    [telemetryRawRetentionDays]
+  );
+  const minuteResult = await queryDb(
+    `WITH deleted AS (
+       DELETE FROM telemetry_metric_rollups
+       WHERE bucket_interval = 'minute'
+         AND bucket_start < now() - ($1::text || ' days')::interval
+       RETURNING 1
+     )
+     SELECT count(*)::int AS count FROM deleted`,
+    [telemetryMinuteRollupRetentionDays]
+  );
+  const hourResult = await queryDb(
+    `WITH deleted AS (
+       DELETE FROM telemetry_metric_rollups
+       WHERE bucket_interval = 'hour'
+         AND bucket_start < now() - ($1::text || ' days')::interval
+       RETURNING 1
+     )
+     SELECT count(*)::int AS count FROM deleted`,
+    [telemetryHourRollupRetentionDays]
+  );
+
+  telemetryRetentionState.lastRunAt = new Date().toISOString();
+  telemetryRetentionState.lastError = '';
+  telemetryRetentionState.deletedRaw = Number(rawResult?.rows?.[0]?.count || 0);
+  telemetryRetentionState.deletedMinuteRollups = Number(minuteResult?.rows?.[0]?.count || 0);
+  telemetryRetentionState.deletedHourRollups = Number(hourResult?.rows?.[0]?.count || 0);
+  return getTelemetryRetentionStatus();
+};
+
+const startTelemetryRetentionWorker = () => {
+  if (!db || !telemetryRetentionEnabled) return;
+  runTelemetryRetentionCleanup().catch((error) => {
+    telemetryRetentionState.lastError = error.message || 'Telemetry retention cleanup failed.';
+    console.error('Telemetry retention cleanup failed:', error);
+  });
+  setInterval(() => {
+    runTelemetryRetentionCleanup().catch((error) => {
+      telemetryRetentionState.lastError = error.message || 'Telemetry retention cleanup failed.';
+      console.error('Telemetry retention cleanup failed:', error);
+    });
+  }, telemetryRetentionIntervalMs);
+};
+
 const ingestTelemetryPayload = async (payload, source = 'http') => {
   const messages = Array.isArray(payload) ? payload : [payload];
   const accepted = [];
@@ -5656,6 +5733,11 @@ app.get('/health', async (_req, res) => {
       running: queue.running,
       failed: queue.failed,
       rejected: queue.rejected,
+    },
+    telemetryRetention: {
+      enabled: telemetryRetentionState.enabled,
+      lastRunAt: telemetryRetentionState.lastRunAt,
+      lastError: telemetryRetentionState.lastError,
     },
   });
 });
@@ -6567,6 +6649,28 @@ app.get('/api/telemetry/rollups', async (req, res) => {
     res.status(200).json({rollups});
   } catch (error) {
     res.status(500).json({error: error.message, rollups: []});
+  }
+});
+
+app.get('/api/telemetry/retention/status', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Partner'], 'view telemetry retention status'))) return;
+    res.status(200).json(getTelemetryRetentionStatus());
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.post('/api/telemetry/retention/run', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin'], 'run telemetry retention cleanup'))) return;
+    const status = await runTelemetryRetentionCleanup();
+    await writeAuditLog(req, await getApiActor(req), 'telemetry.retention.run', 'telemetry', 'retention', 'success', status);
+    res.status(200).json(status);
+  } catch (error) {
+    telemetryRetentionState.lastError = error.message || 'Telemetry retention cleanup failed.';
+    await writeAuditLog(req, await getApiActor(req), 'telemetry.retention.run', 'telemetry', 'retention', 'failed', {error: error.message});
+    res.status(500).json({error: error.message, ...getTelemetryRetentionStatus()});
   }
 });
 
@@ -7905,6 +8009,7 @@ const startServer = async () => {
   app.listen(port, '0.0.0.0', () => {
     console.log(`AI IoT Dashboard is running on port ${port}`);
     startWorkflowQueueWorker();
+    startTelemetryRetentionWorker();
     startMqttSubscribers();
     runScheduledWorkflows().catch((error) => console.error('Workflow scheduler failed:', error));
     setInterval(() => {
