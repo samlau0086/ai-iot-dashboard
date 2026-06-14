@@ -47,6 +47,8 @@ const workflowQueueMode = String(process.env.WORKFLOW_QUEUE_MODE || 'memory').tr
 const workflowQueueConcurrency = Math.max(1, Math.min(Number(process.env.WORKFLOW_QUEUE_CONCURRENCY || 2), 20));
 const workflowQueueMaxPending = Math.max(50, Number(process.env.WORKFLOW_QUEUE_MAX_PENDING || 1000));
 const workflowQueuePollMs = Math.max(25, Number(process.env.WORKFLOW_QUEUE_POLL_MS || 100));
+const workflowQueueStaleMs = Math.max(60000, Number(process.env.WORKFLOW_QUEUE_STALE_MS || 10 * 60 * 1000));
+const workflowQueueMaxAttempts = Math.max(1, Number(process.env.WORKFLOW_QUEUE_MAX_ATTEMPTS || 3));
 const authFailedLoginWindowMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_WINDOW_MS || 10 * 60 * 1000));
 const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LOGIN_MAX_ATTEMPTS || 5));
 const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
@@ -568,6 +570,27 @@ const initDatabase = async () => {
   `);
   await queryDb('ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS workflow_version integer NOT NULL DEFAULT 1');
   await queryDb(`
+    CREATE TABLE IF NOT EXISTS workflow_queue_jobs (
+      id text PRIMARY KEY,
+      workflow_id text NOT NULL,
+      workflow_name text,
+      trigger_id text NOT NULL,
+      reason text,
+      status text NOT NULL,
+      workflow jsonb NOT NULL,
+      trigger jsonb NOT NULL,
+      event jsonb NOT NULL,
+      attempts integer NOT NULL DEFAULT 0,
+      locked_by text,
+      locked_at timestamptz,
+      enqueued_at timestamptz NOT NULL,
+      started_at timestamptz,
+      finished_at timestamptz,
+      updated_at timestamptz NOT NULL,
+      last_error text
+    )
+  `);
+  await queryDb(`
     CREATE TABLE IF NOT EXISTS device_control_commands (
       id text PRIMARY KEY,
       device_id text NOT NULL,
@@ -616,6 +639,8 @@ const initDatabase = async () => {
   await queryDb('CREATE INDEX IF NOT EXISTS idx_telemetry_received ON telemetry_messages (received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_webhook_events_received ON workflow_webhook_events (workflow_id, received_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_started ON workflow_runs (workflow_id, started_at DESC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_queue_status_enqueued ON workflow_queue_jobs (status, enqueued_at ASC)');
+  await queryDb('CREATE INDEX IF NOT EXISTS idx_workflow_queue_locked ON workflow_queue_jobs (status, locked_at ASC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_device_control_commands_created ON device_control_commands (created_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_access_events_created ON access_events (created_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC)');
@@ -4444,9 +4469,10 @@ const executeWorkflow = async (workflow, trigger, event, options = {}) => {
 
 const workflowQueuePending = [];
 const workflowQueueRunning = new Map();
+const workflowQueueWorkerId = createId('wf-worker');
 const workflowQueueStats = {
   mode: workflowQueueMode,
-  adapter: workflowQueueMode === 'redis' || workflowQueueMode === 'bullmq' ? 'memory-fallback' : 'memory',
+  adapter: 'memory',
   enqueued: 0,
   started: 0,
   completed: 0,
@@ -4459,20 +4485,99 @@ const workflowQueueStats = {
   lastError: '',
 };
 
-const workflowQueueStatus = () => ({
-  ...workflowQueueStats,
-  configuredMode: workflowQueueMode,
-  concurrency: workflowQueueConcurrency,
-  maxPending: workflowQueueMaxPending,
-  pending: workflowQueuePending.length,
-  running: workflowQueueRunning.size,
-  note: workflowQueueStats.adapter === 'memory-fallback'
-    ? 'WORKFLOW_QUEUE_MODE requested Redis/BullMQ, but this build uses the in-process queue until the Redis adapter is installed.'
-    : 'In-process workflow queue is active.',
-});
+const getWorkflowQueueAdapter = () => {
+  if (workflowQueueMode === 'postgres' || workflowQueueMode === 'postgresql' || workflowQueueMode === 'database') {
+    return db ? 'postgres' : 'memory-fallback';
+  }
+  if (workflowQueueMode === 'redis' || workflowQueueMode === 'bullmq') return 'memory-fallback';
+  return 'memory';
+};
+
+const workflowQueueNote = (adapter) => {
+  if (adapter === 'postgres') return 'PostgreSQL durable workflow queue is active.';
+  if (adapter === 'memory-fallback') {
+    return workflowQueueMode === 'postgres' || workflowQueueMode === 'postgresql' || workflowQueueMode === 'database'
+      ? 'WORKFLOW_QUEUE_MODE requested PostgreSQL, but DATABASE_URL is not configured. Using the in-process queue.'
+      : 'WORKFLOW_QUEUE_MODE requested Redis/BullMQ, but this build uses the in-process queue until the Redis adapter is installed.';
+  }
+  return 'In-process workflow queue is active.';
+};
+
+const workflowQueueStatus = async () => {
+  const adapter = getWorkflowQueueAdapter();
+  workflowQueueStats.adapter = adapter;
+  const baseStatus = {
+    ...workflowQueueStats,
+    adapter,
+    configuredMode: workflowQueueMode,
+    workerId: workflowQueueWorkerId,
+    concurrency: workflowQueueConcurrency,
+    maxPending: workflowQueueMaxPending,
+    maxAttempts: workflowQueueMaxAttempts,
+    staleMs: workflowQueueStaleMs,
+    pending: workflowQueuePending.length,
+    running: workflowQueueRunning.size,
+    note: workflowQueueNote(adapter),
+  };
+
+  if (adapter !== 'postgres') return baseStatus;
+
+  const result = await queryDb(`
+    SELECT status, count(*)::int AS count
+    FROM workflow_queue_jobs
+    GROUP BY status
+  `);
+  const counts = Object.fromEntries((result?.rows || []).map((row) => [row.status, Number(row.count || 0)]));
+  return {
+    ...baseStatus,
+    pending: counts.pending || 0,
+    running: counts.running || 0,
+    completed: counts.completed ?? baseStatus.completed,
+    failed: counts.failed ?? baseStatus.failed,
+    databaseCounts: counts,
+  };
+};
 
 const enqueueWorkflowRun = async ({workflow, trigger, event, reason = 'event'} = {}) => {
   if (!workflow || !trigger || !event) return {queued: false, reason: 'invalid_job'};
+  const sanitizedEvent = sanitizeWorkflowLogValue(event, {maxDepth: 8, maxArrayLength: 200, maxStringLength: 4000});
+  const adapter = getWorkflowQueueAdapter();
+
+  if (adapter === 'postgres') {
+    const countResult = await queryDb(
+      `SELECT count(*)::int AS count FROM workflow_queue_jobs WHERE status = 'pending'`
+    );
+    if (Number(countResult?.rows?.[0]?.count || 0) >= workflowQueueMaxPending) {
+      workflowQueueStats.rejected += 1;
+      workflowQueueStats.lastError = `PostgreSQL workflow queue is full (${workflowQueueMaxPending} pending jobs).`;
+      console.warn(workflowQueueStats.lastError);
+      return {queued: false, reason: 'queue_full'};
+    }
+
+    const jobId = createId('wfq');
+    const enqueuedAt = new Date().toISOString();
+    await queryDb(
+      `INSERT INTO workflow_queue_jobs
+       (id, workflow_id, workflow_name, trigger_id, reason, status, workflow, trigger, event, enqueued_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'pending', $6::jsonb, $7::jsonb, $8::jsonb, $9::timestamptz, $9::timestamptz)`,
+      [
+        jobId,
+        workflow.id,
+        workflow.name || '',
+        trigger.id,
+        reason,
+        JSON.stringify(workflow),
+        JSON.stringify(trigger),
+        JSON.stringify(sanitizedEvent),
+        enqueuedAt,
+      ]
+    );
+    workflowQueueStats.enqueued += 1;
+    workflowQueueStats.lastEnqueuedAt = enqueuedAt;
+    void drainWorkflowQueue();
+    return {queued: true, jobId, adapter};
+  }
+
   if (workflowQueuePending.length >= workflowQueueMaxPending) {
     workflowQueueStats.rejected += 1;
     workflowQueueStats.lastError = `Workflow queue is full (${workflowQueueMaxPending} pending jobs).`;
@@ -4482,9 +4587,10 @@ const enqueueWorkflowRun = async ({workflow, trigger, event, reason = 'event'} =
 
   const job = {
     id: createId('wfq'),
+    adapter,
     workflow,
     trigger,
-    event: sanitizeWorkflowLogValue(event, {maxDepth: 8, maxArrayLength: 200, maxStringLength: 4000}),
+    event: sanitizedEvent,
     reason,
     enqueuedAt: new Date().toISOString(),
   };
@@ -4495,18 +4601,95 @@ const enqueueWorkflowRun = async ({workflow, trigger, event, reason = 'event'} =
   return {queued: true, jobId: job.id};
 };
 
+const claimPostgresWorkflowQueueJob = async () => {
+  const staleBefore = new Date(Date.now() - workflowQueueStaleMs).toISOString();
+  const result = await queryDb(
+    `WITH next_job AS (
+       SELECT id
+       FROM workflow_queue_jobs
+       WHERE (
+         status = 'pending'
+         OR (status = 'running' AND locked_at < $2::timestamptz)
+       )
+       AND attempts < $3
+       ORDER BY enqueued_at ASC
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1
+     )
+     UPDATE workflow_queue_jobs AS job
+     SET status = 'running',
+         locked_by = $1,
+         locked_at = now(),
+         started_at = COALESCE(started_at, now()),
+         attempts = attempts + 1,
+         updated_at = now(),
+         last_error = NULL
+     FROM next_job
+     WHERE job.id = next_job.id
+     RETURNING job.id, job.workflow_id AS "workflowId", job.workflow_name AS "workflowName",
+               job.trigger_id AS "triggerId", job.reason, job.workflow, job.trigger, job.event, job.attempts`,
+    [workflowQueueWorkerId, staleBefore, workflowQueueMaxAttempts]
+  );
+  const row = result?.rows?.[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    adapter: 'postgres',
+    workflow: row.workflow,
+    trigger: row.trigger,
+    event: row.event,
+    reason: row.reason || 'event',
+    attempts: Number(row.attempts || 1),
+  };
+};
+
+const markExpiredPostgresWorkflowQueueJobs = async () => {
+  if (!db || getWorkflowQueueAdapter() !== 'postgres') return;
+  const staleBefore = new Date(Date.now() - workflowQueueStaleMs).toISOString();
+  await queryDb(
+    `UPDATE workflow_queue_jobs
+     SET status = 'failed',
+         finished_at = now(),
+         updated_at = now(),
+         last_error = COALESCE(last_error, 'Workflow queue job exceeded max attempts after becoming stale.'),
+         locked_by = NULL,
+         locked_at = NULL
+     WHERE status = 'running'
+       AND locked_at < $1::timestamptz
+       AND attempts >= $2`,
+    [staleBefore, workflowQueueMaxAttempts]
+  );
+};
+
+const updatePostgresWorkflowQueueJob = async (job, status, error = '') => {
+  if (!db || job?.adapter !== 'postgres') return;
+  await queryDb(
+    `UPDATE workflow_queue_jobs
+     SET status = $2,
+         finished_at = now(),
+         updated_at = now(),
+         last_error = $3,
+         locked_by = NULL,
+         locked_at = NULL
+     WHERE id = $1`,
+    [job.id, status, error]
+  );
+};
+
 const runWorkflowQueueJob = async (job) => {
   workflowQueueRunning.set(job.id, job);
   workflowQueueStats.started += 1;
   workflowQueueStats.lastStartedAt = new Date().toISOString();
   try {
     await executeWorkflow(job.workflow, job.trigger, job.event, {queueJobId: job.id, queueReason: job.reason});
+    await updatePostgresWorkflowQueueJob(job, 'completed');
     workflowQueueStats.completed += 1;
     workflowQueueStats.lastCompletedAt = new Date().toISOString();
   } catch (error) {
     workflowQueueStats.failed += 1;
     workflowQueueStats.lastFailedAt = new Date().toISOString();
     workflowQueueStats.lastError = error.message || 'Workflow queue job failed.';
+    await updatePostgresWorkflowQueueJob(job, 'failed', workflowQueueStats.lastError);
     console.error('Workflow queue job failed:', error);
   } finally {
     workflowQueueRunning.delete(job.id);
@@ -4514,12 +4697,34 @@ const runWorkflowQueueJob = async (job) => {
   }
 };
 
-function drainWorkflowQueue() {
+async function drainWorkflowQueue() {
+  if (getWorkflowQueueAdapter() === 'postgres') {
+    await markExpiredPostgresWorkflowQueueJobs();
+    while (workflowQueueRunning.size < workflowQueueConcurrency) {
+      const job = await claimPostgresWorkflowQueueJob();
+      if (!job) return;
+      void runWorkflowQueueJob(job);
+    }
+    return;
+  }
+
   while (workflowQueueRunning.size < workflowQueueConcurrency && workflowQueuePending.length > 0) {
     const job = workflowQueuePending.shift();
     void runWorkflowQueueJob(job);
   }
 }
+
+const startWorkflowQueueWorker = () => {
+  void drainWorkflowQueue();
+  if (getWorkflowQueueAdapter() === 'postgres') {
+    setInterval(() => {
+      drainWorkflowQueue().catch((error) => {
+        workflowQueueStats.lastError = error.message || 'Workflow queue drain failed.';
+        console.error('Workflow queue drain failed:', error);
+      });
+    }, workflowQueuePollMs);
+  }
+};
 
 const testWorkflowNode = async ({workflow, nodeId, event = {}, context = {}}) => {
   if (!workflow || !Array.isArray(workflow.nodes)) {
@@ -5310,8 +5515,8 @@ app.use(express.static(distDir, {
   maxAge: '1h',
 }));
 
-app.get('/health', (_req, res) => {
-  const queue = workflowQueueStatus();
+app.get('/health', async (_req, res) => {
+  const queue = await workflowQueueStatus();
   res.status(200).json({
     status: 'ok',
     workflowQueue: {
@@ -7016,7 +7221,7 @@ app.post('/api/workflow-webhooks/:workflowId/:token', async (req, res) => {
 app.get('/api/workflow-queue/status', async (req, res) => {
   try {
     if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Partner'], 'view workflow queue status'))) return;
-    res.status(200).json(workflowQueueStatus());
+    res.status(200).json(await workflowQueueStatus());
   } catch (error) {
     res.status(500).json({error: error.message});
   }
@@ -7479,6 +7684,7 @@ const startServer = async () => {
 
   app.listen(port, '0.0.0.0', () => {
     console.log(`AI IoT Dashboard is running on port ${port}`);
+    startWorkflowQueueWorker();
     startMqttSubscribers();
     runScheduledWorkflows().catch((error) => console.error('Workflow scheduler failed:', error));
     setInterval(() => {

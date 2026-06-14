@@ -149,7 +149,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Node search and keyboard shortcuts.
 - [ ] Canvas mini map, grouping, comments, and collapse/expand.
 - [x] Workflow execution queue foundation: telemetry, schedule, and webhook triggers enqueue runs into an asynchronous worker with concurrency, backpressure, and status reporting.
-- [ ] Redis/BullMQ production adapter for multi-instance deployments.
+- [x] PostgreSQL durable workflow queue adapter: supports persisted jobs, multi-instance claiming via `FOR UPDATE SKIP LOCKED`, stale running job reclaim, max attempts, and queue health status.
+- [ ] Redis/BullMQ external queue adapter for very high-throughput multi-instance deployments.
 - [x] Workflow run metrics: total runs, success rate, failure count, average duration, last run, and per-workflow summaries.
 - [x] Workflow run detail diagnostics: click metrics into logs, status filters, node duration, failed-node highlight, and copy input/output/error.
 - [x] Workflow run alerting: per-workflow failure, consecutive failure, failure-rate, slow-run, timeout, cooldown, and notification-channel policies.
@@ -418,16 +419,20 @@ Workflow 编辑页支持 **Run Alerting**。可为单个 workflow 启用运行�
 - 执行历史可通过 `GET /api/workflow-runs` 查看，也可以用 `GET /api/workflow-runs?workflowId=wf-xxx&limit=50` 查看单个工作流。
 - 真实触发入口会先进入后端 Workflow Queue，再由后台 worker 按并发数执行，避免 MQTT/HTTP ingest 请求被长工作流阻塞。队列状态可通过 `GET /api/workflow-queue/status` 查看；`/health` 也会返回简要队列积压信息。
 
-Workflow Queue 默认使用内置内存队列，适合单实例 VPS 和演示环境：
+Workflow Queue 默认使用内置内存队列，适合单实例 VPS 和演示环境；生产环境如果已经配置 PostgreSQL，建议使用 `postgres` 队列模式获得持久化任务、进程重启恢复和多实例抢占能力：
 
 ```env
-WORKFLOW_QUEUE_MODE=memory
+WORKFLOW_QUEUE_MODE=postgres   # memory / postgres / redis / bullmq
 WORKFLOW_QUEUE_CONCURRENCY=2
 WORKFLOW_QUEUE_MAX_PENDING=1000
 WORKFLOW_QUEUE_POLL_MS=100
+WORKFLOW_QUEUE_STALE_MS=600000
+WORKFLOW_QUEUE_MAX_ATTEMPTS=3
 ```
 
-如果后续部署多实例，建议切换到 Redis/BullMQ adapter。当前版本已经预留 `WORKFLOW_QUEUE_MODE=redis|bullmq` 与 `REDIS_URL` 配置位；在未安装 Redis adapter 时会自动回退到内存队列，并在状态接口里显示 `memory-fallback`。
+`postgres` 模式会把待执行任务写入 `workflow_queue_jobs` 表，worker 使用 PostgreSQL `FOR UPDATE SKIP LOCKED` 抢占 pending job。若某个实例崩溃导致 job 长时间停留在 running，超过 `WORKFLOW_QUEUE_STALE_MS` 后会被其他 worker 重新领取，最多尝试 `WORKFLOW_QUEUE_MAX_ATTEMPTS` 次。
+
+如果后续需要极高吞吐或跨服务队列，建议切换到 Redis/BullMQ adapter。当前版本已经预留 `WORKFLOW_QUEUE_MODE=redis|bullmq` 与 `REDIS_URL` 配置位；在未安装 Redis adapter 时会自动回退到内存队列，并在状态接口里显示 `memory-fallback`。
 
 ### 使用控制中心
 
@@ -614,10 +619,12 @@ AI_COPILOT_BASE_URL=         # OpenAI-compatible 或 custom provider 时可配�
 | `AUTH_IP_BLACKLIST` | 生产环境默认 IP 黑名单，支持逗号或换行分隔，规则可为精确 IP、`*` 或 `192.168.1.*` 这类简单前缀。 |
 | `SECURITY_ALERTS_ENABLED` | 是否启用安全告警，设置为 `false` 可全局关闭，默认开启。 |
 | `SECURITY_ALERT_COOLDOWN_MS` | 异常登录/弱密码等安全告警冷却时间，默认 `300000`。 |
-| `WORKFLOW_QUEUE_MODE` | 工作流执行队列模式，默认 `memory`；`redis` / `bullmq` 为生产 adapter 预留值，未安装 adapter 时会回退到内存队列。 |
+| `WORKFLOW_QUEUE_MODE` | 工作流执行队列模式，默认 `memory`；可设置为 `postgres` 使用 PostgreSQL 持久化队列；`redis` / `bullmq` 为外部队列 adapter 预留值。 |
 | `WORKFLOW_QUEUE_CONCURRENCY` | 工作流后台 worker 并发数，默认 `2`。 |
 | `WORKFLOW_QUEUE_MAX_PENDING` | 内存队列最大待执行任务数，默认 `1000`。 |
 | `WORKFLOW_QUEUE_POLL_MS` | 内存队列消费轮询间隔，默认 `100`。 |
+| `WORKFLOW_QUEUE_STALE_MS` | PostgreSQL 队列中 running job 的超时重领时间，默认 `600000`。 |
+| `WORKFLOW_QUEUE_MAX_ATTEMPTS` | PostgreSQL 队列 job 最大领取/执行次数，默认 `3`。 |
 | `REDIS_URL` | Redis/BullMQ adapter 的连接字符串，后续多实例部署时使用。 |
 | `AUDIT_LOG_BUFFER_SIZE` | 未配置 PostgreSQL 时的内存审计日志保留条数，默认 `1000`。 |
 
