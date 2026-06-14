@@ -1116,6 +1116,75 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
               />
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional command topic. If empty, the backend derives one from MQTT Topic or External Device ID.</p>
              </div>
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">HTTP Command Endpoint</label>
+              <input
+                type="url"
+                name="httpCommandUrl"
+                value={configData.httpCommandUrl || ''}
+                onChange={handleConfigChange}
+                placeholder="https://gateway.example.com/api/devices/{{externalDeviceId}}/commands"
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional outbound control endpoint. Supports placeholders like command, deviceId, externalDeviceId, and parameters.xxx.</p>
+             </div>
+             <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">HTTP Command Method</label>
+              <select
+                name="httpCommandMethod"
+                value={configData.httpCommandMethod || 'POST'}
+                onChange={handleConfigSelectChange}
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              >
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+              </select>
+             </div>
+             <div className="sm:col-span-1">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Timeout ms</label>
+              <input
+                type="number"
+                min={1000}
+                max={60000}
+                name="httpCommandTimeoutMs"
+                value={configData.httpCommandTimeoutMs || 8000}
+                onChange={handleConfigChange}
+                className="mt-1 block w-full rounded-md border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm text-slate-900 dark:text-slate-300"
+              />
+             </div>
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">HTTP Command Headers JSON</label>
+              <textarea
+                name="httpCommandHeaders"
+                value={configData.httpCommandHeaders || ''}
+                onChange={handleConfigChange}
+                rows={4}
+                placeholder={`{
+  "Authorization": "Bearer <gateway-token>",
+  "X-Device": "{{externalDeviceId}}"
+}`}
+                className="mt-1 block w-full rounded-md border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+              />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional JSON object. Header values support the same placeholders as the command endpoint.</p>
+             </div>
+             <div className="sm:col-span-3">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">HTTP Command Payload Template</label>
+              <textarea
+                name="httpCommandTemplate"
+                value={configData.httpCommandTemplate || ''}
+                onChange={handleConfigChange}
+                rows={7}
+                placeholder={`{
+  "command": "{{command}}",
+  "device": "{{externalDeviceId}}",
+  "parameters": {{parametersJson}},
+  "timestamp": "{{timestamp}}"
+}`}
+                className="mt-1 block w-full rounded-md border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+              />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional outbound payload template. If empty, the backend sends the standard command payload.</p>
+             </div>
              {configData.dataSource === 'mqtt' && (
               <>
                 <div className="sm:col-span-3">

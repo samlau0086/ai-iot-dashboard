@@ -32,10 +32,35 @@ type CompareRow = {
   firstAt?: string;
 };
 
+type MetricQueryRow = {
+  bucket?: string;
+  deviceId?: string;
+  aggregate: string;
+  metric: string;
+  value: number;
+  count: number;
+  latestAt?: string;
+};
+
 const CHART_TYPES: Array<{ value: ChartConfig['type']; label: string }> = [
   { value: 'line', label: 'Line Chart' },
   { value: 'bar', label: 'Bar Chart' },
   { value: 'pie', label: 'Pie Chart' },
+];
+
+const QUERY_AGGREGATES = [
+  { value: 'avg', label: 'Average' },
+  { value: 'sum', label: 'Sum' },
+  { value: 'min', label: 'Minimum' },
+  { value: 'max', label: 'Maximum' },
+  { value: 'latest', label: 'Latest' },
+  { value: 'count', label: 'Count' },
+];
+
+const QUERY_GROUP_BY = [
+  { value: 'time', label: 'Time buckets' },
+  { value: 'device', label: 'Devices' },
+  { value: 'device_time', label: 'Devices + time' },
 ];
 
 const DATA_SOURCES: Array<{ value: ChartConfig['dataSource']; label: string }> = [
@@ -355,6 +380,12 @@ export function Analytics() {
   const [compareRows, setCompareRows] = useState<CompareRow[]>([]);
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState('');
+  const [queryAggregate, setQueryAggregate] = useState('avg');
+  const [queryGroupBy, setQueryGroupBy] = useState('time');
+  const [queryIntervalMinutes, setQueryIntervalMinutes] = useState(60);
+  const [queryRows, setQueryRows] = useState<MetricQueryRow[]>([]);
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState('');
 
   const siteOptions = useMemo(() => [
     ...(hasFullDataAccess(currentUser) ? [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] }] : []),
@@ -424,6 +455,8 @@ export function Analytics() {
     setCompareMetricKey('');
     setCompareRows([]);
     setCompareError('');
+    setQueryRows([]);
+    setQueryError('');
   }, [compareSiteId]);
 
   useEffect(() => {
@@ -499,6 +532,10 @@ export function Analytics() {
     const formatted = value.toFixed(comparePrecision);
     return compareMeta?.unit ? `${formatted} ${compareMeta.unit}` : formatted;
   };
+  const formatMetricQueryValue = (value: number) => {
+    if (queryAggregate === 'count') return Number.isFinite(value) ? String(Math.round(value)) : '-';
+    return formatCompareValue(value);
+  };
 
   const getCompareIdentifiers = () => Array.from(new Set(
     compareDevices.flatMap((device) => [
@@ -506,6 +543,28 @@ export function Analytics() {
       device.config?.externalDeviceId || '',
     ]).filter(Boolean)
   ));
+
+  const generatedMetricQuery = useMemo(() => {
+    const metric = compareMetricKey || compareMetricOptions[0] || '<metric>';
+    const aggregate = queryAggregate.toUpperCase();
+    const selectedDevices = compareDeviceIds.length
+      ? `${compareDeviceIds.length} selected devices`
+      : 'all selected Site devices';
+    const groupBy = queryGroupBy === 'device'
+      ? 'device_id'
+      : queryGroupBy === 'device_time'
+        ? `device_id, time_bucket('${queryIntervalMinutes} minutes', received_at)`
+        : `time_bucket('${queryIntervalMinutes} minutes', received_at)`;
+    return [
+      `SELECT ${groupBy}, ${aggregate}(${metric}) AS value`,
+      'FROM telemetry_logs',
+      `WHERE site = '${siteOptions.find((site) => site.id === compareSiteId)?.name || compareSiteId}'`,
+      `  AND devices = ${selectedDevices}`,
+      `  AND received_at BETWEEN '${toIsoOrEmpty(compareFrom) || '<from>'}' AND '${toIsoOrEmpty(compareTo) || '<to>'}'`,
+      `GROUP BY ${groupBy}`,
+      'ORDER BY received_at ASC',
+    ].join('\n');
+  }, [compareDeviceIds.length, compareFrom, compareMetricKey, compareMetricOptions, compareSiteId, compareTo, queryAggregate, queryGroupBy, queryIntervalMinutes, siteOptions]);
 
   const queryCompare = async () => {
     const metric = compareMetricKey || compareMetricOptions[0] || '';
@@ -565,6 +624,67 @@ export function Analytics() {
     link.click();
     URL.revokeObjectURL(url);
     notifySuccess('Device comparison CSV exported.');
+  };
+
+  const runMetricQuery = async () => {
+    const metric = compareMetricKey || compareMetricOptions[0] || '';
+    if (!metric) {
+      setQueryError('No metric is available for the selected devices.');
+      setQueryRows([]);
+      return;
+    }
+
+    const identifiers = getCompareIdentifiers();
+    if (identifiers.length === 0) {
+      setQueryError('No devices are available in the selected Site.');
+      setQueryRows([]);
+      return;
+    }
+
+    setQueryLoading(true);
+    setQueryError('');
+    try {
+      const params = new URLSearchParams({
+        metric,
+        aggregate: queryAggregate,
+        groupBy: queryGroupBy,
+        intervalMinutes: String(Math.max(1, Math.round(queryIntervalMinutes))),
+        from: toIsoOrEmpty(compareFrom),
+        to: toIsoOrEmpty(compareTo),
+        deviceIds: identifiers.join(','),
+      });
+      const response = await fetch(`/api/telemetry/query?${params.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Failed to run metric query.');
+      setQueryRows(Array.isArray(payload.rows) ? payload.rows : []);
+    } catch (error) {
+      setQueryError(error instanceof Error ? error.message : 'Failed to run metric query.');
+      setQueryRows([]);
+    } finally {
+      setQueryLoading(false);
+    }
+  };
+
+  const exportMetricQueryCsv = () => {
+    const headers = ['Bucket', 'Device', 'Device ID', 'Metric', 'Aggregate', 'Value', 'Samples', 'Latest At'];
+    const lines = queryRows.map((row) => [
+      row.bucket || '',
+      row.deviceId ? (compareDeviceNameByIdentifier.get(row.deviceId) || row.deviceId) : '',
+      row.deviceId || '',
+      row.metric || compareMetricKey,
+      row.aggregate || queryAggregate,
+      row.value,
+      row.count,
+      row.latestAt || '',
+    ].map(csvCell).join(','));
+    const blob = new Blob([[headers.map(csvCell).join(','), ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `metric-query-${compareMetricKey || 'metric'}-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    notifySuccess('Metric query CSV exported.');
   };
 
   return (
@@ -639,6 +759,7 @@ export function Analytics() {
                           : current.filter((id) => id !== device.id)
                       ));
                       setCompareRows([]);
+                      setQueryRows([]);
                     }}
                     className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
                   />
@@ -658,6 +779,7 @@ export function Analytics() {
               onChange={(event) => {
                 setCompareMetricKey(event.target.value);
                 setCompareRows([]);
+                setQueryRows([]);
               }}
               disabled={compareMetricOptions.length === 0}
               className="mt-1 block w-full rounded border-0 bg-slate-50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
@@ -737,6 +859,134 @@ export function Analytics() {
                 <tr>
                   <td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
                     {compareLoading ? 'Loading comparison...' : 'Run Compare to view device metric statistics.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+              <BarChart3 className="h-4 w-4 text-orange-500" />
+              SQL-like Metric Builder
+            </h2>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Build safe aggregate queries from the filters above. The generated statement is a preview, and execution stays parameterized on the backend.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={exportMetricQueryCsv}
+            disabled={queryRows.length === 0}
+            className="inline-flex items-center gap-2 rounded border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            <Download className="h-4 w-4" />
+            Export Query CSV
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[0.8fr_0.8fr_0.7fr_auto]">
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Aggregation</label>
+            <select
+              value={queryAggregate}
+              onChange={(event) => {
+                setQueryAggregate(event.target.value);
+                setQueryRows([]);
+              }}
+              className="mt-1 block w-full rounded border-0 bg-slate-50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+            >
+              {QUERY_AGGREGATES.map((item) => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Group By</label>
+            <select
+              value={queryGroupBy}
+              onChange={(event) => {
+                setQueryGroupBy(event.target.value);
+                setQueryRows([]);
+              }}
+              className="mt-1 block w-full rounded border-0 bg-slate-50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+            >
+              {QUERY_GROUP_BY.map((item) => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Bucket Minutes</label>
+            <input
+              type="number"
+              min={1}
+              max={43200}
+              value={queryIntervalMinutes}
+              disabled={queryGroupBy === 'device'}
+              onChange={(event) => {
+                setQueryIntervalMinutes(Math.max(1, Number(event.target.value) || 1));
+                setQueryRows([]);
+              }}
+              className="mt-1 block w-full rounded border-0 bg-slate-50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={runMetricQuery}
+              disabled={queryLoading || compareMetricOptions.length === 0}
+              className="inline-flex w-full items-center justify-center gap-2 rounded border border-orange-500 bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60 lg:w-auto"
+            >
+              {queryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Run Query
+            </button>
+          </div>
+        </div>
+
+        <pre className="mt-4 overflow-x-auto rounded border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100 dark:border-slate-800">
+          {generatedMetricQuery}
+        </pre>
+
+        {queryError && (
+          <div className="mt-4 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-600 dark:text-rose-300">
+            {queryError}
+          </div>
+        )}
+
+        <div className="mt-4 overflow-x-auto rounded border border-slate-200 dark:border-slate-800">
+          <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
+            <thead className="bg-slate-50 dark:bg-slate-900/70">
+              <tr>
+                {['Bucket', 'Device', 'Value', 'Samples', 'Latest At'].map((heading) => (
+                  <th key={heading} className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{heading}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+              {queryRows.length > 0 ? queryRows.map((row, index) => (
+                <tr key={`${row.bucket || 'device'}-${row.deviceId || 'time'}-${index}`}>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{formatDateTime(row.bucket)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-700 dark:text-slate-200">
+                    {row.deviceId ? (
+                      <>
+                        <div className="font-medium">{compareDeviceNameByIdentifier.get(row.deviceId) || row.deviceId}</div>
+                        <div className="font-mono text-[11px] text-slate-400">{row.deviceId}</div>
+                      </>
+                    ) : '-'}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{formatMetricQueryValue(row.value)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{row.count}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-500 dark:text-slate-400">{formatDateTime(row.latestAt)}</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={5} className="px-3 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                    {queryLoading ? 'Running metric query...' : 'Run Query to generate aggregate metric rows.'}
                   </td>
                 </tr>
               )}

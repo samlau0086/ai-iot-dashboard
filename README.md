@@ -44,7 +44,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 工作流条件节点已调整为 IF / ELIF / ELSE 分支语义；多个 Trigger 采用任一触发即可进入后续流程。
 - [x] AI Copilot 基础闭环已完成：支持基于当前 Site / 设备 / 告警 / 工作流 / 图表上下文进行自然语言查询、异常解释、建议动作、CSV 报表生成和工作流草稿生成。
 - [x] Partner / White Label 基础闭环已完成：支持客户管理、客户子账号、项目/报价记录、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
-- [ ] 下一阶段重点：指标筛选、时间范围分析、设备对比、控制连接器、AI Copilot 外部大模型接入、Partner 计费与更细粒度 RBAC。
+- [ ] 下一阶段重点：控制连接器、AI Copilot 外部大模型接入、Partner 计费与更细粒度 RBAC。
 
 ### V1: Energy Monitoring MVP
 
@@ -105,7 +105,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Device Data Quality：统一判定 Live / Stale / Offline / Never Reported，并在设备列表、详情、总览和 SCADA 中避免把过期数据当实时数据展示
 - [x] Device Ingest Diagnostics：设备详情页可诊断 MQTT/HTTP 绑定、最近 raw telemetry、mapping 覆盖率，并生成测试请求；Raw Data 可显示匹配设备或未匹配原因
 - [x] Device Provisioning：支持设备型号模板、生产设备库存、CSV 批量导入、Claim Code 安全认领、撤销认领和审计日志，以及在添加设备时通过 MAC / IMEI / Serial Number 自动配置设备
-- [ ] SQL-like Query / Metric Builder
+- [x] SQL-like Query / Metric Builder：Analytics 支持安全查询构建器、聚合分组、SQL-like 预览和 CSV 导出
 
 ### V4: Control Center
 
@@ -117,6 +117,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 参数下发
 - [x] 模式切换
 - [x] 手动控制
+- [x] 控制连接器：支持 MQTT Command Topic、HTTP Command Endpoint，以及网关 pending queue fallback
 - [ ] 批量控制
 - [x] 控制记录
 - [x] 权限控制
@@ -439,10 +440,28 @@ Settings -> Audit Logs 页面支持按 action、result、actorId 和 limit 筛�
 
 Settings -> General 中的 **Security Alerts** 默认开启。登录失败达到锁定阈值、未审核账号尝试登录、弱密码注册被拦截时，系统会写入右上角 Notifications；如果启用了 **Push To Notification Channels**，还会推送到已启用的 Bark / Webhook 通知渠道。告警默认按事件类型、邮箱和 IP 冷却 `5` 分钟，可通过 `SECURITY_ALERT_COOLDOWN_MS` 调整。
 
-当前支持两种下行方式：
+当前支持三种下行方式：
 
 1. **MQTT Command Topic**：如果设备配置了 `MQTT Command Topic`，或可从 `MQTT Topic` 推导出 `{telemetry-topic-without-/telemetry}/command`，并且后端 MQTT Subscriber 已连接，控制命令会被 publish 到该 topic，状态变为 `sent`。
-2. **设备 / 网关主动拉取**：如果没有可用 MQTT 连接，命令会保持 `queued`，现场网关可通过 `GET /api/device-commands/pending?deviceId=DEVICE_ID` 拉取待执行命令，执行后通过 `POST /api/device-commands/{commandId}/ack` 回传结果。
+2. **HTTP Command Endpoint**：设备编辑页可配置 `HTTP Command Endpoint`、请求方法、Headers JSON、Payload Template 和超时。控制命令会由后端主动 POST / PUT / PATCH 到该 Endpoint，适合网关、本地边缘服务或设备厂商 API。
+3. **设备 / 网关主动拉取**：如果没有可用 MQTT / HTTP 连接，命令会保持 `queued`，现场网关可通过 `GET /api/device-commands/pending?deviceId=DEVICE_ID` 拉取待执行命令，执行后通过 `POST /api/device-commands/{commandId}/ack` 回传结果。
+
+HTTP Command Endpoint 模板示例：
+
+```text
+https://gateway.example.com/api/devices/{{externalDeviceId}}/commands
+```
+
+HTTP Command Payload Template 示例：
+
+```json
+{
+  "command": "{{command}}",
+  "device": "{{externalDeviceId}}",
+  "parameters": {{parametersJson}},
+  "timestamp": "{{timestamp}}"
+}
+```
 
 网关拉取 pending 命令示例：
 

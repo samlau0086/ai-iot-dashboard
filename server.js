@@ -1868,11 +1868,7 @@ const getTemplateContextValue = (context, pathValue) => {
   ), context);
 };
 
-const renderDeviceCommandPayload = (command, device) => {
-  const template = device?.config?.mqttCommandTemplate;
-  if (!template) return publicDeviceCommandPayload(command);
-
-  const context = {
+const buildDeviceCommandTemplateContext = (command, device) => ({
     commandId: command.id,
     command: command.command,
     deviceId: command.deviceId,
@@ -1882,19 +1878,42 @@ const renderDeviceCommandPayload = (command, device) => {
     timestamp: command.createdAt,
     parameters: command.parameters || {},
     parametersJson: JSON.stringify(command.parameters || {}),
-  };
+});
 
-  const rendered = String(template).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, key) => {
+const renderDeviceCommandTemplate = (template, command, device) => {
+  const context = buildDeviceCommandTemplateContext(command, device);
+  return String(template || '').replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, key) => {
     const value = getTemplateContextValue(context, key);
     if (value === undefined || value === null) return '';
     if (typeof value === 'object') return JSON.stringify(value);
     return String(value);
   });
+};
+
+const renderDeviceCommandPayload = (command, device, template) => {
+  if (!template) return publicDeviceCommandPayload(command);
+  const rendered = renderDeviceCommandTemplate(template, command, device);
 
   try {
     return JSON.parse(rendered);
   } catch (error) {
     return rendered;
+  }
+};
+
+const parseDeviceCommandHeaders = (headersTemplate, command, device) => {
+  if (!headersTemplate) return {};
+  const rendered = renderDeviceCommandTemplate(headersTemplate, command, device);
+  try {
+    const parsed = JSON.parse(rendered);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([key, value]) => key && value !== undefined && value !== null)
+        .map(([key, value]) => [key, String(value)])
+    );
+  } catch (error) {
+    return {};
   }
 };
 
@@ -1914,9 +1933,50 @@ const publishDeviceCommandToMqtt = async (command, device) => {
     return {ok: false, message: 'No connected MQTT subscriber socket is available for command publish.'};
   }
 
-  const payload = renderDeviceCommandPayload(command, device);
+  const payload = renderDeviceCommandPayload(command, device, device?.config?.mqttCommandTemplate);
   runtime.socket.write(createMqttPublishPacket(topic, typeof payload === 'string' ? payload : JSON.stringify(payload)));
   return {ok: true, message: `Published to MQTT topic ${topic}`};
+};
+
+const dispatchDeviceCommandToHttp = async (command, device) => {
+  const urlTemplate = device?.config?.httpCommandUrl || device?.config?.httpCommandEndpoint || device?.config?.commandUrl;
+  if (!urlTemplate) return {ok: false, message: 'No HTTP command endpoint configured.'};
+
+  const url = renderDeviceCommandTemplate(urlTemplate, command, device).trim();
+  if (!/^https?:\/\//i.test(url)) {
+    return {ok: false, message: 'HTTP command endpoint must start with http:// or https://.'};
+  }
+
+  const method = ['POST', 'PUT', 'PATCH'].includes(String(device?.config?.httpCommandMethod || '').toUpperCase())
+    ? String(device.config.httpCommandMethod).toUpperCase()
+    : 'POST';
+  const timeoutMs = Math.max(1000, Math.min(Number(device?.config?.httpCommandTimeoutMs || 8000), 60000));
+  const payload = renderDeviceCommandPayload(command, device, device?.config?.httpCommandTemplate);
+  const headers = {
+    'content-type': typeof payload === 'string' ? 'text/plain' : 'application/json',
+    ...parseDeviceCommandHeaders(device?.config?.httpCommandHeaders, command, device),
+  };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: typeof payload === 'string' ? payload : JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const responseText = await response.text().catch(() => '');
+    const preview = responseText ? `: ${responseText.slice(0, 240)}` : '';
+    if (!response.ok) {
+      return {ok: false, message: `HTTP command endpoint returned ${response.status}${preview}`};
+    }
+    return {ok: true, message: `Sent via HTTP ${method} ${url} (${response.status})${preview}`};
+  } catch (error) {
+    return {ok: false, message: `HTTP command failed: ${error.name === 'AbortError' ? 'request timeout' : error.message}`};
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
 const dispatchDeviceControlCommand = async (command, device) => {
@@ -1925,6 +1985,8 @@ const dispatchDeviceControlCommand = async (command, device) => {
   const protocol = String(device.config?.protocol || '').toLowerCase();
   const dataSource = String(device.config?.dataSource || '').toLowerCase();
   const hasMqttRoute = dataSource === 'mqtt' || protocol === 'mqtt' || Boolean(device.config?.mqttTopic || device.config?.commandTopic || device.config?.mqttCommandTopic);
+  const hasHttpRoute = Boolean(device.config?.httpCommandUrl || device.config?.httpCommandEndpoint || device.config?.commandUrl);
+  const dispatchMessages = [];
 
   if (hasMqttRoute) {
     const publishResult = await publishDeviceCommandToMqtt(command, device);
@@ -1934,11 +1996,23 @@ const dispatchDeviceControlCommand = async (command, device) => {
         result: `${publishResult.message}. Waiting for device ACK.`,
       }) || command;
     }
+    dispatchMessages.push(`MQTT: ${publishResult.message}`);
+  }
+
+  if (hasHttpRoute) {
+    const httpResult = await dispatchDeviceCommandToHttp(command, device);
+    if (httpResult.ok) {
+      return await updateDeviceControlCommand(command.id, {
+        status: 'sent',
+        result: `${httpResult.message}. Waiting for device ACK or gateway confirmation.`,
+      }) || command;
+    }
+    dispatchMessages.push(`HTTP: ${httpResult.message}`);
   }
 
   return await updateDeviceControlCommand(command.id, {
     status: 'queued',
-    result: 'Queued for device polling. Gateway can fetch it from /api/device-commands/pending.',
+    result: `Queued for device polling. Gateway can fetch it from /api/device-commands/pending.${dispatchMessages.length ? ` Connector attempts: ${dispatchMessages.join(' | ')}` : ''}`,
   }) || command;
 };
 
@@ -1963,7 +2037,7 @@ const createDeviceControlCommand = async ({
     source,
     status: device ? 'queued' : 'rejected',
     result: device
-      ? 'Command recorded. Downstream protocol connector is pending.'
+      ? 'Command recorded. Dispatching through configured connector.'
       : 'Device not found.',
     createdAt,
     updatedAt: createdAt,
@@ -5385,6 +5459,147 @@ app.get('/api/telemetry/compare', async (req, res) => {
       .slice(-rowLimit);
 
     res.status(200).json({metric, from, to, rows: aggregateRows(rows)});
+  } catch (error) {
+    res.status(500).json({error: error.message, rows: []});
+  }
+});
+
+app.get('/api/telemetry/query', async (req, res) => {
+  try {
+    const metric = typeof req.query.metric === 'string' ? req.query.metric.trim() : '';
+    const source = typeof req.query.source === 'string' ? req.query.source.trim() : '';
+    const from = typeof req.query.from === 'string' ? req.query.from.trim() : '';
+    const to = typeof req.query.to === 'string' ? req.query.to.trim() : '';
+    const deviceIds = splitList(req.query.deviceIds);
+    const allowedAggregates = new Set(['avg', 'sum', 'min', 'max', 'latest', 'count']);
+    const allowedGroupBy = new Set(['time', 'device', 'device_time']);
+    const aggregate = allowedAggregates.has(req.query.aggregate) ? req.query.aggregate : 'avg';
+    const groupBy = allowedGroupBy.has(req.query.groupBy) ? req.query.groupBy : 'time';
+    const intervalMinutes = Math.max(1, Math.min(Number(req.query.intervalMinutes || 60), 43200));
+    const rowLimit = Math.max(100, Math.min(Number(req.query.limit || 10000), 50000));
+
+    if (!metric) {
+      res.status(400).json({error: 'metric is required', rows: []});
+      return;
+    }
+
+    const bucketTime = (value) => {
+      const time = new Date(value || '').getTime();
+      if (!Number.isFinite(time)) return '';
+      const bucketSize = intervalMinutes * 60 * 1000;
+      return new Date(Math.floor(time / bucketSize) * bucketSize).toISOString();
+    };
+
+    const summarize = (items) => {
+      const grouped = new Map();
+      items.forEach((item) => {
+        const value = Number(item.value);
+        if (!Number.isFinite(value) && aggregate !== 'count') return;
+        const receivedAt = item.receivedAt || item.received_at || '';
+        const bucket = groupBy === 'device' ? '' : bucketTime(receivedAt);
+        const deviceId = groupBy === 'time' ? '' : String(item.deviceId || '');
+        if (groupBy !== 'time' && !deviceId) return;
+        if (groupBy !== 'device' && !bucket) return;
+        const key = `${bucket}__${deviceId}`;
+        const current = grouped.get(key) || {
+          bucket,
+          deviceId,
+          count: 0,
+          sum: 0,
+          min: value,
+          max: value,
+          latest: value,
+          latestAt: receivedAt,
+        };
+        current.count += 1;
+        if (Number.isFinite(value)) {
+          current.sum += value;
+          current.min = Number.isFinite(current.min) ? Math.min(current.min, value) : value;
+          current.max = Number.isFinite(current.max) ? Math.max(current.max, value) : value;
+          if (!current.latestAt || (receivedAt && receivedAt >= current.latestAt)) {
+            current.latest = value;
+            current.latestAt = receivedAt;
+          }
+        }
+        grouped.set(key, current);
+      });
+
+      return Array.from(grouped.values())
+        .map((item) => {
+          const aggregateValue = aggregate === 'sum'
+            ? item.sum
+            : aggregate === 'min'
+              ? item.min
+              : aggregate === 'max'
+                ? item.max
+                : aggregate === 'latest'
+                  ? item.latest
+                  : aggregate === 'count'
+                    ? item.count
+                    : item.count ? item.sum / item.count : 0;
+          return {
+            bucket: item.bucket,
+            deviceId: item.deviceId,
+            aggregate,
+            metric,
+            value: aggregateValue,
+            count: item.count,
+            latestAt: item.latestAt,
+          };
+        })
+        .sort((first, second) => String(first.bucket || '').localeCompare(String(second.bucket || '')) || String(first.deviceId || '').localeCompare(String(second.deviceId || '')));
+    };
+
+    if (db) {
+      const where = [`metrics ? $1`];
+      const values = [metric];
+      const addParam = (value) => {
+        values.push(value);
+        return `$${values.length}`;
+      };
+
+      if (aggregate !== 'count') where.push(`(metrics ->> $1) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'`);
+      if (from) where.push(`received_at >= ${addParam(from)}::timestamptz`);
+      if (to) where.push(`received_at <= ${addParam(to)}::timestamptz`);
+      if (source) where.push(`source ILIKE ${addParam(`%${source}%`)}`);
+      if (deviceIds.length) where.push(`device_id = ANY(${addParam(deviceIds)}::text[])`);
+
+      const limitParam = addParam(rowLimit);
+      const result = await queryDb(
+        `SELECT device_id AS "deviceId",
+                received_at AS "receivedAt",
+                CASE
+                  WHEN (metrics ->> $1) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+                  THEN (metrics ->> $1)::double precision
+                  ELSE NULL
+                END AS value
+         FROM telemetry_messages
+         WHERE ${where.join(' AND ')}
+         ORDER BY received_at ASC
+         LIMIT ${limitParam}`,
+        values
+      );
+      res.status(200).json({metric, aggregate, groupBy, intervalMinutes, rows: summarize(result.rows)});
+      return;
+    }
+
+    const deviceSet = new Set(deviceIds);
+    const rows = telemetryMessages
+      .filter((message) => !from || message.received_at >= from)
+      .filter((message) => !to || message.received_at <= to)
+      .filter((message) => !source || String(message.source || '').toLowerCase().includes(source.toLowerCase()))
+      .map((message) => {
+        const deviceId = String(message.device_id || message.deviceId || message.id || '');
+        return {
+          deviceId,
+          receivedAt: message.received_at || message.timestamp || '',
+          value: Number((message.metrics || {})[metric]),
+        };
+      })
+      .filter((item) => (!deviceSet.size || deviceSet.has(item.deviceId)) && (aggregate === 'count' || Number.isFinite(item.value)))
+      .slice(-rowLimit);
+
+    res.status(200).json({metric, aggregate, groupBy, intervalMinutes, rows: summarize(rows)});
   } catch (error) {
     res.status(500).json({error: error.message, rows: []});
   }

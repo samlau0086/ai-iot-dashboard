@@ -33,6 +33,11 @@ export interface DeviceConfig {
   mqttTopic?: string;
   commandTopic?: string;
   mqttCommandTopic?: string;
+  httpCommandUrl?: string;
+  httpCommandMethod?: 'POST' | 'PUT' | 'PATCH';
+  httpCommandHeaders?: string;
+  httpCommandTemplate?: string;
+  httpCommandTimeoutMs?: number;
   metricMapping?: Record<string, string>;
   metricMappings?: DeviceMetricMapping[];
   controlState?: Record<string, unknown>;
