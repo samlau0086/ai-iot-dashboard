@@ -209,7 +209,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 服务端 HttpOnly Cookie Session：登录成功后后端设置 `SameSite=Lax` 的 session cookie，敏感 API 可从 cookie 或兼容 header 鉴权，登出时清理 cookie
 - [x] 强制密码策略：注册和后台新增用户默认要求至少 10 位，且满足大小写、数字、符号中的 3 类，并拦截常见弱密码和包含姓名/邮箱的密码
 - [x] 审计日志导出：Settings -> Audit Logs 可按当前筛选结果导出 CSV，便于交付排查和安全留档
-- [ ] 更完整的安全增强：刷新 Token 和异常登录告警
+- [x] 异常登录告警：登录锁定、未审核账号登录、弱密码注册尝试会写入系统通知，并可推送到已启用的通知渠道
+- [ ] 更完整的安全增强：刷新 Token、IP 黑名单和异地登录检测
 
 ### 技术演进方向
 
@@ -435,6 +436,8 @@ GET /api/audit-logs?limit=100&action=device_command.create&result=success
 
 Settings -> Audit Logs 页面支持按 action、result、actorId 和 limit 筛选记录，并可将当前加载结果导出为 CSV，字段包含时间、操作者、角色、IP、action、target、result 和 details JSON。
 
+Settings -> General 中的 **Security Alerts** 默认开启。登录失败达到锁定阈值、未审核账号尝试登录、弱密码注册被拦截时，系统会写入右上角 Notifications；如果启用了 **Push To Notification Channels**，还会推送到已启用的 Bark / Webhook 通知渠道。告警默认按事件类型、邮箱和 IP 冷却 `5` 分钟，可通过 `SECURITY_ALERT_COOLDOWN_MS` 调整。
+
 当前支持两种下行方式：
 
 1. **MQTT Command Topic**：如果设备配置了 `MQTT Command Topic`，或可从 `MQTT Topic` 推导出 `{telemetry-topic-without-/telemetry}/command`，并且后端 MQTT Subscriber 已连接，控制命令会被 publish 到该 topic，状态变为 `sent`。
@@ -521,6 +524,8 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 | `AUTH_SESSION_COOKIE_NAME` | 服务端 HttpOnly Session Cookie 名称，默认 `ai_iot_session`。 |
 | `AUTH_PASSWORD_MIN_LENGTH` | 注册密码最小长度，默认 `10`，最低不小于 `8`。 |
 | `AUTH_PASSWORD_REQUIRED_CLASSES` | 注册密码需要满足的字符类别数量，默认 `3`，类别包括大写、小写、数字、符号。 |
+| `SECURITY_ALERTS_ENABLED` | 是否启用安全告警，设置为 `false` 可全局关闭，默认开启。 |
+| `SECURITY_ALERT_COOLDOWN_MS` | 异常登录/弱密码等安全告警冷却时间，默认 `300000`。 |
 | `AUDIT_LOG_BUFFER_SIZE` | 未配置 PostgreSQL 时的内存审计日志保留条数，默认 `1000`。 |
 
 `VPS_DEPLOY_PATH` 指向的目录会由工作流自动执行 `mkdir -p` 创建，但 `VPS_USER` 必须有创建和写入权限。

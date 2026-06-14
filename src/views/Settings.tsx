@@ -257,6 +257,8 @@ export function Settings() {
     addProvisioningAuditLog,
     whiteLabelConfig,
     updateWhiteLabelConfig,
+    securitySettings,
+    updateSecuritySettings,
     devices,
   } = useAppStore();
   const t = translations[language];
@@ -1273,6 +1275,40 @@ export function Settings() {
                     <option value="CST">CST (China Standard Time)</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40 sm:col-span-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Security Alerts</h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    Notify administrators when login protection is triggered, unapproved users try to sign in, or weak-password registrations are blocked.
+                  </p>
+                </div>
+                <label className="flex items-center justify-between gap-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900/60">
+                  <span>
+                    <span className="block font-medium text-slate-800 dark:text-slate-200">Enable Security Alerts</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">Write security events to the top-right Notifications list.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={securitySettings.securityAlertsEnabled}
+                    onChange={(event) => updateSecuritySettings({ securityAlertsEnabled: event.target.checked })}
+                    className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900/60">
+                  <span>
+                    <span className="block font-medium text-slate-800 dark:text-slate-200">Push To Notification Channels</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">Also send enabled Bark/Webhook notification channels when a security alert fires.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={securitySettings.securityAlertChannelsEnabled}
+                    onChange={(event) => updateSecuritySettings({ securityAlertChannelsEnabled: event.target.checked })}
+                    disabled={!securitySettings.securityAlertsEnabled}
+                    className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 disabled:opacity-50"
+                  />
+                </label>
               </div>
 
               <div className="sm:col-span-2">

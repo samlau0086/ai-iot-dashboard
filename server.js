@@ -25,6 +25,7 @@ const workflowRuns = [];
 const workflowLiveStates = new Map();
 const workflowTriggerLastRuns = new Map();
 const workflowAlertLastSent = new Map();
+const securityAlertLastSent = new Map();
 const deviceControlCommands = [];
 const accessEvents = [];
 const systemNotifications = [];
@@ -41,6 +42,7 @@ const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LO
 const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
 const authPasswordMinLength = Math.max(8, Number(process.env.AUTH_PASSWORD_MIN_LENGTH || 10));
 const authPasswordRequiredClasses = Math.max(1, Math.min(Number(process.env.AUTH_PASSWORD_REQUIRED_CLASSES || 3), 4));
+const securityAlertCooldownMs = Math.max(0, Number(process.env.SECURITY_ALERT_COOLDOWN_MS || 5 * 60 * 1000));
 const authLoginFailures = new Map();
 const splitTopics = (value) => Array.isArray(value)
   ? value.map((topic) => String(topic).trim()).filter(Boolean)
@@ -2090,6 +2092,51 @@ const dispatchWorkflowNotification = async (workflow, config, event) => {
     }
   }
   return {notification, channels: results};
+};
+
+const dispatchSecurityAlert = async (type, payload = {}) => {
+  const state = await getDashboardState();
+  const settings = state.securitySettings || {};
+  if (process.env.SECURITY_ALERTS_ENABLED === 'false' || settings.securityAlertsEnabled === false) {
+    return null;
+  }
+
+  const key = `${type}:${payload.email || ''}:${payload.ip || ''}`;
+  const lastSent = securityAlertLastSent.get(key) || 0;
+  if (securityAlertCooldownMs > 0 && Date.now() - lastSent < securityAlertCooldownMs) {
+    return null;
+  }
+  securityAlertLastSent.set(key, Date.now());
+
+  const titleByType = {
+    login_locked: 'Security alert: login temporarily locked',
+    unapproved_login: 'Security alert: unapproved account login attempt',
+    weak_password_register: 'Security alert: weak password registration attempt',
+  };
+  const notification = await persistSystemNotification({
+    title: titleByType[type] || 'Security alert',
+    message: payload.message || '',
+    level: payload.level || 'Warning',
+    source: `security:${type}`,
+    securityAlertType: type,
+    email: payload.email || '',
+    ip: payload.ip || '',
+    createdAt: new Date().toISOString(),
+  });
+
+  const channels = [];
+  if (settings.securityAlertChannelsEnabled !== false) {
+    const notificationChannels = Array.isArray(state.notificationChannels) ? state.notificationChannels : [];
+    for (const channel of notificationChannels.filter((item) => item.enabled)) {
+      try {
+        channels.push({channelId: channel.id, channelName: channel.name, ...(await sendNotificationToChannel(channel, notification))});
+      } catch (error) {
+        channels.push({channelId: channel.id, channelName: channel.name, ok: false, message: error.message});
+      }
+    }
+  }
+
+  return {notification, channels};
 };
 
 const getWorkflowRunDurationMs = (run) => {
@@ -4351,6 +4398,11 @@ app.post('/api/auth/register', async (req, res) => {
     const passwordPolicy = validatePasswordPolicy(password, `${name} ${email}`);
     if (!passwordPolicy.ok) {
       await writeAuditLog(req, {id: null, name, role: null}, 'auth.register', 'user', email, 'failed', {reason: 'weak_password'});
+      await dispatchSecurityAlert('weak_password_register', {
+        email,
+        ip: getRequestIp(req),
+        message: `Weak password registration attempt for ${email || name || 'unknown user'} from ${getRequestIp(req)}.`,
+      });
       res.status(400).json({ok: false, message: passwordPolicy.message});
       return;
     }
@@ -4408,6 +4460,12 @@ app.post('/api/auth/login', async (req, res) => {
       if (failure.lockedUntil && failure.lockedUntil > Date.now()) {
         const retryAfterSeconds = Math.ceil((failure.lockedUntil - Date.now()) / 1000);
         res.setHeader('Retry-After', String(retryAfterSeconds));
+        await dispatchSecurityAlert('login_locked', {
+          email,
+          ip: getRequestIp(req),
+          level: 'Critical',
+          message: `Login temporarily locked for ${email || 'unknown account'} from ${getRequestIp(req)} after ${failure.count} failed attempts.`,
+        });
         res.status(429).json({ok: false, message: `Too many failed login attempts. Try again in ${retryAfterSeconds} seconds.`, retryAfterSeconds});
         return;
       }
@@ -4417,6 +4475,11 @@ app.post('/api/auth/login', async (req, res) => {
     }
     if (user.status !== 'approved') {
       await writeAuditLog(req, publicAuthUser(user), 'auth.login', 'user', user.id, 'failed', {reason: 'not_approved'});
+      await dispatchSecurityAlert('unapproved_login', {
+        email,
+        ip: getRequestIp(req),
+        message: `${user.status || 'Unapproved'} user ${email} attempted to sign in from ${getRequestIp(req)}.`,
+      });
       res.status(403).json({ok: false, message: 'Your account is waiting for approval.'});
       return;
     }

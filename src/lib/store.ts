@@ -60,6 +60,16 @@ const DEFAULT_WHITE_LABEL_CONFIG: WhiteLabelConfig = {
   portalTitle: 'Industrial Monitoring Platform',
 };
 
+export interface SecuritySettings {
+  securityAlertsEnabled: boolean;
+  securityAlertChannelsEnabled: boolean;
+}
+
+const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
+  securityAlertsEnabled: true,
+  securityAlertChannelsEnabled: true,
+};
+
 const DEFAULT_PARTNER_CUSTOMERS: PartnerCustomer[] = [
   {
     id: 'customer-demo-factory',
@@ -989,6 +999,8 @@ interface AppState {
   updateNotificationChannel: (id: string, channel: Partial<NotificationChannel>) => void;
   deleteNotificationChannel: (id: string) => void;
   testNotificationChannel: (id: string) => Promise<void>;
+  securitySettings: SecuritySettings;
+  updateSecuritySettings: (settings: Partial<SecuritySettings>) => void;
   // Devices
   devices: Device[];
   deviceDataSourceStatus: 'mock' | 'api' | 'mqtt' | 'error';
@@ -1099,6 +1111,7 @@ type BackendState = Partial<Pick<AppState,
   | 'emailAlerts'
   | 'webhookUrl'
   | 'notificationChannels'
+  | 'securitySettings'
   | 'devices'
   | 'deviceDataSourceStatus'
   | 'deviceModels'
@@ -1169,6 +1182,7 @@ const pickBackendState = (state: AppState): BackendState => ({
   emailAlerts: state.emailAlerts,
   webhookUrl: state.webhookUrl,
   notificationChannels: state.notificationChannels,
+  securitySettings: state.securitySettings,
   devices: state.devices,
   deviceDataSourceStatus: state.deviceDataSourceStatus,
   deviceModels: state.deviceModels,
@@ -1278,6 +1292,7 @@ export const useAppStore = create<AppState>()(
             partnerCustomers: mergeDefaultPartnerCustomers(state?.partnerCustomers),
             partnerProjects: mergeDefaultPartnerProjects(state?.partnerProjects),
             whiteLabelConfig: { ...DEFAULT_WHITE_LABEL_CONFIG, ...(state?.whiteLabelConfig || {}) },
+            securitySettings: { ...DEFAULT_SECURITY_SETTINGS, ...(state?.securitySettings || {}) },
             charts: mergeDefaultCharts(state?.charts),
             accesses: Array.isArray(state?.accesses) ? state.accesses : [],
             accessCredentials: Array.isArray(state?.accessCredentials) ? state.accessCredentials : [],
@@ -1333,6 +1348,10 @@ export const useAppStore = create<AppState>()(
       webhookUrl: '',
       setWebhookUrl: (url) => set({ webhookUrl: url }),
       notificationChannels: [],
+      securitySettings: DEFAULT_SECURITY_SETTINGS,
+      updateSecuritySettings: (settings) => set((state) => ({
+        securitySettings: { ...state.securitySettings, ...settings },
+      })),
       addNotificationChannel: (channel) => set((state) => ({
         notificationChannels: [...state.notificationChannels, channel]
       })),
