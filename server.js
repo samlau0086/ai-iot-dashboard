@@ -507,6 +507,39 @@ const saveIngestTokens = async () => {
 
 const getProvidedIngestToken = (req) => req.get('x-iot-token') || req.get('authorization')?.replace(/^Bearer\s+/i, '');
 
+const decodeHeaderValue = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+};
+
+const getApiActor = (req) => ({
+  id: String(req.get('x-iot-user-id') || '').trim(),
+  name: decodeHeaderValue(req.get('x-iot-user-name')),
+  role: String(req.get('x-iot-user-role') || '').trim(),
+});
+
+const requireApiActorRole = (req, res, allowedRoles, actionLabel = 'this action') => {
+  const actor = getApiActor(req);
+  if (!actor.id || !actor.role) {
+    res.status(401).json({error: `login required to perform ${actionLabel}`});
+    return null;
+  }
+  if (actor.role === 'Demo') {
+    res.status(403).json({error: `demo account cannot perform ${actionLabel}`});
+    return null;
+  }
+  if (!allowedRoles.includes(actor.role)) {
+    res.status(403).json({error: `${actor.role || 'current user'} cannot perform ${actionLabel}`});
+    return null;
+  }
+  return actor;
+};
+
 const ingestScopeMatches = (scope, source) => {
   const normalizedScope = String(scope || '').trim();
   const normalizedSource = String(source || '').trim();
@@ -3979,19 +4012,22 @@ app.get('/health', (_req, res) => {
   res.status(200).json({status: 'ok'});
 });
 
-app.get('/api/ingest-tokens', (_req, res) => {
+app.get('/api/ingest-tokens', (req, res) => {
+  if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view ingest tokens')) return;
   res.status(200).json({tokens: ingestTokens.map(publicIngestToken)});
 });
 
 app.post('/api/ingest-tokens', async (req, res) => {
   try {
+    const actor = requireApiActorRole(req, res, ['Owner', 'Admin'], 'generate ingest tokens');
+    if (!actor) return;
     const payload = req.body || {};
     const token = {
       id: createId('ingest-token'),
       name: String(payload.name || 'Device ingest token').trim(),
       token: createIngestToken(),
-      ownerUserId: String(payload.ownerUserId || 'unknown'),
-      ownerName: String(payload.ownerName || 'Unknown user'),
+      ownerUserId: actor.id,
+      ownerName: actor.name || String(payload.ownerName || 'Unknown user'),
       scopes: normalizeIngestTokenScopes(payload.scopes || ['telemetry:write']),
       siteIds: normalizeIngestTokenTargets(payload.siteIds),
       deviceIds: normalizeIngestTokenTargets(payload.deviceIds),
@@ -4010,6 +4046,7 @@ app.post('/api/ingest-tokens', async (req, res) => {
 
 app.post('/api/ingest-tokens/:tokenId/revoke', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin'], 'revoke ingest tokens')) return;
     const revokedAt = new Date().toISOString();
     let found = false;
     ingestTokens = ingestTokens.map((token) => {
@@ -4039,6 +4076,7 @@ app.get('/api/data-sources', (_req, res) => {
 
 app.post('/api/data-sources', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'save data sources')) return;
     const payload = req.body || {};
     const previousMqttById = new Map(mqttChannels.map((channel) => [channel.id, channel]));
     httpPushChannels = Array.isArray(payload.httpPushChannels)
@@ -4066,8 +4104,9 @@ app.post('/api/data-sources', async (req, res) => {
   }
 });
 
-app.get('/api/accesses', async (_req, res) => {
+app.get('/api/accesses', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access control entries')) return;
     const {accesses, accessCredentials} = await getAccessState();
     res.status(200).json({
       accesses,
@@ -4080,6 +4119,7 @@ app.get('/api/accesses', async (_req, res) => {
 
 app.post('/api/accesses', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'create access control entries')) return;
     const {accesses, accessCredentials} = await getAccessState();
     const now = new Date().toISOString();
     const payload = req.body || {};
@@ -4104,6 +4144,7 @@ app.post('/api/accesses', async (req, res) => {
 
 app.put('/api/accesses/:accessId', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'update access control entries')) return;
     const {accesses, accessCredentials} = await getAccessState();
     const patch = req.body || {};
     let found = false;
@@ -4128,6 +4169,7 @@ app.put('/api/accesses/:accessId', async (req, res) => {
 
 app.delete('/api/accesses/:accessId', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'delete access control entries')) return;
     const {accesses, accessCredentials} = await getAccessState();
     const nextAccesses = accesses.filter((access) => access.id !== req.params.accessId);
     const nextCredentials = accessCredentials.filter((credential) => credential.accessId !== req.params.accessId);
@@ -4140,6 +4182,7 @@ app.delete('/api/accesses/:accessId', async (req, res) => {
 
 app.post('/api/accesses/:accessId/credentials', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'create access credentials')) return;
     const {accesses, accessCredentials} = await getAccessState();
     const access = accesses.find((item) => item.id === req.params.accessId);
     if (!access) {
@@ -4195,6 +4238,7 @@ app.post('/api/accesses/:accessId/credentials', async (req, res) => {
 
 app.put('/api/access-credentials/:credentialId', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'update access credentials')) return;
     const {accesses, accessCredentials} = await getAccessState();
     const patch = req.body || {};
     let found = false;
@@ -4248,6 +4292,7 @@ app.put('/api/access-credentials/:credentialId', async (req, res) => {
 
 app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access credential links')) return;
     const {accesses, accessCredentials} = await getAccessState();
     const credential = accessCredentials.find((item) => item.id === req.params.credentialId);
     if (!credential) {
@@ -4280,6 +4325,7 @@ app.get('/api/access-credentials/:credentialId/link', async (req, res) => {
 
 app.delete('/api/access-credentials/:credentialId', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'delete access credentials')) return;
     const {accesses, accessCredentials} = await getAccessState();
     const nextCredentials = accessCredentials.filter((credential) => credential.id !== req.params.credentialId);
     await patchAccessState({accesses, accessCredentials: nextCredentials});
@@ -4298,6 +4344,7 @@ app.delete('/api/access-credentials/:credentialId', async (req, res) => {
 
 app.get('/api/access-events', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'view access records')) return;
     const accessId = typeof req.query.accessId === 'string' ? req.query.accessId.trim() : '';
     const credentialId = typeof req.query.credentialId === 'string' ? req.query.credentialId.trim() : '';
     const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
@@ -4353,6 +4400,7 @@ app.get('/api/access-events', async (req, res) => {
 
 app.delete('/api/access-events', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'clear access records')) return;
     const accessId = typeof req.query.accessId === 'string' ? req.query.accessId.trim() : '';
     const credentialId = typeof req.query.credentialId === 'string' ? req.query.credentialId.trim() : '';
     if (!accessId && !credentialId) {
@@ -4402,6 +4450,7 @@ app.get('/api/mqtt/config', (_req, res) => {
 
 app.post('/api/mqtt/config', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'save MQTT config')) return;
     const nextConfig = req.body || {};
     mqttChannels = [sanitizeMqttChannel({
       id: mqttChannels[0]?.id || 'mqtt-default',
@@ -4749,25 +4798,15 @@ app.post('/api/device-commands/:commandId/ack', async (req, res) => {
 app.post('/api/device-commands', async (req, res) => {
   try {
     const payload = req.body || {};
-    const allowedRoles = new Set(['Owner', 'Admin', 'Engineer', 'Operator', 'Customer']);
-    const requestedByRole = String(payload.requestedByRole || '');
-
-    if (requestedByRole === 'Demo') {
-      res.status(403).json({error: 'demo account commands are frontend-only and cannot affect devices'});
-      return;
-    }
-
-    if (!allowedRoles.has(requestedByRole)) {
-      res.status(403).json({error: 'current user role is not allowed to issue control commands'});
-      return;
-    }
+    const actor = requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Customer'], 'issue device control commands');
+    if (!actor) return;
 
     const command = await createDeviceControlCommand({
       deviceId: payload.deviceId,
       command: payload.command,
       parameters: payload.parameters || {},
-      requestedBy: payload.requestedBy || 'Unknown user',
-      requestedByRole,
+      requestedBy: actor.name || payload.requestedBy || 'Unknown user',
+      requestedByRole: actor.role,
       source: 'control-center',
     });
 
@@ -4779,6 +4818,7 @@ app.post('/api/device-commands', async (req, res) => {
 
 app.post('/api/notification-channels/test', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'test notification channels')) return;
     const channel = req.body?.channel;
     if (!channel || typeof channel !== 'object') {
       res.status(400).json({ok: false, message: 'Notification channel payload is required.'});
@@ -4841,6 +4881,7 @@ app.get('/api/state', async (_req, res) => {
 
 app.put('/api/state', async (req, res) => {
   try {
+    if (!requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'], 'save dashboard state')) return;
     const incomingState = req.body || {};
     const currentState = await getDashboardState();
     if (Array.isArray(incomingState.accessCredentials) && Array.isArray(currentState.accessCredentials)) {

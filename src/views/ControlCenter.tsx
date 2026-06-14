@@ -6,6 +6,7 @@ import { buildControlParameters, buildControlStatePatch, getDeviceControlDefinit
 import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 import { canIssueControlCommand, getAccessibleDevices, getAccessibleSites, hasFullDataAccess } from '../lib/featureAccess';
+import { apiJsonHeaders } from '../lib/apiAuth';
 
 type ControlCommand = {
   id: string;
@@ -115,7 +116,7 @@ export function ControlCenter() {
     try {
       const response = await fetch('/api/device-commands', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: apiJsonHeaders(currentUser),
         body: JSON.stringify({
           deviceId: selectedDevice.id,
           command: selectedCommand,

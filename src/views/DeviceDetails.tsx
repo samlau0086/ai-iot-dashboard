@@ -23,6 +23,7 @@ import {
 } from '../lib/metricMappings';
 import { buildCurlRequest, buildMqttExample, getMqttTelemetryTopic, getTelemetryEndpoint } from '../lib/deviceTelemetryExamples';
 import type { DeviceMetricMapping } from '../types';
+import { apiJsonHeaders } from '../lib/apiAuth';
 
 type DeviceMetricLog = {
   device_id?: string;
@@ -321,7 +322,7 @@ export function DeviceDetails() {
     try {
       const response = await fetch('/api/device-commands', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: apiJsonHeaders(currentUser),
         body: JSON.stringify({
           deviceId: device.id,
           command: definition.id,

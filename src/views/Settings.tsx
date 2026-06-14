@@ -6,6 +6,7 @@ import { translations } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
+import { apiActorHeaders, apiJsonHeaders } from '../lib/apiAuth';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 import { generateClaimCode, generateClaimToken } from '../lib/deviceProvisioning';
 import { APP_PROFILE_OPTIONS, FEATURE_ACCESS_OPTIONS, getUserAppProfile, getUserFeatureAccess, type AppProfile, type FeatureNavKey } from '../lib/featureAccess';
@@ -353,7 +354,7 @@ export function Settings() {
 
     const loadIngestTokens = async () => {
       try {
-        const response = await fetch('/api/ingest-tokens');
+        const response = await fetch('/api/ingest-tokens', { headers: apiActorHeaders(useAppStore.getState().currentUser) });
         if (!response.ok) return;
         const payload = await response.json();
         setIngestTokens(Array.isArray(payload.tokens) ? payload.tokens : []);
@@ -920,7 +921,7 @@ export function Settings() {
     try {
       const response = await fetch('/api/data-sources', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiJsonHeaders(currentUser),
         body: JSON.stringify({
           httpPushChannels,
           mqttChannels: channelsToSave.map((channel) => ({
@@ -963,7 +964,7 @@ export function Settings() {
     try {
       const response = await fetch('/api/ingest-tokens', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiJsonHeaders(currentUser),
         body: JSON.stringify({
           name: tokenDraftName.trim() || 'Device Gateway Token',
           ownerUserId: currentUser?.id,
@@ -1008,6 +1009,7 @@ export function Settings() {
     try {
       const response = await fetch(`/api/ingest-tokens/${encodeURIComponent(tokenId)}/revoke`, {
         method: 'POST',
+        headers: apiActorHeaders(currentUser),
       });
       const payload = await response.json();
       if (response.ok) {

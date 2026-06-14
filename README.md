@@ -201,7 +201,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 菜单级 / 模块级 RBAC：App Profile 默认权限 + 用户级 Feature Access 覆盖
 - [x] 控制动作级 RBAC：可按用户限制控制命令开关、允许设备 ID 和允许动作 ID
 - [x] 设备数据范围 RBAC：可按用户限制可见 Site IDs / Device IDs，核心页面按权限过滤设备数据
-- [ ] 更细粒度 RBAC：数据源、Token 权限矩阵
+- [x] 更细粒度 RBAC：Ingest Token Scope、Token Site / Device 范围、Data Source Channel Site / Device 范围，以及 Token / Data Source / Access Control / Device Command 等敏感 API 的轻量 actor guard
+- [ ] 更完整的服务端 Session / JWT 鉴权与审计
 
 ### 技术演进方向
 

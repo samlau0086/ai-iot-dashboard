@@ -5,6 +5,7 @@ import { mockDevices } from './mockData';
 import { mergeTelemetryIntoDevices } from './deviceData';
 import type { DeviceTelemetryMessage } from '../types';
 import type { AppProfile, ControlAccessConfig, DataAccessConfig, FeatureAccessMap } from './featureAccess';
+import { apiJsonHeaders } from './apiAuth';
 
 export interface User {
   id: string;
@@ -1328,7 +1329,7 @@ export const useAppStore = create<AppState>()(
         try {
           const response = await fetch('/api/notification-channels/test', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: apiJsonHeaders(useAppStore.getState().currentUser),
             body: JSON.stringify({ channel }),
           });
           const text = await response.text();
@@ -1908,7 +1909,7 @@ useAppStore.subscribe((state) => {
   backendSaveTimer = window.setTimeout(() => {
     fetch('/api/state', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiJsonHeaders(useAppStore.getState().currentUser),
       body: JSON.stringify(pickBackendState(useAppStore.getState())),
     }).catch((error) => {
       console.error('Failed to save dashboard state', error);

@@ -5,6 +5,7 @@ import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notifySuccess } from '../lib/toast';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
+import { apiActorHeaders, apiJsonHeaders } from '../lib/apiAuth';
 
 const createAccessDraft = (): AccessDefinition => ({
   id: `access-${Date.now()}`,
@@ -173,6 +174,7 @@ export function AccessControl() {
     updateAccess,
     setAccesses,
     setAccessCredentials,
+    currentUser,
   } = useAppStore();
   const [selectedAccessId, setSelectedAccessId] = useState(accesses[0]?.id || '');
   const [paramsDraft, setParamsDraft] = useState('{}');
@@ -228,7 +230,7 @@ export function AccessControl() {
   }, [selectedAccess?.id, selectedAccess?.method]);
 
   const syncAccesses = async () => {
-    const response = await fetch('/api/accesses');
+    const response = await fetch('/api/accesses', { headers: apiActorHeaders(currentUser) });
     if (!response.ok) return;
     const payload = await response.json();
     setAccesses(payload.accesses || []);
@@ -241,7 +243,7 @@ export function AccessControl() {
     try {
       const params = new URLSearchParams({ accessId, limit: '100' });
       if (credentialId) params.set('credentialId', credentialId);
-      const response = await fetch(`/api/access-events?${params.toString()}`);
+      const response = await fetch(`/api/access-events?${params.toString()}`, { headers: apiActorHeaders(currentUser) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Failed to load access events.');
       setAccessEvents(Array.isArray(payload.events) ? payload.events : []);
@@ -257,7 +259,7 @@ export function AccessControl() {
     updateAccess(accessId, patch);
     fetch(`/api/accesses/${accessId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiJsonHeaders(currentUser),
       body: JSON.stringify(patch),
     }).catch(() => undefined);
   };
@@ -287,7 +289,7 @@ export function AccessControl() {
       updateAccess(selectedAccess.id, { extraParams });
       await fetch(`/api/accesses/${selectedAccess.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiJsonHeaders(currentUser),
         body: JSON.stringify({ extraParams }),
       });
       setMessage('Access parameters saved.');
@@ -301,7 +303,7 @@ export function AccessControl() {
     const access = createAccessDraft();
     const response = await fetch('/api/accesses', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiJsonHeaders(currentUser),
       body: JSON.stringify(access),
     });
     const payload = await response.json();
@@ -317,7 +319,7 @@ export function AccessControl() {
   const removeAccess = async (accessId: string) => {
     const access = accesses.find((item) => item.id === accessId);
     if (!(await confirmDelete({ title: 'Delete access', itemName: access?.name || 'this access', description: 'Credentials, QR/NFC links, and access records for this access will be removed.' }))) return;
-    const response = await fetch(`/api/accesses/${accessId}`, { method: 'DELETE' });
+    const response = await fetch(`/api/accesses/${accessId}`, { method: 'DELETE', headers: apiActorHeaders(currentUser) });
     const payload = await response.json();
     if (!response.ok) {
       setMessage(payload.error || 'Failed to delete access.');
@@ -337,12 +339,12 @@ export function AccessControl() {
     const computedRefreshSeconds = selectedCredentialType === 'nfc' || selectedCredentialType === 'nfc_basic' ? 0 : refreshValue > 0 ? durationToSeconds(refreshValue, refreshUnit) : 0;
     await fetch(`/api/accesses/${selectedAccess.id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiJsonHeaders(currentUser),
       body: JSON.stringify(selectedAccess),
     });
     const response = await fetch(`/api/accesses/${selectedAccess.id}/credentials`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiJsonHeaders(currentUser),
       body: JSON.stringify({
         type: selectedCredentialType,
         name: qrName,
@@ -374,7 +376,7 @@ export function AccessControl() {
   const updateCredential = async (credentialId: string, patch: Partial<AccessCredential>) => {
     const response = await fetch(`/api/access-credentials/${credentialId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiJsonHeaders(currentUser),
       body: JSON.stringify(patch),
     });
     const payload = await response.json();
@@ -394,7 +396,7 @@ export function AccessControl() {
     setCredentialLatestQrLink('');
     setMessage('');
     if (mode === 'view') {
-      const response = await fetch(`/api/access-credentials/${credential.id}/link`);
+      const response = await fetch(`/api/access-credentials/${credential.id}/link`, { headers: apiActorHeaders(currentUser) });
       const payload = await response.json();
       if (response.ok) {
         setCredentialLink(payload.link || '');
@@ -430,7 +432,7 @@ export function AccessControl() {
   const deleteCredential = async (credentialId: string) => {
     const credential = accessCredentials.find((item) => item.id === credentialId);
     if (!(await confirmDelete({ title: 'Delete credential', itemName: credential?.name || 'this credential', description: 'The credential link and related access logs will be removed.' }))) return;
-    const response = await fetch(`/api/access-credentials/${credentialId}`, { method: 'DELETE' });
+    const response = await fetch(`/api/access-credentials/${credentialId}`, { method: 'DELETE', headers: apiActorHeaders(currentUser) });
     const payload = await response.json();
     if (response.ok) {
       setAccessCredentials(payload.credentials || []);
@@ -448,7 +450,7 @@ export function AccessControl() {
     }))) return;
     const params = new URLSearchParams({ accessId: selectedAccess.id });
     if (eventCredentialFilter) params.set('credentialId', eventCredentialFilter);
-    const response = await fetch(`/api/access-events?${params.toString()}`, { method: 'DELETE' });
+    const response = await fetch(`/api/access-events?${params.toString()}`, { method: 'DELETE', headers: apiActorHeaders(currentUser) });
     if (response.ok) {
       setAccessEvents([]);
       setMessage(eventCredentialFilter ? 'Credential access records cleared.' : 'Access records cleared.');

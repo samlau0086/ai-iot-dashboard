@@ -19,6 +19,7 @@ import {
   type DeviceControlDefinition,
 } from '../lib/deviceControls';
 import { confirmDelete } from '../lib/confirm';
+import { apiJsonHeaders } from '../lib/apiAuth';
 
 const getDeviceKeyMetric = (device: Device) => {
   const metrics = device.metrics || {};
@@ -200,7 +201,7 @@ export function Devices() {
     try {
       const response = await fetch('/api/device-commands', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: apiJsonHeaders(currentUser),
         body: JSON.stringify({
           deviceId: device.id,
           command: control.id,
