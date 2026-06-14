@@ -208,7 +208,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 操作审计日志：登录、注册、Ingest Token、Data Source、Access Control、MQTT、设备控制、通知测试和状态保存等敏感操作会写入审计记录
 - [x] 服务端 HttpOnly Cookie Session：登录成功后后端设置 `SameSite=Lax` 的 session cookie，敏感 API 可从 cookie 或兼容 header 鉴权，登出时清理 cookie
 - [x] 强制密码策略：注册和后台新增用户默认要求至少 10 位，且满足大小写、数字、符号中的 3 类，并拦截常见弱密码和包含姓名/邮箱的密码
-- [ ] 更完整的安全增强：刷新 Token、审计日志导出和异常登录告警
+- [x] 审计日志导出：Settings -> Audit Logs 可按当前筛选结果导出 CSV，便于交付排查和安全留档
+- [ ] 更完整的安全增强：刷新 Token 和异常登录告警
 
 ### 技术演进方向
 
@@ -431,6 +432,8 @@ GET /api/audit-logs?limit=100&action=device_command.create&result=success
 ```
 
 未配置 `DATABASE_URL` 的本地演示环境会暂存在内存缓冲区中，默认保留最近 `1000` 条，可通过 `AUDIT_LOG_BUFFER_SIZE` 调整；生产环境会写入 PostgreSQL 的 `audit_logs` 表。
+
+Settings -> Audit Logs 页面支持按 action、result、actorId 和 limit 筛选记录，并可将当前加载结果导出为 CSV，字段包含时间、操作者、角色、IP、action、target、result 和 details JSON。
 
 当前支持两种下行方式：
 

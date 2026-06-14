@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bell, Building2, CheckCircle2, ClipboardList, Copy, Database, KeyRound, Package, Plus, Printer, QrCode, RefreshCw, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi, X } from 'lucide-react';
+import { Bell, Building2, CheckCircle2, ClipboardList, Copy, Database, Download, KeyRound, Package, Plus, Printer, QrCode, RefreshCw, Send, Settings as SettingsIcon, Trash2, UserCheck, UserX, Users, Wifi, X } from 'lucide-react';
 import { useAppStore, type DeviceModelTemplate, type ManufacturedDevice, type NotificationChannel, type SiteTenant } from '../lib/store';
 import type { DeviceType } from '../types';
 import { translations } from '../lib/i18n';
@@ -26,6 +26,7 @@ type SettingsTabId = 'general' | 'sites' | 'data' | 'tokens' | 'provisioning' | 
 
 const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const splitCsv = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
+const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
 type CsvPreviewRow = {
   lineNumber: number;
@@ -377,6 +378,43 @@ export function Settings() {
     } finally {
       setAuditLoading(false);
     }
+  };
+
+  const handleExportAuditLogs = () => {
+    if (auditLogs.length === 0) {
+      setAuditMessage('No audit logs to export. Load logs first.');
+      return;
+    }
+
+    const header = ['createdAt', 'actorName', 'actorRole', 'actorId', 'ip', 'action', 'targetType', 'targetId', 'result', 'details'];
+    const rows = auditLogs.map((log) => [
+      log.createdAt,
+      log.actorName || '',
+      log.actorRole || '',
+      log.actorId || '',
+      log.ip || '',
+      log.action,
+      log.targetType || '',
+      log.targetId || '',
+      log.result,
+      JSON.stringify(log.details || {}),
+    ]);
+    const csv = [
+      header.map(csvCell).join(','),
+      ...rows.map((row) => row.map(csvCell).join(',')),
+    ].join('\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const suffix = [auditFilters.action, auditFilters.result, auditFilters.actorId].filter(Boolean).join('_') || 'all';
+    link.href = url;
+    link.download = `audit-logs-${suffix}-${timestamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    notifySuccess('Audit logs exported.');
   };
 
   useEffect(() => {
@@ -2328,15 +2366,26 @@ export function Settings() {
                     Review sensitive backend operations such as login, token changes, data source updates, access changes and device commands.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void loadAuditLogs()}
-                  disabled={auditLoading}
-                  className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                >
-                  <RefreshCw className={cn('h-4 w-4', auditLoading && 'animate-spin')} />
-                  Refresh
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExportAuditLogs}
+                    disabled={auditLogs.length === 0}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <Download className="h-4 w-4" />
+                    Export CSV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void loadAuditLogs()}
+                    disabled={auditLoading}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <RefreshCw className={cn('h-4 w-4', auditLoading && 'animate-spin')} />
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30 md:grid-cols-[1fr_160px_1fr_120px_auto]">
