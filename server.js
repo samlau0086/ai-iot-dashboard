@@ -383,6 +383,7 @@ const createEnvMqttChannels = () => (process.env.MQTT_BROKER_URL ? [{
 let httpPushChannels = createDefaultHttpChannels();
 let mqttChannels = createEnvMqttChannels();
 let ingestTokens = [];
+let generatedReports = [];
 const mqttRuntimes = new Map();
 let lastWorkflowScheduleMinute = '';
 
@@ -1003,6 +1004,188 @@ const findDeviceByApiPath = async (requestPath) => {
 };
 
 const getDashboardState = async () => await getAppState('dashboard_state') || {};
+
+const csvEscape = (value) => {
+  const stringValue = String(value ?? '');
+  return /[",\n\r]/.test(stringValue) ? `"${stringValue.replace(/"/g, '""')}"` : stringValue;
+};
+
+const reportRowsToCsv = (rows = []) => rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+
+const getReportSize = (rows = []) => {
+  const bytes = Buffer.byteLength(reportRowsToCsv(rows), 'utf8');
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+};
+
+const getReportRangeLabel = (range) => {
+  const labels = {
+    last7days: 'Last 7 Days',
+    last30days: 'Last 30 Days',
+    thisMonth: 'This Month',
+    daily: 'Daily',
+    weekly: 'Weekly',
+    monthly: 'Monthly',
+  };
+  return labels[range] || String(range || 'Custom Range');
+};
+
+const getGeneratedReports = async () => {
+  if (db) {
+    const saved = await getAppState('generated_reports');
+    return Array.isArray(saved) ? saved : [];
+  }
+  return generatedReports;
+};
+
+const saveGeneratedReports = async (reports) => {
+  const nextReports = Array.isArray(reports) ? reports.slice(0, 200) : [];
+  if (db) {
+    await setAppState('generated_reports', nextReports);
+  } else {
+    generatedReports = nextReports;
+  }
+  return nextReports;
+};
+
+const getDevicesForReport = (state, options = {}) => {
+  const siteId = options.siteId || options.site || 'All';
+  const deviceIds = Array.isArray(options.deviceIds) ? new Set(options.deviceIds.filter(Boolean)) : null;
+  return (Array.isArray(state.devices) ? state.devices : []).filter((device) => {
+    if (deviceIds && !deviceIds.has(device.id)) return false;
+    if (siteId && siteId !== 'All' && device.siteId !== siteId) return false;
+    return true;
+  });
+};
+
+const buildReportAlerts = (state, devices) => {
+  const deviceIds = new Set(devices.map((device) => device.id));
+  const savedAlerts = Array.isArray(state.alerts)
+    ? state.alerts.filter((alert) => !alert.deviceId || deviceIds.has(alert.deviceId))
+    : [];
+  if (savedAlerts.length > 0) return savedAlerts;
+
+  return devices
+    .filter((device) => device.status !== 'online')
+    .map((device) => ({
+      id: `alert-${device.id}`,
+      deviceId: device.id,
+      deviceName: device.name,
+      level: device.status === 'warning' ? 'Warning' : 'Critical',
+      status: 'active',
+      message: device.lastSeen
+        ? 'Device is offline or stale based on latest telemetry.'
+        : 'Device has not reported telemetry yet.',
+      timestamp: device.lastSeen || new Date().toISOString(),
+    }));
+};
+
+const buildReportRows = (state, options = {}) => {
+  const content = options.content || options.type || 'Energy';
+  const rangeLabel = getReportRangeLabel(options.range || options.frequency);
+  const generatedAt = new Date().toISOString();
+  const devices = getDevicesForReport(state, options);
+  const alerts = buildReportAlerts(state, devices);
+  const site = (Array.isArray(state.sites) ? state.sites : []).find((item) => item.id === options.siteId);
+
+  if (content === 'Devices') {
+    return [
+      ['Report', 'Device Health'],
+      ['Range', rangeLabel],
+      ['Site', site?.name || options.siteId || 'All Sites'],
+      ['Generated At', generatedAt],
+      [],
+      ['Device ID', 'Name', 'Type', 'Status', 'Tags', 'Last Seen', 'Firmware', 'External Device ID', 'Metric', 'Value'],
+      ...devices.flatMap((device) => {
+        const metrics = Object.entries(device.metrics || {});
+        const base = [
+          device.id,
+          device.name,
+          device.type,
+          device.status,
+          (device.tags || []).join('|'),
+          device.lastSeen || '',
+          device.firmwareVersion || '',
+          device.config?.externalDeviceId || device.id,
+        ];
+        return metrics.length
+          ? metrics.map(([metric, value]) => [...base, metric, String(value)])
+          : [[...base, '', '']];
+      }),
+    ];
+  }
+
+  if (content === 'Alerts') {
+    return [
+      ['Report', 'Alerts & Anomalies'],
+      ['Range', rangeLabel],
+      ['Site', site?.name || options.siteId || 'All Sites'],
+      ['Generated At', generatedAt],
+      [],
+      ['Alert ID', 'Device ID', 'Device Name', 'Level', 'Status', 'Message', 'Timestamp'],
+      ...alerts.map((alert) => [
+        alert.id,
+        alert.deviceId || '',
+        alert.deviceName || '',
+        alert.level || '',
+        alert.status || '',
+        alert.message || '',
+        alert.timestamp || alert.createdAt || '',
+      ]),
+    ];
+  }
+
+  const totalEnergy = devices.reduce((sum, device) => sum + (Number(device.metrics?.energy) || Number(device.metrics?.energy_today) || 0), 0);
+  const totalPower = devices.reduce((sum, device) => sum + (Number(device.metrics?.power) || 0), 0);
+
+  return [
+    ['Report', 'Energy Usage'],
+    ['Range', rangeLabel],
+    ['Site', site?.name || options.siteId || 'All Sites'],
+    ['Generated At', generatedAt],
+    [],
+    ['Metric', 'Value'],
+    ['Total Devices', String(devices.length)],
+    ['Online Devices', String(devices.filter((device) => device.status === 'online').length)],
+    ['Active Alerts', String(alerts.filter((alert) => alert.status === 'active').length)],
+    ['Total Energy (kWh)', totalEnergy.toFixed(2)],
+    ['Total Power (W)', totalPower.toFixed(2)],
+    [],
+    ['Device ID', 'Name', 'Type', 'Energy (kWh)', 'Power (W)', 'Status'],
+    ...devices.map((device) => [
+      device.id,
+      device.name,
+      device.type,
+      String(device.metrics?.energy || device.metrics?.energy_today || ''),
+      String(device.metrics?.power || ''),
+      device.status,
+    ]),
+  ];
+};
+
+const createGeneratedReport = async (options = {}) => {
+  const state = await getDashboardState();
+  const content = options.content || options.type || 'Energy';
+  const rows = buildReportRows(state, options);
+  const report = {
+    id: createId('report'),
+    name: options.name || `${options.workflowName ? `${options.workflowName} ` : ''}${content} Report`,
+    date: new Date().toISOString(),
+    type: 'CSV',
+    size: getReportSize(rows),
+    content,
+    range: options.range || options.frequency || 'last7days',
+    siteId: options.siteId || 'All',
+    source: options.source || 'manual',
+    workflowId: options.workflowId || '',
+    workflowName: options.workflowName || '',
+    recipient: options.recipient || '',
+    rows,
+  };
+  const reports = await getGeneratedReports();
+  await saveGeneratedReports([report, ...reports]);
+  return report;
+};
 
 const getAccessState = async () => {
   const state = await getDashboardState();
@@ -3314,7 +3497,46 @@ const executeWorkflowAction = async (workflow, action, event, context = {}, node
     };
   }
 
-  if (['email', 'whatsapp', 'ticket', 'report', 'ai_analyze'].includes(config.type)) {
+  if (config.type === 'report') {
+    const reportOptions = {
+      name: config.name || config.title || '',
+      content: config.content || config.reportContent || 'Energy',
+      range: config.range || config.frequency || 'weekly',
+      siteId: config.siteId || event.siteId || event.device?.siteId || 'All',
+      deviceIds: Array.isArray(config.deviceIds) ? config.deviceIds : [],
+      recipient: config.recipient || '',
+      source: 'workflow',
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+    };
+    if (options.dryRun) {
+      return {
+        ...baseStep,
+        output: {
+          dryRun: true,
+          action: 'report',
+          report: reportOptions,
+        },
+      };
+    }
+    const report = await createGeneratedReport(reportOptions);
+    return {
+      ...baseStep,
+      status: 'success',
+      output: {
+        reportId: report.id,
+        name: report.name,
+        content: report.content,
+        range: report.range,
+        siteId: report.siteId,
+        size: report.size,
+        recipient: report.recipient,
+        result: 'Report generated and saved.',
+      },
+    };
+  }
+
+  if (['email', 'whatsapp', 'ticket', 'ai_analyze'].includes(config.type)) {
     return {
       ...baseStep,
       status: 'queued',
@@ -6212,6 +6434,55 @@ app.get('/api/state', async (_req, res) => {
     res.status(200).json({state});
   } catch (error) {
     res.status(500).json({error: error.message, state: null});
+  }
+});
+
+app.get('/api/reports', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'], 'view reports'))) return;
+    const siteId = String(req.query.siteId || 'All');
+    const reports = await getGeneratedReports();
+    const filtered = siteId && siteId !== 'All'
+      ? reports.filter((report) => report.siteId === siteId || report.siteId === 'All')
+      : reports;
+    res.status(200).json({reports: filtered});
+  } catch (error) {
+    res.status(500).json({error: error.message, reports: []});
+  }
+});
+
+app.post('/api/reports/generate', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Partner', 'Customer'], 'generate reports'))) return;
+    const report = await createGeneratedReport(req.body || {});
+    await writeAuditLog(req, await getApiActor(req), 'report.generate', 'report', report.id, 'success', {
+      name: report.name,
+      content: report.content,
+      range: report.range,
+      siteId: report.siteId,
+      source: report.source,
+    });
+    res.status(201).json({ok: true, report});
+  } catch (error) {
+    res.status(500).json({ok: false, error: error.message});
+  }
+});
+
+app.get('/api/reports/:reportId.csv', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'], 'download reports'))) return;
+    const reports = await getGeneratedReports();
+    const report = reports.find((item) => item.id === req.params.reportId);
+    if (!report) {
+      res.status(404).json({error: 'Report not found.'});
+      return;
+    }
+    const fileName = `${String(report.name || report.id).replace(/[^a-z0-9-_]+/gi, '_').toLowerCase()}.csv`;
+    res.setHeader('content-type', 'text/csv; charset=utf-8');
+    res.setHeader('content-disposition', `attachment; filename="${fileName}"`);
+    res.status(200).send(reportRowsToCsv(report.rows || []));
+  } catch (error) {
+    res.status(500).json({error: error.message});
   }
 });
 

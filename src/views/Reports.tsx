@@ -1,11 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { FileText, Download, Calendar, Mail, FileDown } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Calendar, Download, FileDown, FileText, RefreshCw } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 import { translations } from '../lib/i18n';
-import { deriveAlertsFromDevices } from '../lib/derivedData';
-import { useRuntimeDevices } from '../hooks/useRuntimeDevices';
-import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
-import { getAccessibleDevices } from '../lib/featureAccess';
+import { apiActorHeaders, apiJsonHeaders } from '../lib/apiAuth';
+import { notify, notifySuccess } from '../lib/toast';
 
 type ReportItem = {
   id: string;
@@ -14,6 +12,10 @@ type ReportItem = {
   type: string;
   size: string;
   content: string;
+  range?: string;
+  siteId?: string;
+  source?: string;
+  workflowName?: string;
   rows: string[][];
 };
 
@@ -29,7 +31,7 @@ const csvEscape = (value: unknown) => {
 const toCsv = (rows: string[][]) => rows.map((row) => row.map(csvEscape).join(',')).join('\n');
 
 const downloadCsv = (report: ReportItem) => {
-  const blob = new Blob([toCsv(report.rows)], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob([toCsv(report.rows || [])], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
 
@@ -41,122 +43,75 @@ const downloadCsv = (report: ReportItem) => {
   URL.revokeObjectURL(url);
 };
 
-const getCsvSize = (rows: string[][]) => {
-  const bytes = new Blob([toCsv(rows)]).size;
-  if (bytes < 1024) return `${bytes} B`;
-
-  return `${(bytes / 1024).toFixed(1)} KB`;
+const formatReportDate = (date: string) => {
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return date || '-';
+  return parsed.toLocaleString();
 };
 
 export function Reports() {
-  const { language, devices: storedDevices, currentUser } = useAppStore();
-  const accessibleDevices = useMemo(() => getAccessibleDevices(currentUser, storedDevices), [currentUser, storedDevices]);
-  const devices = useRuntimeDevices(accessibleDevices);
+  const { language, currentUser, activeSiteId, sites } = useAppStore();
   const t = translations[language];
-  const alerts = deriveAlertsFromDevices(devices);
+  const activeSite = useMemo(() => sites.find((site) => site.id === activeSiteId), [activeSiteId, sites]);
 
   const [showGenerateModal, setShowGenerateModal] = useState(false);
-  const [reports, setReports] = useState<ReportItem[]>([
-    { id: 'sample-energy', name: 'Weekly Energy Summary', date: 'Oct 25, 2026', type: 'CSV', size: '2.4 KB', content: 'Energy', rows: [['Report', 'Sample report']] },
-    { id: 'sample-uptime', name: 'Monthly Equipment Uptime', date: 'Oct 01, 2026', type: 'CSV', size: '1.1 KB', content: 'Devices', rows: [['Report', 'Sample report']] },
-    { id: 'sample-alerts', name: 'Alerts & Incidents Log', date: 'Sep 30, 2026', type: 'CSV', size: '4.5 KB', content: 'Alerts', rows: [['Report', 'Sample report']] },
-  ]);
+  const [reports, setReports] = useState<ReportItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
 
-  const buildReportRows = (content: string, range: string) => {
-    const generatedAt = new Date().toISOString();
-
-    if (content === 'Devices') {
-      return [
-        ['Report', 'Device Health'],
-        ['Range', range],
-        ['Generated At', generatedAt],
-        [],
-        ['Device ID', 'Name', 'Type', 'Status', 'Tags', 'Last Seen', 'Firmware', 'External Device ID', 'Metric', 'Value'],
-        ...devices.flatMap((device) => {
-          const metrics = Object.entries(device.metrics || {});
-          const base = [
-            device.id,
-            device.name,
-            device.type,
-            device.status,
-            (device.tags || []).join('|'),
-            device.lastSeen,
-            device.firmwareVersion,
-            device.config?.externalDeviceId || device.id,
-          ];
-
-          return metrics.length
-            ? metrics.map(([metric, value]) => [...base, metric, String(value)])
-            : [[...base, '', '']];
-        }),
-      ];
+  const loadReports = async () => {
+    setLoading(true);
+    setMessage('');
+    try {
+      const params = new URLSearchParams({ siteId: activeSiteId || 'All' });
+      const response = await fetch(`/api/reports?${params.toString()}`, {
+        headers: apiActorHeaders(currentUser),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `Load failed: ${response.status}`);
+      setReports(Array.isArray(payload.reports) ? payload.reports : []);
+    } catch (error) {
+      const nextMessage = error instanceof Error ? error.message : 'Failed to load reports.';
+      setMessage(nextMessage);
+      notify({ level: 'error', title: 'Reports', message: nextMessage });
+    } finally {
+      setLoading(false);
     }
-
-    if (content === 'Alerts') {
-      return [
-        ['Report', 'Alerts & Anomalies'],
-        ['Range', range],
-        ['Generated At', generatedAt],
-        [],
-        ['Alert ID', 'Device ID', 'Device Name', 'Level', 'Status', 'Message', 'Timestamp'],
-        ...alerts.map((alert) => [
-          alert.id,
-          alert.deviceId,
-          alert.deviceName,
-          alert.level,
-          alert.status,
-          alert.message,
-          alert.timestamp,
-        ]),
-      ];
-    }
-
-    const totalEnergy = devices.reduce((sum, device) => sum + (Number(device.metrics.energy) || Number(device.metrics.energy_today) || 0), 0);
-    const totalPower = devices.reduce((sum, device) => sum + (Number(device.metrics.power) || 0), 0);
-
-    return [
-      ['Report', 'Energy Usage'],
-      ['Range', range],
-      ['Generated At', generatedAt],
-      [],
-      ['Metric', 'Value'],
-      ['Total Devices', String(devices.length)],
-      ['Online Devices', String(devices.filter((device) => device.status === 'online').length)],
-      ['Active Alerts', String(alerts.filter((alert) => alert.status === 'active').length)],
-      ['Total Energy Today (kWh)', totalEnergy.toFixed(2)],
-      ['Total Power (W)', totalPower.toFixed(2)],
-      [],
-      ['Device ID', 'Name', 'Type', 'Energy Today (kWh)', 'Power (W)', 'Status'],
-      ...devices.map((device) => [
-        device.id,
-        device.name,
-        device.type,
-        String(device.metrics.energy || device.metrics.energy_today || ''),
-        String(device.metrics.power || ''),
-        device.status,
-      ]),
-    ];
   };
 
-  const handleGenerate = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const range = formData.get('range') as string;
-    const content = formData.get('content') as string;
-    const rows = buildReportRows(content, range);
-    const report: ReportItem = {
-      id: `report-${Date.now()}`,
-      name: `Custom ${content} Report`,
-      date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
-      type: 'CSV',
-      size: getCsvSize(rows),
-      content,
-      rows,
-    };
-    
-    setReports([report, ...reports]);
-    setShowGenerateModal(false);
-    downloadCsv(report);
+  useEffect(() => {
+    void loadReports();
+  }, [activeSiteId]);
+
+  const handleGenerate = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const range = String(formData.get('range') || 'last7days');
+    const content = String(formData.get('content') || 'Energy');
+
+    try {
+      const response = await fetch('/api/reports/generate', {
+        method: 'POST',
+        headers: apiJsonHeaders(currentUser),
+        body: JSON.stringify({
+          name: `Custom ${content} Report`,
+          range,
+          content,
+          siteId: activeSiteId || 'All',
+          source: 'manual',
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.report) throw new Error(payload.error || `Generate failed: ${response.status}`);
+      setReports((current) => [payload.report, ...current.filter((item) => item.id !== payload.report.id)]);
+      setShowGenerateModal(false);
+      notifySuccess('Report generated successfully.');
+      downloadCsv(payload.report);
+    } catch (error) {
+      const nextMessage = error instanceof Error ? error.message : 'Failed to generate report.';
+      setMessage(nextMessage);
+      notify({ level: 'error', title: 'Reports', message: nextMessage });
+    }
   };
 
   return (
@@ -165,43 +120,60 @@ export function Reports() {
         <div>
           <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
             {t.reports.title}
-            <UnderDevelopmentBadge />
           </h1>
           <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            {t.reports.desc}
+            {activeSite?.name ? `${activeSite.name} reports generated manually or by workflows.` : t.reports.desc}
           </p>
         </div>
-        <button 
-          type="button" 
-          onClick={() => setShowGenerateModal(true)}
-          className="inline-flex mt-4 sm:mt-0 items-center gap-x-2 rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 border border-orange-500"
-        >
-          <Calendar className="-ml-0.5 h-4 w-4" aria-hidden="true" />
-          {t.reports.generate}
-        </button>
+        <div className="mt-4 flex flex-wrap gap-2 sm:mt-0">
+          <button
+            type="button"
+            onClick={loadReports}
+            disabled={loading}
+            className="inline-flex items-center gap-x-2 rounded border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowGenerateModal(true)}
+            className="inline-flex items-center gap-x-2 rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 border border-orange-500"
+          >
+            <Calendar className="-ml-0.5 h-4 w-4" aria-hidden="true" />
+            {t.reports.generate}
+          </button>
+        </div>
       </div>
+
+      {message && (
+        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-300">
+          {message}
+        </div>
+      )}
 
       <div className="mt-8 overflow-hidden bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-slate-800 rounded-lg shadow-sm">
         <ul role="list" className="divide-y divide-slate-100 dark:divide-slate-800/50">
           {reports.map((report) => (
             <li key={report.id} className="flex items-center justify-between gap-x-6 px-4 py-5 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors sm:px-6">
-              <div className="flex gap-x-4">
+              <div className="flex min-w-0 gap-x-4">
                 <div className="h-10 w-10 flex-none rounded bg-slate-100 dark:bg-slate-800 flex items-center justify-center border border-slate-200 dark:border-slate-700">
                   <FileText className="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
                 </div>
                 <div className="min-w-0 flex-auto">
-                  <p className="text-sm font-semibold leading-6 text-slate-900 dark:text-slate-300">
-                    <a href="#" className="hover:text-orange-600 dark:hover:text-orange-500 transition-colors">{report.name}</a>
+                  <p className="truncate text-sm font-semibold leading-6 text-slate-900 dark:text-slate-300">
+                    {report.name}
                   </p>
-                  <p className="mt-1 flex text-xs leading-5 text-slate-500 font-mono">
-                    {t.reports.generatedOn} {report.date} – {report.type} ({report.size})
+                  <p className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs leading-5 text-slate-500 font-mono">
+                    <span>{t.reports.generatedOn} {formatReportDate(report.date)}</span>
+                    <span>{report.type} ({report.size})</span>
+                    <span>{report.content}</span>
+                    {report.source && <span>{report.source}</span>}
+                    {report.workflowName && <span>{report.workflowName}</span>}
                   </p>
                 </div>
               </div>
               <div className="flex flex-none items-center gap-x-4">
-                <button type="button" className="hidden sm:inline-flex text-sm font-semibold leading-6 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white items-center gap-2">
-                  <Mail className="h-4 w-4" /> {t.reports.email}
-                </button>
                 <button
                   type="button"
                   onClick={() => downloadCsv(report)}
@@ -212,6 +184,16 @@ export function Reports() {
               </div>
             </li>
           ))}
+          {!loading && reports.length === 0 && (
+            <li className="px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+              No reports yet. Generate one manually or add a Report node to a workflow.
+            </li>
+          )}
+          {loading && (
+            <li className="px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+              Loading reports...
+            </li>
+          )}
         </ul>
       </div>
 
@@ -219,7 +201,7 @@ export function Reports() {
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
             <div className="fixed inset-0 transition-opacity z-[100]" aria-hidden="true" onClick={() => setShowGenerateModal(false)}>
-              <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"></div>
+              <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
             </div>
 
             <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
@@ -235,7 +217,7 @@ export function Reports() {
                       <h3 className="text-lg leading-6 font-medium text-slate-900 dark:text-white" id="modal-title">
                         {t.reports.generate}
                       </h3>
-                      
+
                       <div className="mt-4 space-y-4">
                         <div>
                           <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Date Range</label>
@@ -254,7 +236,7 @@ export function Reports() {
                           </select>
                         </div>
                         <div className="rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-xs text-slate-500 dark:text-slate-400">
-                          Current basic export format: CSV
+                          Report will be saved to backend and downloaded as CSV.
                         </div>
                       </div>
                     </div>

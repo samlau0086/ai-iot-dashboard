@@ -164,7 +164,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 后端工作流执行器
 - [x] 真实通知渠道：Bark、Webhook、Slack、Telegram，以及通过 Provider Webhook 接入 Email、SMS、WhatsApp
 - [x] Workflow Run 历史
-- [ ] 自动报告
+- [x] 自动报告：Workflow Report 节点可生成后端持久化 CSV 报告，Reports 页面可查看和下载
 - [ ] 设备控制动作接入
 
 ### V6: AI Copilot
@@ -411,7 +411,7 @@ Workflow 编辑页支持 **Run Alerting**。可为单个 workflow 启用运行�
 - HTTP Push、设备专属 API Path 和 MQTT Subscriber 收到遥测后，会触发启用状态的工作流。
 - 已支持 `threshold`、`offline`、`alert`、`mqtt_message`、`webhook`、`schedule` 触发类型。
 - 已支持 IF / ELIF / ELSE 条件分支；Trigger 触发后会按顺序匹配分支，只执行第一个匹配分支下的 actions。
-- `webhook` 动作会由后端真实 POST 到目标 URL；`mqtt_publish`、`start_backup`、`stop_device` 会写入控制中心命令日志；`email`、`whatsapp`、`notification`、`ticket`、`report`、`ai_analyze` 会先写入执行步骤，作为后续真实连接器的队列记录。
+- `webhook` 动作会由后端真实 POST 到目标 URL；`mqtt_publish`、`start_backup`、`stop_device`、`device_control` 会写入控制中心命令日志；`notification` 会写入系统通知并推送到已启用通知渠道；`report` 会生成后端持久化 CSV 报告，可在 Reports 页面查看和下载；`email`、`whatsapp`、`ticket`、`ai_analyze` 会先写入执行步骤，作为后续真实连接器的队列记录。
 - 执行历史可通过 `GET /api/workflow-runs` 查看，也可以用 `GET /api/workflow-runs?workflowId=wf-xxx&limit=50` 查看单个工作流。
 
 ### 使用控制中心
