@@ -55,6 +55,8 @@ const hashToken = (token) => crypto.createHash('sha256').update(String(token)).d
 const authSessionSecret = process.env.AUTH_SESSION_SECRET || process.env.JWT_SECRET || 'dev-session-secret-change-me';
 const authSessionTtlSeconds = Math.max(300, Number(process.env.AUTH_SESSION_TTL_SECONDS || 43200));
 const authSessionCookieName = process.env.AUTH_SESSION_COOKIE_NAME || 'ai_iot_session';
+const authRefreshTtlSeconds = Math.max(authSessionTtlSeconds, Number(process.env.AUTH_REFRESH_TTL_SECONDS || 14 * 24 * 60 * 60));
+const authRefreshCookieName = process.env.AUTH_REFRESH_COOKIE_NAME || 'ai_iot_refresh';
 const defaultAuthUsers = [
   {
     id: '1',
@@ -761,22 +763,26 @@ const getAuthUsers = async () => {
   return mergeDefaultAuthUsers(Array.isArray(state.users) ? state.users : []);
 };
 
-const createSessionToken = (user) => {
+const createAuthToken = (user, ttlSeconds, tokenType) => {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     sub: user.id,
     iat: now,
-    exp: now + authSessionTtlSeconds,
+    exp: now + ttlSeconds,
+    type: tokenType,
   };
-  const body = encodeSessionPart({alg: 'HS256', typ: 'AI-IOT-SESSION'}) + '.' + encodeSessionPart(payload);
+  const body = encodeSessionPart({alg: 'HS256', typ: tokenType}) + '.' + encodeSessionPart(payload);
   return `${body}.${signSessionBody(body)}`;
 };
 
+const createSessionToken = (user) => createAuthToken(user, authSessionTtlSeconds, 'AI-IOT-SESSION');
+const createRefreshToken = (user) => createAuthToken(user, authRefreshTtlSeconds, 'AI-IOT-REFRESH');
+
 const isSecureRequest = (req) => req?.secure || String(req?.get?.('x-forwarded-proto') || '').split(',')[0].trim() === 'https' || process.env.NODE_ENV === 'production';
 
-const serializeSessionCookie = (req, token, maxAgeSeconds = authSessionTtlSeconds) => {
+const serializeAuthCookie = (req, name, token, maxAgeSeconds) => {
   const parts = [
-    `${authSessionCookieName}=${token || ''}`,
+    `${name}=${token || ''}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
@@ -787,12 +793,17 @@ const serializeSessionCookie = (req, token, maxAgeSeconds = authSessionTtlSecond
   return parts.join('; ');
 };
 
-const setSessionCookie = (req, res, token) => {
-  res.setHeader('Set-Cookie', serializeSessionCookie(req, token));
+const setAuthCookies = (req, res, sessionToken, refreshToken = null) => {
+  const cookies = [serializeAuthCookie(req, authSessionCookieName, sessionToken, authSessionTtlSeconds)];
+  if (refreshToken) cookies.push(serializeAuthCookie(req, authRefreshCookieName, refreshToken, authRefreshTtlSeconds));
+  res.setHeader('Set-Cookie', cookies);
 };
 
-const clearSessionCookie = (req, res) => {
-  res.setHeader('Set-Cookie', serializeSessionCookie(req, '', 0));
+const clearAuthCookies = (req, res) => {
+  res.setHeader('Set-Cookie', [
+    serializeAuthCookie(req, authSessionCookieName, '', 0),
+    serializeAuthCookie(req, authRefreshCookieName, '', 0),
+  ]);
 };
 
 const getCookieValue = (req, name) => {
@@ -817,7 +828,13 @@ const getSessionTokenFromRequest = (req) => {
   return getCookieValue(req, authSessionCookieName);
 };
 
-const verifySessionToken = async (token) => {
+const getRefreshTokenFromRequest = (req) => {
+  const explicit = req.get('x-iot-refresh-token');
+  if (explicit) return explicit.trim();
+  return getCookieValue(req, authRefreshCookieName);
+};
+
+const verifyAuthToken = async (token, expectedType = 'AI-IOT-SESSION') => {
   if (!token) return null;
   const parts = String(token).split('.');
   if (parts.length !== 3) return null;
@@ -834,12 +851,22 @@ const verifySessionToken = async (token) => {
   } catch {
     return null;
   }
+  let decodedHeader = null;
+  try {
+    decodedHeader = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
+  } catch {
+    decodedHeader = null;
+  }
+  if ((decodedPayload.type && decodedPayload.type !== expectedType) || (decodedHeader?.typ && decodedHeader.typ !== expectedType)) return null;
   if (!decodedPayload?.sub || Number(decodedPayload.exp || 0) < Math.floor(Date.now() / 1000)) return null;
 
   const users = await getAuthUsers();
   const user = users.find((item) => item.id === decodedPayload.sub && item.status === 'approved');
   return publicAuthUser(user);
 };
+
+const verifySessionToken = async (token) => verifyAuthToken(token, 'AI-IOT-SESSION');
+const verifyRefreshToken = async (token) => verifyAuthToken(token, 'AI-IOT-REFRESH');
 
 const getApiActor = async (req) => {
   const sessionUser = await verifySessionToken(getSessionTokenFromRequest(req));
@@ -4492,13 +4519,15 @@ app.post('/api/auth/login', async (req, res) => {
     clearLoginFailures(rateLimit.key);
     await writeAuditLog(req, publicAuthUser(user), 'auth.login', 'user', user.id, 'success');
     const sessionToken = createSessionToken(user);
-    setSessionCookie(req, res, sessionToken);
+    const refreshToken = createRefreshToken(user);
+    setAuthCookies(req, res, sessionToken, refreshToken);
     res.status(200).json({
       ok: true,
       message: 'Signed in.',
       user: publicAuthUser(user),
       sessionToken,
       expiresIn: authSessionTtlSeconds,
+      refreshExpiresIn: authRefreshTtlSeconds,
     });
   } catch (error) {
     res.status(500).json({ok: false, message: error.message});
@@ -4518,16 +4547,42 @@ app.get('/api/auth/session', async (req, res) => {
   }
 });
 
+app.post('/api/auth/refresh', async (req, res) => {
+  try {
+    const user = await verifyRefreshToken(getRefreshTokenFromRequest(req));
+    if (!user) {
+      clearAuthCookies(req, res);
+      await writeAuditLog(req, {id: null, name: '', role: null}, 'auth.refresh', 'session', 'refresh', 'failed', {reason: 'invalid_or_expired_refresh'});
+      res.status(401).json({ok: false, message: 'Refresh session expired or invalid.'});
+      return;
+    }
+
+    const sessionToken = createSessionToken(user);
+    setAuthCookies(req, res, sessionToken);
+    await writeAuditLog(req, user, 'auth.refresh', 'user', user.id, 'success');
+    res.status(200).json({
+      ok: true,
+      message: 'Session refreshed.',
+      user,
+      sessionToken,
+      expiresIn: authSessionTtlSeconds,
+    });
+  } catch (error) {
+    clearAuthCookies(req, res);
+    res.status(500).json({ok: false, message: error.message});
+  }
+});
+
 app.post('/api/auth/logout', async (req, res) => {
   try {
     const actor = await getApiActor(req);
-    clearSessionCookie(req, res);
+    clearAuthCookies(req, res);
     if (actor?.id) {
       await writeAuditLog(req, actor, 'auth.logout', 'user', actor.id, 'success');
     }
     res.status(200).json({ok: true, message: 'Signed out.'});
   } catch (error) {
-    clearSessionCookie(req, res);
+    clearAuthCookies(req, res);
     res.status(200).json({ok: true, message: 'Signed out.'});
   }
 });

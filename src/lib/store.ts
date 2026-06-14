@@ -1167,6 +1167,23 @@ const clearStoredSessionUserId = () => {
   }
 };
 
+const refreshApiSession = async (): Promise<User | null> => {
+  try {
+    const response = await fetch('/api/auth/refresh', { method: 'POST' });
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok && payload.user && payload.sessionToken) {
+      setApiSessionToken(payload.sessionToken);
+      setStoredSessionUserId(payload.user.id);
+      return payload.user;
+    }
+  } catch {
+    // Fall through to local session cleanup.
+  }
+  clearApiSessionToken();
+  clearStoredSessionUserId();
+  return null;
+};
+
 const mergeDefaultUsers = (users: User[] = []) => {
   const existingEmails = new Set(users.map((user) => user.email.toLowerCase()));
   return [
@@ -1267,14 +1284,10 @@ export const useAppStore = create<AppState>()(
                 setStoredSessionUserId(sessionPayload.user.id);
               }
             } else {
-              clearApiSessionToken();
-              clearStoredSessionUserId();
-              sessionUser = null;
+              sessionUser = await refreshApiSession();
             }
           } catch {
-            clearApiSessionToken();
-            clearStoredSessionUserId();
-            sessionUser = null;
+            sessionUser = await refreshApiSession();
           }
 
           if (sessionUserId && !sessionUser) {
@@ -1321,14 +1334,10 @@ export const useAppStore = create<AppState>()(
                 setStoredSessionUserId(sessionPayload.user.id);
               }
             } else {
-              clearApiSessionToken();
-              clearStoredSessionUserId();
-              sessionUser = null;
+              sessionUser = await refreshApiSession();
             }
           } catch {
-            clearApiSessionToken();
-            clearStoredSessionUserId();
-            sessionUser = null;
+            sessionUser = await refreshApiSession();
           }
           if (sessionUserId && !sessionUser) {
             clearStoredSessionUserId();

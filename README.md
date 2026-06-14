@@ -210,7 +210,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 强制密码策略：注册和后台新增用户默认要求至少 10 位，且满足大小写、数字、符号中的 3 类，并拦截常见弱密码和包含姓名/邮箱的密码
 - [x] 审计日志导出：Settings -> Audit Logs 可按当前筛选结果导出 CSV，便于交付排查和安全留档
 - [x] 异常登录告警：登录锁定、未审核账号登录、弱密码注册尝试会写入系统通知，并可推送到已启用的通知渠道
-- [ ] 更完整的安全增强：刷新 Token、IP 黑名单和异地登录检测
+- [x] Refresh Token / Session Renewal：登录下发短期 access session 和长期 refresh cookie，页面恢复时 access 过期会自动刷新会话
+- [ ] 更完整的安全增强：IP 黑名单、异地登录检测和 refresh token 服务端吊销列表
 
 ### 技术演进方向
 
@@ -518,10 +519,13 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 | `VPS_DEPLOY_PATH` | PM2 应用部署目录，例如 `/var/www/ai-iot-dashboard`。 |
 | `DATABASE_URL` | PostgreSQL / pgvector 连接字符串，例如 `postgresql://user:password@host:5432/ai_iot_dashboard`。 |
 | `AUTH_SESSION_SECRET` | 后端 Session Token 签名密钥，生产环境必须设置为高强度随机字符串。 |
+| `AUTH_SESSION_TTL_SECONDS` | Access Session 有效期，默认 `43200` 秒。 |
+| `AUTH_REFRESH_TTL_SECONDS` | Refresh Session 有效期，默认 `1209600` 秒。 |
 | `AUTH_FAILED_LOGIN_MAX_ATTEMPTS` | 登录失败限流阈值，默认 `5`。 |
 | `AUTH_FAILED_LOGIN_WINDOW_MS` | 登录失败统计窗口，默认 `600000`。 |
 | `AUTH_FAILED_LOGIN_LOCK_MS` | 达到阈值后的锁定时间，默认 `900000`。 |
 | `AUTH_SESSION_COOKIE_NAME` | 服务端 HttpOnly Session Cookie 名称，默认 `ai_iot_session`。 |
+| `AUTH_REFRESH_COOKIE_NAME` | 服务端 HttpOnly Refresh Cookie 名称，默认 `ai_iot_refresh`。 |
 | `AUTH_PASSWORD_MIN_LENGTH` | 注册密码最小长度，默认 `10`，最低不小于 `8`。 |
 | `AUTH_PASSWORD_REQUIRED_CLASSES` | 注册密码需要满足的字符类别数量，默认 `3`，类别包括大写、小写、数字、符号。 |
 | `SECURITY_ALERTS_ENABLED` | 是否启用安全告警，设置为 `false` 可全局关闭，默认开启。 |
