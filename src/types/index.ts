@@ -38,6 +38,9 @@ export interface DeviceConfig {
   httpCommandHeaders?: string;
   httpCommandTemplate?: string;
   httpCommandTimeoutMs?: number;
+  localManualPriorityEnabled?: boolean;
+  localManualPriorityMetric?: string;
+  localManualPriorityValues?: string;
   metricMapping?: Record<string, string>;
   metricMappings?: DeviceMetricMapping[];
   controlState?: Record<string, unknown>;

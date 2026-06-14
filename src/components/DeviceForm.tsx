@@ -1065,6 +1065,49 @@ mqtt pub -h <broker-host> -p 1883 -t "${getMqttTelemetryTopic()}" -m '${JSON.str
                 </label>
               )}
              </div>
+             <div className="sm:col-span-3 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-500/30 dark:bg-amber-500/10">
+              <label className="flex items-start gap-3 text-sm font-medium text-amber-900 dark:text-amber-100">
+                <input
+                  type="checkbox"
+                  name="localManualPriorityEnabled"
+                  checked={Boolean(configData.localManualPriorityEnabled)}
+                  onChange={handleConfigChange}
+                  className="mt-1 rounded border-amber-300 text-orange-600 focus:ring-orange-500 dark:border-amber-500/60"
+                />
+                <span>
+                  Local manual priority
+                  <span className="mt-1 block text-xs font-normal text-amber-800/80 dark:text-amber-100/80">
+                    When the device reports a local/manual mode value, remote commands from Dashboard will be blocked until the device returns to remote/auto mode.
+                  </span>
+                </span>
+              </label>
+              {configData.localManualPriorityEnabled && (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="block text-xs font-medium uppercase tracking-wider text-amber-900 dark:text-amber-100">
+                    Mode Metric / State Key
+                    <input
+                      type="text"
+                      name="localManualPriorityMetric"
+                      value={configData.localManualPriorityMetric || 'mode'}
+                      onChange={handleConfigChange}
+                      placeholder="mode"
+                      className="mt-1 block h-10 w-full rounded-md border-amber-200 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-amber-500/30 dark:bg-slate-950 dark:text-slate-300"
+                    />
+                  </label>
+                  <label className="block text-xs font-medium uppercase tracking-wider text-amber-900 dark:text-amber-100">
+                    Blocking Values
+                    <input
+                      type="text"
+                      name="localManualPriorityValues"
+                      value={configData.localManualPriorityValues || 'manual,local,hand,maintenance'}
+                      onChange={handleConfigChange}
+                      placeholder="manual,local,hand"
+                      className="mt-1 block h-10 w-full rounded-md border-amber-200 bg-white px-3 text-sm normal-case tracking-normal text-slate-900 shadow-sm focus:border-orange-500 focus:ring-orange-500 dark:border-amber-500/30 dark:bg-slate-950 dark:text-slate-300"
+                    />
+                  </label>
+                </div>
+              )}
+             </div>
              <div className="sm:col-span-3">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Industrial Protocol</label>
               <select

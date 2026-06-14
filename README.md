@@ -125,7 +125,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 二次确认
 - [x] 危险操作审批：非 Owner/Admin 发起高风险命令时进入 pending_approval，审批后才会下发
 - [x] 失败回滚：设备 ACK failed 后可在 Control Log 恢复命令前的本地控制状态快照
-- [ ] 本地手动优先机制
+- [x] 本地手动优先机制：设备处于 Local / Manual / Hand 等现场模式时，后端会阻止远程控制命令下发
 
 ### V5: Workflow Automation
 
@@ -454,6 +454,13 @@ curl -X POST "http://localhost:3006/api/device-commands/batch" \
 - 如果设备或网关通过 ACK 返回 `failed`，Control Log 中会显示 **Rollback**。
 - Rollback 会把 Dashboard 内的本地控制状态恢复到命令前快照，并把命令标记为 `rolled_back`。
 - Rollback 不会自动向物理设备发送反向控制命令；现场设备的真实状态仍应以最新 telemetry / ACK 为准。
+
+本地手动优先：
+
+- 在设备新增/编辑的高级配置中启用 **Local manual priority**。
+- 配置 `Mode Metric / State Key`，默认 `mode`，系统会从设备 telemetry metrics 和 `controlState` 中读取该字段。
+- 配置 `Blocking Values`，默认 `manual,local,hand,maintenance`。
+- 当设备上报值命中阻止列表时，Control Center 会禁用该设备远程控制；即使绕过前端直接调用 API，后端也会把命令标记为 `rejected`，不会进入 MQTT / HTTP / pending queue。
 
 ### 查看操作审计日志
 

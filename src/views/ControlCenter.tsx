@@ -24,6 +24,27 @@ type ControlCommand = {
   updatedAt: string;
 };
 
+const splitControlList = (value?: string) => String(value || '')
+  .split(',')
+  .map((item) => item.trim().toLowerCase())
+  .filter(Boolean);
+
+const getLocalManualPriorityState = (device: any) => {
+  if (!device?.config?.localManualPriorityEnabled) return { blocked: false };
+  const key = String(device.config.localManualPriorityMetric || 'mode').trim() || 'mode';
+  const blockingValues = splitControlList(device.config.localManualPriorityValues || 'manual,local,hand,maintenance');
+  const candidates = [
+    device.metrics?.[key],
+    device.config?.controlState?.[key],
+    device.status,
+  ].filter((value) => value !== undefined && value !== null);
+  const matchedValue = candidates.find((value) => {
+    const normalized = String(value).trim().toLowerCase();
+    return blockingValues.includes(normalized) || (typeof value === 'boolean' && value && blockingValues.includes('true'));
+  });
+  return { blocked: matchedValue !== undefined, key, value: matchedValue };
+};
+
 export function ControlCenter() {
   const { devices: storedDevices, currentUser, activeSiteId, sites, updateDevice } = useAppStore();
   const accessibleSites = useMemo(() => getAccessibleSites(currentUser, sites), [currentUser, sites]);
@@ -53,12 +74,14 @@ export function ControlCenter() {
     });
   }, [currentUser, devices, selectedSiteId]);
   const selectedDevice = scopedDevices.find((device) => device.id === selectedDeviceId) || scopedDevices[0] || null;
+  const selectedDeviceManualPriority = getLocalManualPriorityState(selectedDevice);
   const commandOptions = getDeviceControlDefinitions(selectedDevice).filter((control) => (
     canIssueControlCommand(currentUser, selectedDevice?.id, control.id)
   ));
   const batchEligibleDevices = useMemo(() => (
     scopedDevices.filter((device) => (
       device.id !== selectedDevice?.id
+      && !getLocalManualPriorityState(device).blocked
       && getDeviceControlDefinitions(device).some((control) => control.id === selectedCommand)
       && canIssueControlCommand(currentUser, device.id, selectedCommand)
     ))
@@ -121,6 +144,10 @@ export function ControlCenter() {
 
   const submitCommand = async (nextControlValues = controlValues, forceSubmit = false) => {
     if (!selectedDevice || !canControl || (!confirmChecked && !forceSubmit)) return;
+    if (selectedDeviceManualPriority.blocked) {
+      setMessage(`Blocked by local manual priority: ${selectedDeviceManualPriority.key}=${selectedDeviceManualPriority.value}.`);
+      return;
+    }
     const definition = commandOptions.find((option) => option.id === selectedCommand);
     if (!canIssueControlCommand(currentUser, selectedDevice.id, definition?.id)) {
       setMessage('Current user is not allowed to issue this control action.');
@@ -177,6 +204,10 @@ export function ControlCenter() {
 
   const submitBatchCommand = async () => {
     if (!selectedDevice || !canControl || !confirmChecked || batchDeviceIds.length === 0) return;
+    if (selectedDeviceManualPriority.blocked) {
+      setMessage(`Blocked by local manual priority: ${selectedDeviceManualPriority.key}=${selectedDeviceManualPriority.value}.`);
+      return;
+    }
     const definition = commandOptions.find((option) => option.id === selectedCommand);
     if (!definition) return;
     const targetIds = Array.from(new Set([selectedDevice.id, ...batchDeviceIds]));
@@ -381,6 +412,11 @@ export function ControlCenter() {
                 ))}
                 {scopedDevices.length === 0 && <option value="">No controllable devices</option>}
               </select>
+              {selectedDeviceManualPriority.blocked && (
+                <div className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                  Local manual priority is active: {selectedDeviceManualPriority.key}={String(selectedDeviceManualPriority.value)}. Remote commands are blocked until this device returns to remote/auto mode.
+                </div>
+              )}
             </div>
 
             <div>
@@ -479,7 +515,7 @@ export function ControlCenter() {
                 <span className="font-medium text-slate-700 dark:text-slate-200">{selectedOption.label}</span>
                 <button
                   type="button"
-                  disabled={!selectedDevice || !canControl || isSubmitting}
+                  disabled={!selectedDevice || !canControl || selectedDeviceManualPriority.blocked || isSubmitting}
                   onClick={() => {
                     const nextValue = !Boolean(controlValues[selectedOption.id]);
                     const nextControlValues = { ...controlValues, [selectedOption.id]: nextValue };
@@ -579,7 +615,7 @@ export function ControlCenter() {
                 <button
                   type="button"
                   onClick={() => submitCommand()}
-                  disabled={!selectedDevice || !canControl || !confirmChecked || isSubmitting}
+                  disabled={!selectedDevice || !canControl || selectedDeviceManualPriority.blocked || !confirmChecked || isSubmitting}
                   className="inline-flex h-10 w-full items-center justify-center gap-2 rounded bg-orange-600 px-4 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
                 >
                   <Play className="h-4 w-4" />
@@ -588,7 +624,7 @@ export function ControlCenter() {
                 <button
                   type="button"
                   onClick={submitBatchCommand}
-                  disabled={!selectedDevice || !canControl || !confirmChecked || batchDeviceIds.length === 0 || isSubmitting}
+                  disabled={!selectedDevice || !canControl || selectedDeviceManualPriority.blocked || !confirmChecked || batchDeviceIds.length === 0 || isSubmitting}
                   className="inline-flex h-10 w-full items-center justify-center gap-2 rounded border border-orange-500 bg-white px-4 text-sm font-semibold text-orange-700 hover:bg-orange-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400 dark:bg-slate-950 dark:text-orange-300 dark:hover:bg-orange-500/10 dark:disabled:border-slate-700 dark:disabled:text-slate-600"
                 >
                   <Play className="h-4 w-4" />

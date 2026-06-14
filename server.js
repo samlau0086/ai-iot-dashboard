@@ -1987,6 +1987,14 @@ const dispatchDeviceCommandToHttp = async (command, device) => {
 const dispatchDeviceControlCommand = async (command, device) => {
   if (!device || command.status === 'rejected') return command;
 
+  const manualPriority = getDeviceManualPriorityState(device);
+  if (manualPriority.blocked) {
+    return await updateDeviceControlCommand(command.id, {
+      status: 'rejected',
+      result: `Blocked by local manual priority. ${manualPriority.key}=${manualPriority.value}. Remote commands are disabled until the device returns to remote/auto mode.`,
+    }) || command;
+  }
+
   const protocol = String(device.config?.protocol || '').toLowerCase();
   const dataSource = String(device.config?.dataSource || '').toLowerCase();
   const hasMqttRoute = dataSource === 'mqtt' || protocol === 'mqtt' || Boolean(device.config?.mqttTopic || device.config?.commandTopic || device.config?.mqttCommandTopic);
@@ -2022,6 +2030,33 @@ const dispatchDeviceControlCommand = async (command, device) => {
 };
 
 const canApproveDeviceCommand = (role) => ['Owner', 'Admin'].includes(String(role || ''));
+
+const getDeviceManualPriorityState = (device) => {
+  if (!device?.config?.localManualPriorityEnabled) {
+    return {blocked: false};
+  }
+
+  const key = String(device.config.localManualPriorityMetric || 'mode').trim() || 'mode';
+  const blockingValues = splitList(device.config.localManualPriorityValues || 'manual,local,hand,maintenance')
+    .map((value) => value.toLowerCase());
+  const candidates = [
+    device.metrics?.[key],
+    device.config?.controlState?.[key],
+    device.config?.controlState?.[device.config?.localManualPriorityMetric],
+    device.status,
+  ].filter((value) => value !== undefined && value !== null);
+  const matchedValue = candidates.find((value) => {
+    const normalized = String(value).trim().toLowerCase();
+    return blockingValues.includes(normalized) || (typeof value === 'boolean' && value === true && blockingValues.includes('true'));
+  });
+
+  return {
+    blocked: matchedValue !== undefined,
+    key,
+    value: matchedValue,
+    blockingValues,
+  };
+};
 
 const isDangerousDeviceCommand = (command, parameters = {}) => {
   const text = [
@@ -2068,6 +2103,12 @@ const createDeviceControlCommand = async ({
   if (shouldRequireDeviceCommandApproval(normalizedCommand)) {
     normalizedCommand.status = 'pending_approval';
     normalizedCommand.result = 'Dangerous operation is waiting for Owner/Admin approval. No command has been sent to the device.';
+  }
+
+  const manualPriority = getDeviceManualPriorityState(device);
+  if (device && manualPriority.blocked) {
+    normalizedCommand.status = 'rejected';
+    normalizedCommand.result = `Blocked by local manual priority. ${manualPriority.key}=${manualPriority.value}. Remote commands are disabled until the device returns to remote/auto mode.`;
   }
 
   await persistDeviceControlCommand(normalizedCommand);
