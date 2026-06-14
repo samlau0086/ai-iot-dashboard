@@ -1748,6 +1748,11 @@ export const useAppStore = create<AppState>()(
         }
       },
       logout: () => {
+        const user = useAppStore.getState().currentUser;
+        void fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: apiActorHeaders(user),
+        }).catch(() => undefined);
         clearApiSessionToken();
         clearStoredSessionUserId();
         set({ currentUser: null });

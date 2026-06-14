@@ -12,6 +12,7 @@ const {Pool} = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
+app.set('trust proxy', 1);
 const port = Number(process.env.PORT || process.env.VITE_PORT || 3006);
 const distDir = path.join(__dirname, 'dist');
 const runtimeConfigPath = path.join(__dirname, 'runtime-config.json');
@@ -49,6 +50,7 @@ const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(3
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 const authSessionSecret = process.env.AUTH_SESSION_SECRET || process.env.JWT_SECRET || 'dev-session-secret-change-me';
 const authSessionTtlSeconds = Math.max(300, Number(process.env.AUTH_SESSION_TTL_SECONDS || 43200));
+const authSessionCookieName = process.env.AUTH_SESSION_COOKIE_NAME || 'ai_iot_session';
 const defaultAuthUsers = [
   {
     id: '1',
@@ -723,12 +725,49 @@ const createSessionToken = (user) => {
   return `${body}.${signSessionBody(body)}`;
 };
 
+const isSecureRequest = (req) => req?.secure || String(req?.get?.('x-forwarded-proto') || '').split(',')[0].trim() === 'https' || process.env.NODE_ENV === 'production';
+
+const serializeSessionCookie = (req, token, maxAgeSeconds = authSessionTtlSeconds) => {
+  const parts = [
+    `${authSessionCookieName}=${token || ''}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${Math.max(0, Number(maxAgeSeconds) || 0)}`,
+  ];
+  if (!token) parts.push('Expires=Thu, 01 Jan 1970 00:00:00 GMT');
+  if (isSecureRequest(req)) parts.push('Secure');
+  return parts.join('; ');
+};
+
+const setSessionCookie = (req, res, token) => {
+  res.setHeader('Set-Cookie', serializeSessionCookie(req, token));
+};
+
+const clearSessionCookie = (req, res) => {
+  res.setHeader('Set-Cookie', serializeSessionCookie(req, '', 0));
+};
+
+const getCookieValue = (req, name) => {
+  const cookieHeader = req.get('cookie') || '';
+  return cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .map((part) => {
+      const separatorIndex = part.indexOf('=');
+      if (separatorIndex < 0) return ['', ''];
+      return [part.slice(0, separatorIndex), part.slice(separatorIndex + 1)];
+    })
+    .find(([key]) => key === name)?.[1] || '';
+};
+
 const getSessionTokenFromRequest = (req) => {
   const explicit = req.get('x-iot-session-token');
   if (explicit) return explicit.trim();
   const authorization = req.get('authorization') || '';
   const match = authorization.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : '';
+  if (match) return match[1].trim();
+  return getCookieValue(req, authSessionCookieName);
 };
 
 const verifySessionToken = async (token) => {
@@ -4338,11 +4377,13 @@ app.post('/api/auth/login', async (req, res) => {
 
     clearLoginFailures(rateLimit.key);
     await writeAuditLog(req, publicAuthUser(user), 'auth.login', 'user', user.id, 'success');
+    const sessionToken = createSessionToken(user);
+    setSessionCookie(req, res, sessionToken);
     res.status(200).json({
       ok: true,
       message: 'Signed in.',
       user: publicAuthUser(user),
-      sessionToken: createSessionToken(user),
+      sessionToken,
       expiresIn: authSessionTtlSeconds,
     });
   } catch (error) {
@@ -4360,6 +4401,20 @@ app.get('/api/auth/session', async (req, res) => {
     res.status(200).json({ok: true, user});
   } catch (error) {
     res.status(500).json({ok: false, message: error.message});
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const actor = await getApiActor(req);
+    clearSessionCookie(req, res);
+    if (actor?.id) {
+      await writeAuditLog(req, actor, 'auth.logout', 'user', actor.id, 'success');
+    }
+    res.status(200).json({ok: true, message: 'Signed out.'});
+  } catch (error) {
+    clearSessionCookie(req, res);
+    res.status(200).json({ok: true, message: 'Signed out.'});
   }
 });
 

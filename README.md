@@ -206,7 +206,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 密码哈希基础实现：新注册和后端状态保存会把明文密码转换为 `passwordHash`，旧明文账号登录后兼容迁移
 - [x] 登录失败限流：按 IP + Email 限制失败登录次数，默认 10 分钟内 5 次失败后锁定 15 分钟
 - [x] 操作审计日志：登录、注册、Ingest Token、Data Source、Access Control、MQTT、设备控制、通知测试和状态保存等敏感操作会写入审计记录
-- [ ] 更完整的安全增强：刷新 Token、服务端 Cookie Session 和审计日志前端查询界面
+- [x] 服务端 HttpOnly Cookie Session：登录成功后后端设置 `SameSite=Lax` 的 session cookie，敏感 API 可从 cookie 或兼容 header 鉴权，登出时清理 cookie
+- [ ] 更完整的安全增强：刷新 Token、强制密码策略、审计日志导出和异常登录告警
 
 ### 技术演进方向
 
@@ -513,6 +514,7 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 | `AUTH_FAILED_LOGIN_MAX_ATTEMPTS` | 登录失败限流阈值，默认 `5`。 |
 | `AUTH_FAILED_LOGIN_WINDOW_MS` | 登录失败统计窗口，默认 `600000`。 |
 | `AUTH_FAILED_LOGIN_LOCK_MS` | 达到阈值后的锁定时间，默认 `900000`。 |
+| `AUTH_SESSION_COOKIE_NAME` | 服务端 HttpOnly Session Cookie 名称，默认 `ai_iot_session`。 |
 | `AUDIT_LOG_BUFFER_SIZE` | 未配置 PostgreSQL 时的内存审计日志保留条数，默认 `1000`。 |
 
 `VPS_DEPLOY_PATH` 指向的目录会由工作流自动执行 `mkdir -p` 创建，但 `VPS_USER` 必须有创建和写入权限。
