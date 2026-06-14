@@ -2256,6 +2256,16 @@ const shouldRequireDeviceCommandApproval = (command) => (
   && isDangerousDeviceCommand(command.command, command.parameters)
 );
 
+const getServerDeviceControlDefinitions = (device) => (
+  Array.isArray(device?.config?.controlDefinitions)
+    ? device.config.controlDefinitions.filter((definition) => definition && definition.id)
+    : []
+);
+
+const getServerDeviceControlDefinition = (device, command) => (
+  getServerDeviceControlDefinitions(device).find((definition) => definition.id === command) || null
+);
+
 const createDeviceControlCommand = async ({
   deviceId,
   command,
@@ -2266,19 +2276,35 @@ const createDeviceControlCommand = async ({
 }) => {
   const device = await findDashboardDevice(deviceId);
   const createdAt = new Date().toISOString();
+  const commandName = String(command || 'unknown');
+  const commandParameters = parameters && typeof parameters === 'object' ? parameters : {value: parameters};
+  const deviceControlDefinitions = getServerDeviceControlDefinitions(device);
+  const controlDefinition = device ? getServerDeviceControlDefinition(device, commandName) : null;
   const normalizedCommand = {
     id: createId('cmd'),
     deviceId: device?.id || String(deviceId || ''),
     deviceName: device?.name || String(deviceId || 'Unknown device'),
-    command: String(command || 'unknown'),
-    parameters: parameters && typeof parameters === 'object' ? parameters : {value: parameters},
+    command: commandName,
+    parameters: controlDefinition
+      ? {
+        ...commandParameters,
+        __control: {
+          id: controlDefinition.id,
+          label: controlDefinition.label || controlDefinition.id,
+          valueType: controlDefinition.valueType || 'none',
+          parameterKey: controlDefinition.parameterKey || '',
+        },
+      }
+      : commandParameters,
     requestedBy,
     requestedByRole,
     source,
-    status: device ? 'queued' : 'rejected',
-    result: device
-      ? 'Command recorded. Dispatching through configured connector.'
-      : 'Device not found.',
+    status: device && (deviceControlDefinitions.length === 0 || controlDefinition) ? 'queued' : 'rejected',
+    result: !device
+      ? 'Device not found.'
+      : deviceControlDefinitions.length > 0 && !controlDefinition
+        ? `Control action ${commandName} is not configured for this device.`
+        : 'Command recorded. Dispatching through configured connector.',
     createdAt,
     updatedAt: createdAt,
   };
@@ -4439,6 +4465,13 @@ const validateWorkflowDraft = async (workflow) => {
         }
         if (!config.controlId && !config.command) {
           issues.push(createWorkflowValidationIssue('error', 'device_control.control_missing', 'Device Control action requires a control action ID.', node));
+        } else if (!hasDeviceExpression && staticDevice) {
+          const device = devices.find((item) => item.id === staticDevice || item.config?.externalDeviceId === staticDevice);
+          const definitions = getServerDeviceControlDefinitions(device);
+          const command = config.controlId || config.command;
+          if (definitions.length > 0 && !definitions.some((definition) => definition.id === command)) {
+            issues.push(createWorkflowValidationIssue('error', 'device_control.control_not_found', `Control action ${command} is not configured for the selected device.`, node));
+          }
         }
       }
       if (configType === 'mqtt_publish' && !config.topic) {

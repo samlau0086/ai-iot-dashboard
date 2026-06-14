@@ -165,7 +165,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 真实通知渠道：Bark、Webhook、Slack、Telegram，以及通过 Provider Webhook 接入 Email、SMS、WhatsApp
 - [x] Workflow Run 历史
 - [x] 自动报告：Workflow Report 节点可生成后端持久化 CSV 报告，Reports 页面可查看和下载
-- [ ] 设备控制动作接入
+- [x] 设备控制动作接入：Workflow Device Control 节点支持静态设备、手动设备 ID、表达式设备 ID、控制项参数 UI、Dry Run、Validate 和后端真实下发
 
 ### V6: AI Copilot
 
@@ -397,6 +397,8 @@ Workflows 页面支持 **Template Library** 与 **Import JSON / Export JSON**。
 工作流表达式支持函数 helper，可在通知消息、Webhook body、设备控制表达式、IF / CASE 条件、Set 节点等配置字段中使用。当前支持 `now()`、`formatDate(value, format)`、`toNumber(value)`、`round(value, decimals)`、`contains(value, keyword)`、`default(value, fallback)`、`upper(value)`、`lower(value)`；变量选择器中提供 **Function Helpers** 插入入口，预览区会显示解析结果、未解析变量和函数参数错误。
 
 工作流支持 **Run Workflow** 子工作流调用节点。父流程可以选择一个已发布工作流，或用表达式指定 `workflowId`，并通过 Payload JSON / Payload Expression 传入参数；子流程输出会写入父节点 output，可继续通过 `$.run_workflow.output.status`、`$.run_workflow.output.result`、`$.run_workflow.output.steps` 等引用。系统会记录父流程与子流程各自的 Logs，并内置递归检测与最大调用深度，避免工作流互相调用造成死循环。Dry Run 会以无外部副作用模式执行子流程。
+
+工作流支持 **Device Control** 控制节点。静态模式下可以选择设备或手动输入 Device ID / External Device ID，并根据该设备控制项自动显示 Toggle、Select、Number、Slider、Parameter Group 等参数 UI；表达式模式下可用 `$.input.deviceId`、`$.access_trigger.output.params.deviceId` 等变量指定设备，并用参数 JSON 指定控制参数。真实运行时后端会写入 Control Center 命令日志，并通过 MQTT Command Topic、HTTP Command Endpoint 或设备 pending queue 下发；Dry Run 只输出将要执行的命令，不会下发设备。
 
 `Schedule` Trigger 支持可视化 Cron 编辑。可以选择 Every N minutes / hours、Daily、Weekly、Monthly 或 Custom cron，编辑器会自动生成 `crontab` 并显示未来 5 次运行时间；Validate 会检查 cron 字段是否合法，并在计划过于频繁时给出 warning。
 
