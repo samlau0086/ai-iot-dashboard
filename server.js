@@ -33,6 +33,10 @@ const maxWorkflowRuns = Number(process.env.WORKFLOW_RUN_BUFFER_SIZE || 500);
 const maxDeviceControlCommands = Number(process.env.DEVICE_CONTROL_BUFFER_SIZE || 500);
 const maxAccessEvents = Number(process.env.ACCESS_EVENT_BUFFER_SIZE || 500);
 const maxSystemNotifications = Number(process.env.SYSTEM_NOTIFICATION_BUFFER_SIZE || 500);
+const authFailedLoginWindowMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_WINDOW_MS || 10 * 60 * 1000));
+const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LOGIN_MAX_ATTEMPTS || 5));
+const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
+const authLoginFailures = new Map();
 const splitTopics = (value) => Array.isArray(value)
   ? value.map((topic) => String(topic).trim()).filter(Boolean)
   : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
@@ -95,6 +99,45 @@ const sanitizeUserForStorage = (user) => {
 };
 
 const sanitizeUsersForStorage = (users = []) => users.map(sanitizeUserForStorage);
+
+const getRequestIp = (req) => {
+  const forwardedFor = String(req.get('x-forwarded-for') || '').split(',')[0].trim();
+  return forwardedFor || req.ip || req.socket?.remoteAddress || 'unknown';
+};
+
+const getLoginRateLimitKey = (req, email) => `${getRequestIp(req)}:${String(email || '').toLowerCase()}`;
+
+const getLoginRateLimitState = (req, email) => {
+  const key = getLoginRateLimitKey(req, email);
+  const now = Date.now();
+  const current = authLoginFailures.get(key);
+  if (!current) return {key, limited: false, retryAfterSeconds: 0};
+  if (current.lockedUntil && current.lockedUntil > now) {
+    return {key, limited: true, retryAfterSeconds: Math.ceil((current.lockedUntil - now) / 1000)};
+  }
+  if (current.firstFailedAt && now - current.firstFailedAt > authFailedLoginWindowMs) {
+    authLoginFailures.delete(key);
+    return {key, limited: false, retryAfterSeconds: 0};
+  }
+  return {key, limited: false, retryAfterSeconds: 0};
+};
+
+const recordLoginFailure = (key) => {
+  const now = Date.now();
+  const current = authLoginFailures.get(key);
+  const next = current && now - current.firstFailedAt <= authFailedLoginWindowMs
+    ? {...current, count: current.count + 1, lastFailedAt: now}
+    : {count: 1, firstFailedAt: now, lastFailedAt: now, lockedUntil: null};
+  if (next.count >= authFailedLoginMaxAttempts) {
+    next.lockedUntil = now + authFailedLoginLockMs;
+  }
+  authLoginFailures.set(key, next);
+  return next;
+};
+
+const clearLoginFailures = (key) => {
+  authLoginFailures.delete(key);
+};
 
 const isHex = (value, length = null) => {
   const text = String(value || '').trim();
@@ -4190,10 +4233,28 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
+    const rateLimit = getLoginRateLimitState(req, email);
+    if (rateLimit.limited) {
+      res.setHeader('Retry-After', String(rateLimit.retryAfterSeconds));
+      res.status(429).json({
+        ok: false,
+        message: `Too many failed login attempts. Try again in ${rateLimit.retryAfterSeconds} seconds.`,
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      });
+      return;
+    }
+
     const state = await getDashboardState();
     const users = mergeDefaultAuthUsers(Array.isArray(state.users) ? state.users : []);
     const user = users.find((item) => String(item.email || '').toLowerCase() === email);
     if (!user || !verifyPassword(password, user)) {
+      const failure = recordLoginFailure(rateLimit.key);
+      if (failure.lockedUntil && failure.lockedUntil > Date.now()) {
+        const retryAfterSeconds = Math.ceil((failure.lockedUntil - Date.now()) / 1000);
+        res.setHeader('Retry-After', String(retryAfterSeconds));
+        res.status(429).json({ok: false, message: `Too many failed login attempts. Try again in ${retryAfterSeconds} seconds.`, retryAfterSeconds});
+        return;
+      }
       res.status(401).json({ok: false, message: 'Invalid email or password.'});
       return;
     }
@@ -4207,6 +4268,7 @@ app.post('/api/auth/login', async (req, res) => {
       await setAppState('dashboard_state', {...state, users: nextUsers});
     }
 
+    clearLoginFailures(rateLimit.key);
     res.status(200).json({
       ok: true,
       message: 'Signed in.',

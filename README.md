@@ -204,7 +204,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 更细粒度 RBAC：Ingest Token Scope、Token Site / Device 范围、Data Source Channel Site / Device 范围，以及 Token / Data Source / Access Control / Device Command 等敏感 API 的轻量 actor guard
 - [x] 服务端 Session Token 基础鉴权：登录由后端签发 HMAC session token，敏感 API 校验 token 后再解析用户角色
 - [x] 密码哈希基础实现：新注册和后端状态保存会把明文密码转换为 `passwordHash`，旧明文账号登录后兼容迁移
-- [ ] 更完整的安全增强：刷新 Token、操作审计、登录失败限流和服务端 Cookie Session
+- [x] 登录失败限流：按 IP + Email 限制失败登录次数，默认 10 分钟内 5 次失败后锁定 15 分钟
+- [ ] 更完整的安全增强：刷新 Token、操作审计和服务端 Cookie Session
 
 ### 技术演进方向
 
@@ -497,6 +498,10 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 | `VPS_SSH_KEY` | SSH 私钥。 |
 | `VPS_DEPLOY_PATH` | PM2 应用部署目录，例如 `/var/www/ai-iot-dashboard`。 |
 | `DATABASE_URL` | PostgreSQL / pgvector 连接字符串，例如 `postgresql://user:password@host:5432/ai_iot_dashboard`。 |
+| `AUTH_SESSION_SECRET` | 后端 Session Token 签名密钥，生产环境必须设置为高强度随机字符串。 |
+| `AUTH_FAILED_LOGIN_MAX_ATTEMPTS` | 登录失败限流阈值，默认 `5`。 |
+| `AUTH_FAILED_LOGIN_WINDOW_MS` | 登录失败统计窗口，默认 `600000`。 |
+| `AUTH_FAILED_LOGIN_LOCK_MS` | 达到阈值后的锁定时间，默认 `900000`。 |
 
 `VPS_DEPLOY_PATH` 指向的目录会由工作流自动执行 `mkdir -p` 创建，但 `VPS_USER` 必须有创建和写入权限。
 
