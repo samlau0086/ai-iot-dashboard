@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Building2,
   CheckCircle2,
@@ -28,6 +28,7 @@ import {
   type WhiteLabelConfig,
 } from '../lib/store';
 import { APP_PROFILE_OPTIONS, FEATURE_ACCESS_OPTIONS, getUserFeatureAccess, type AppProfile, type FeatureNavKey } from '../lib/featureAccess';
+import { apiActorHeaders } from '../lib/apiAuth';
 import { cn } from '../lib/utils';
 import { confirmDelete } from '../lib/confirm';
 import { notify, notifySuccess } from '../lib/toast';
@@ -68,8 +69,24 @@ const createSecretToken = () => {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
+type BillingWebhookLog = {
+  id: string;
+  result: 'success' | 'failed' | string;
+  httpStatus?: number;
+  message?: string;
+  invoiceNo?: string;
+  status?: string;
+  externalStatus?: string;
+  externalPaymentId?: string;
+  provider?: string;
+  payloadSummary?: string;
+  ip?: string;
+  createdAt?: string;
+};
+
 export function PartnerPortal() {
   const {
+    currentUser,
     partnerCustomers,
     partnerProjects,
     partnerBillingPlans,
@@ -161,6 +178,8 @@ export function PartnerPortal() {
   });
   const [brandDraft, setBrandDraft] = useState(whiteLabelConfig);
   const [billingIntegrationDraft, setBillingIntegrationDraft] = useState(partnerBillingIntegration);
+  const [billingWebhookLogs, setBillingWebhookLogs] = useState<BillingWebhookLog[]>([]);
+  const [billingWebhookLogsLoading, setBillingWebhookLogsLoading] = useState(false);
 
   useEffect(() => {
     setBrandDraft(whiteLabelConfig);
@@ -169,6 +188,28 @@ export function PartnerPortal() {
   useEffect(() => {
     setBillingIntegrationDraft(partnerBillingIntegration);
   }, [partnerBillingIntegration]);
+
+  const loadBillingWebhookLogs = useCallback(async () => {
+    setBillingWebhookLogsLoading(true);
+    try {
+      const response = await fetch('/api/partner-billing/webhook-logs?limit=50', {
+        headers: apiActorHeaders(currentUser),
+      });
+      const payload = await response.json().catch(() => ({ logs: [] }));
+      if (!response.ok) throw new Error(payload.error || payload.message || 'Failed to load billing webhook logs.');
+      setBillingWebhookLogs(Array.isArray(payload.logs) ? payload.logs : []);
+    } catch (error) {
+      notify({ level: 'error', title: 'Billing webhook logs', message: error instanceof Error ? error.message : 'Failed to load billing webhook logs.' });
+    } finally {
+      setBillingWebhookLogsLoading(false);
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (activeTab === 'billing') {
+      loadBillingWebhookLogs();
+    }
+  }, [activeTab, loadBillingWebhookLogs]);
 
   useEffect(() => {
     const customer = partnerCustomers.find((item) => item.id === accountDraft.customerId) || partnerCustomers[0];
@@ -473,6 +514,22 @@ export function PartnerPortal() {
       notifySuccess('Billing webhook URL copied.');
     } catch {
       notify({ level: 'info', title: 'Billing webhook URL', message: webhookUrl });
+    }
+  };
+
+  const clearBillingWebhookLogs = async () => {
+    if (!(await confirmDelete({ title: 'Clear billing webhook logs', itemName: 'all webhook logs', description: 'This removes the stored Partner Billing webhook processing history.' }))) return;
+    try {
+      const response = await fetch('/api/partner-billing/webhook-logs', {
+        method: 'DELETE',
+        headers: apiActorHeaders(currentUser),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || payload.message || 'Failed to clear billing webhook logs.');
+      setBillingWebhookLogs([]);
+      notifySuccess('Billing webhook logs cleared.');
+    } catch (error) {
+      notify({ level: 'error', title: 'Billing webhook logs', message: error instanceof Error ? error.message : 'Failed to clear billing webhook logs.' });
     }
   };
 
@@ -1072,6 +1129,75 @@ export function PartnerPortal() {
                 {partnerBillingIntegration.lastSyncMessage && (
                   <p className="mt-3 rounded-md bg-slate-100 px-3 py-2 text-xs text-slate-600 dark:bg-slate-950 dark:text-slate-300">{partnerBillingIntegration.lastSyncMessage}</p>
                 )}
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950/40">
+                <div className="flex flex-col gap-3 border-b border-slate-200 p-4 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+                      <ReceiptText className="h-4 w-4 text-orange-500" />
+                      Billing Webhook Logs
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Recent payment or ERP callbacks, including failed token checks, unknown invoices, and successful invoice status updates.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={loadBillingWebhookLogs} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                      <RefreshCw className={cn('h-4 w-4', billingWebhookLogsLoading && 'animate-spin')} />
+                      Refresh
+                    </button>
+                    <button type="button" onClick={clearBillingWebhookLogs} className="inline-flex items-center gap-2 rounded-md border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 dark:border-red-500/30 dark:hover:bg-red-500/10">
+                      <Trash2 className="h-4 w-4" />
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-72 overflow-auto">
+                  {billingWebhookLogs.length === 0 ? (
+                    <div className="p-4 text-sm text-slate-500">No billing webhook logs yet.</div>
+                  ) : (
+                    <table className="min-w-full text-left text-xs">
+                      <thead className="sticky top-0 bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                        <tr>
+                          <th className="px-4 py-3">Time</th>
+                          <th className="px-4 py-3">Result</th>
+                          <th className="px-4 py-3">Invoice</th>
+                          <th className="px-4 py-3">Status</th>
+                          <th className="px-4 py-3">Provider</th>
+                          <th className="px-4 py-3">Message</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {billingWebhookLogs.map((log) => (
+                          <tr key={log.id} className="align-top hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                            <td className="whitespace-nowrap px-4 py-3 text-slate-500">{log.createdAt ? new Date(log.createdAt).toLocaleString() : '-'}</td>
+                            <td className="px-4 py-3">
+                              <span className={cn(
+                                'rounded-full px-2 py-1 text-[10px] font-semibold uppercase',
+                                log.result === 'success'
+                                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                                  : 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-300'
+                              )}>
+                                {log.result || 'unknown'} {log.httpStatus || ''}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 font-mono text-slate-700 dark:text-slate-300">{log.invoiceNo || log.invoiceId || '-'}</td>
+                            <td className="px-4 py-3">
+                              <div className="font-semibold text-slate-800 dark:text-slate-200">{log.status || '-'}</div>
+                              <div className="text-slate-500">{log.externalStatus || ''}</div>
+                            </td>
+                            <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{log.provider || '-'}</td>
+                            <td className="max-w-xl px-4 py-3 text-slate-600 dark:text-slate-300">
+                              <div>{log.message || '-'}</div>
+                              {log.externalPaymentId && <div className="mt-1 font-mono text-[10px] text-slate-500">{log.externalPaymentId}</div>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
 
               <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">

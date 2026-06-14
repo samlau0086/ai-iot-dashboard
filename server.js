@@ -29,6 +29,7 @@ const securityAlertLastSent = new Map();
 const deviceControlCommands = [];
 const accessEvents = [];
 const systemNotifications = [];
+const partnerBillingWebhookLogs = [];
 const auditLogs = [];
 let revokedRefreshTokens = [];
 let authLoginSecurityState = {};
@@ -38,6 +39,7 @@ const maxWorkflowRuns = Number(process.env.WORKFLOW_RUN_BUFFER_SIZE || 500);
 const maxDeviceControlCommands = Number(process.env.DEVICE_CONTROL_BUFFER_SIZE || 500);
 const maxAccessEvents = Number(process.env.ACCESS_EVENT_BUFFER_SIZE || 500);
 const maxSystemNotifications = Number(process.env.SYSTEM_NOTIFICATION_BUFFER_SIZE || 500);
+const maxPartnerBillingWebhookLogs = Number(process.env.PARTNER_BILLING_WEBHOOK_LOG_BUFFER_SIZE || 500);
 const maxAuditLogs = Number(process.env.AUDIT_LOG_BUFFER_SIZE || 1000);
 const aiCopilotProvider = String(process.env.AI_COPILOT_PROVIDER || '').trim().toLowerCase();
 const aiCopilotApiKey = String(process.env.AI_COPILOT_API_KEY || process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || '').trim();
@@ -1304,6 +1306,56 @@ const findDeviceByApiPath = async (requestPath) => {
 };
 
 const getDashboardState = async () => await getAppState('dashboard_state') || {};
+
+const getPartnerBillingWebhookLogs = async () => {
+  if (db) {
+    const saved = await getAppState('partner_billing_webhook_logs');
+    return Array.isArray(saved) ? saved : [];
+  }
+  return partnerBillingWebhookLogs;
+};
+
+const savePartnerBillingWebhookLogs = async (logs = []) => {
+  const nextLogs = logs.slice(0, maxPartnerBillingWebhookLogs);
+  if (db) {
+    await setAppState('partner_billing_webhook_logs', nextLogs);
+  } else {
+    partnerBillingWebhookLogs.splice(0, partnerBillingWebhookLogs.length, ...nextLogs);
+  }
+  return nextLogs;
+};
+
+const summarizeBillingWebhookPayload = (payload = {}) => {
+  try {
+    const text = JSON.stringify(payload);
+    return text.length > 1200 ? `${text.slice(0, 1200)}...` : text;
+  } catch {
+    return '[unserializable payload]';
+  }
+};
+
+const recordPartnerBillingWebhookLog = async (req, details = {}) => {
+  const current = await getPartnerBillingWebhookLogs();
+  const log = {
+    id: createId('billing-webhook-log'),
+    result: details.result || 'received',
+    httpStatus: details.httpStatus || 200,
+    message: details.message || '',
+    invoiceId: details.invoiceId || details.event?.invoiceId || '',
+    invoiceNo: details.invoiceNo || details.event?.invoiceNo || '',
+    status: details.status || details.event?.status || '',
+    externalStatus: details.externalStatus || details.event?.externalStatus || '',
+    externalPaymentId: details.externalPaymentId || details.event?.externalPaymentId || '',
+    provider: details.provider || details.event?.provider || '',
+    event: details.event || null,
+    payloadSummary: details.payload ? summarizeBillingWebhookPayload(details.payload) : '',
+    ip: req ? getRequestIp(req) : null,
+    userAgent: req?.get?.('user-agent') || null,
+    createdAt: new Date().toISOString(),
+  };
+  await savePartnerBillingWebhookLogs([log, ...current]);
+  return log;
+};
 
 const timingSafeEqualText = (first, second) => {
   const firstBuffer = Buffer.from(String(first || ''));
@@ -7704,10 +7756,38 @@ app.get('/api/reports/:reportId.csv', async (req, res) => {
   }
 });
 
+app.get('/api/partner-billing/webhook-logs', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Partner'], 'view partner billing webhook logs'))) return;
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
+    const logs = await getPartnerBillingWebhookLogs();
+    res.status(200).json({logs: logs.slice(0, limit)});
+  } catch (error) {
+    res.status(500).json({logs: [], error: error.message});
+  }
+});
+
+app.delete('/api/partner-billing/webhook-logs', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Partner'], 'clear partner billing webhook logs'))) return;
+    await savePartnerBillingWebhookLogs([]);
+    await writeAuditLog(req, await getApiActor(req), 'partner_billing.webhook_logs.clear', 'partner_billing_webhook_logs', 'all', 'success', {});
+    res.status(200).json({ok: true});
+  } catch (error) {
+    res.status(500).json({ok: false, error: error.message});
+  }
+});
+
 app.post('/api/partner-billing/webhook', async (req, res) => {
   const state = await getDashboardState();
   const tokenCheck = verifyBillingWebhookToken(req, state);
   if (!tokenCheck.ok) {
+    await recordPartnerBillingWebhookLog(req, {
+      result: 'failed',
+      httpStatus: tokenCheck.status,
+      message: tokenCheck.message,
+      payload: req.body || {},
+    });
     await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', '', 'failed', {
       reason: tokenCheck.message,
     });
@@ -7719,6 +7799,13 @@ app.post('/api/partner-billing/webhook', async (req, res) => {
     const payload = req.body || {};
     const event = extractBillingWebhookEvent(payload);
     if (!event.status) {
+      await recordPartnerBillingWebhookLog(req, {
+        result: 'failed',
+        httpStatus: 400,
+        message: 'Unsupported or missing invoice status.',
+        event,
+        payload,
+      });
       await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', event.invoiceNo || event.invoiceId || '', 'failed', {
         reason: 'Unsupported or missing invoice status.',
         event,
@@ -7742,6 +7829,13 @@ app.post('/api/partner-billing/webhook', async (req, res) => {
         lastSyncMessage: `Billing webhook invoice not found: ${event.invoiceNo || event.invoiceId || 'unknown'}.`,
       };
       await setAppState('dashboard_state', {...state, partnerBillingIntegration: integration});
+      await recordPartnerBillingWebhookLog(req, {
+        result: 'failed',
+        httpStatus: 404,
+        message: 'Invoice not found.',
+        event,
+        payload,
+      });
       await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', event.invoiceNo || event.invoiceId || '', 'failed', {
         reason: 'Invoice not found.',
         event,
@@ -7777,6 +7871,19 @@ app.post('/api/partner-billing/webhook', async (req, res) => {
       partnerBillingIntegration: integration,
     };
     await setAppState('dashboard_state', nextState);
+    await recordPartnerBillingWebhookLog(req, {
+      result: 'success',
+      httpStatus: 200,
+      message: `Invoice ${nextInvoice.invoiceNo} updated to ${nextInvoice.status}.`,
+      invoiceId: nextInvoice.id,
+      invoiceNo: nextInvoice.invoiceNo,
+      status: nextInvoice.status,
+      externalStatus: nextInvoice.externalStatus,
+      externalPaymentId: nextInvoice.externalPaymentId,
+      provider: nextInvoice.externalProvider,
+      event,
+      payload,
+    });
     await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', nextInvoice.id, 'success', {
       invoiceNo: nextInvoice.invoiceNo,
       status: nextInvoice.status,
@@ -7795,6 +7902,12 @@ app.post('/api/partner-billing/webhook', async (req, res) => {
     broadcastRealtimeEvent('partner_billing_invoice', {invoice: nextInvoice, notification});
     res.status(200).json({ok: true, invoice: nextInvoice, event});
   } catch (error) {
+    await recordPartnerBillingWebhookLog(req, {
+      result: 'failed',
+      httpStatus: 500,
+      message: error.message,
+      payload: req.body || {},
+    });
     await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', '', 'failed', {
       error: error.message,
     });
