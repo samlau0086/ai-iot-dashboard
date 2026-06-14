@@ -143,6 +143,17 @@ const DEFAULT_PARTNER_INVOICES: PartnerInvoice[] = [
   },
 ];
 
+const DEFAULT_PARTNER_BILLING_INTEGRATION: PartnerBillingIntegration = {
+  provider: 'manual',
+  enabled: false,
+  autoSync: false,
+  apiBaseUrl: '',
+  paymentLinkTemplate: '',
+  erpCustomerField: 'tenantId',
+  defaultTaxRate: 0,
+  lastSyncStatus: 'idle',
+};
+
 export interface SiteTenant {
   id: string;
   name: string;
@@ -228,6 +239,20 @@ export interface PartnerInvoice {
   notes?: string;
   lineItems: PartnerInvoiceLineItem[];
   createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PartnerBillingIntegration {
+  provider: 'manual' | 'stripe' | 'paddle' | 'xero' | 'quickbooks' | 'kingdee' | 'custom';
+  enabled: boolean;
+  autoSync: boolean;
+  apiBaseUrl?: string;
+  paymentLinkTemplate?: string;
+  erpCustomerField?: string;
+  defaultTaxRate?: number;
+  lastSyncStatus?: 'idle' | 'success' | 'failed';
+  lastSyncAt?: string;
+  lastSyncMessage?: string;
   updatedAt?: string;
 }
 
@@ -1139,6 +1164,7 @@ interface AppState {
   partnerProjects: PartnerProject[];
   partnerBillingPlans: PartnerBillingPlan[];
   partnerInvoices: PartnerInvoice[];
+  partnerBillingIntegration: PartnerBillingIntegration;
   whiteLabelConfig: WhiteLabelConfig;
   addPartnerCustomer: (customer: PartnerCustomer) => void;
   updatePartnerCustomer: (id: string, customer: Partial<PartnerCustomer>) => void;
@@ -1152,6 +1178,7 @@ interface AppState {
   addPartnerInvoice: (invoice: PartnerInvoice) => void;
   updatePartnerInvoice: (id: string, invoice: Partial<PartnerInvoice>) => void;
   deletePartnerInvoice: (id: string) => void;
+  updatePartnerBillingIntegration: (config: Partial<PartnerBillingIntegration>) => void;
   updateWhiteLabelConfig: (config: Partial<WhiteLabelConfig>) => void;
   // Access Control
   accesses: AccessDefinition[];
@@ -1232,6 +1259,7 @@ type BackendState = Partial<Pick<AppState,
   | 'partnerProjects'
   | 'partnerBillingPlans'
   | 'partnerInvoices'
+  | 'partnerBillingIntegration'
   | 'whiteLabelConfig'
   | 'users'
   | 'accesses'
@@ -1322,6 +1350,7 @@ const pickBackendState = (state: AppState): BackendState => ({
   partnerProjects: state.partnerProjects,
   partnerBillingPlans: state.partnerBillingPlans,
   partnerInvoices: state.partnerInvoices,
+  partnerBillingIntegration: state.partnerBillingIntegration,
   whiteLabelConfig: state.whiteLabelConfig,
   users: state.users,
   accesses: state.accesses,
@@ -1421,6 +1450,7 @@ export const useAppStore = create<AppState>()(
             partnerProjects: mergeDefaultPartnerProjects(state?.partnerProjects),
             partnerBillingPlans: mergeDefaultPartnerBillingPlans(state?.partnerBillingPlans),
             partnerInvoices: mergeDefaultPartnerInvoices(state?.partnerInvoices),
+            partnerBillingIntegration: { ...DEFAULT_PARTNER_BILLING_INTEGRATION, ...(state?.partnerBillingIntegration || {}) },
             whiteLabelConfig: { ...DEFAULT_WHITE_LABEL_CONFIG, ...(state?.whiteLabelConfig || {}) },
             securitySettings: { ...DEFAULT_SECURITY_SETTINGS, ...(state?.securitySettings || {}) },
             charts: mergeDefaultCharts(state?.charts),
@@ -1781,6 +1811,7 @@ export const useAppStore = create<AppState>()(
       partnerProjects: DEFAULT_PARTNER_PROJECTS,
       partnerBillingPlans: DEFAULT_PARTNER_BILLING_PLANS,
       partnerInvoices: DEFAULT_PARTNER_INVOICES,
+      partnerBillingIntegration: DEFAULT_PARTNER_BILLING_INTEGRATION,
       whiteLabelConfig: DEFAULT_WHITE_LABEL_CONFIG,
       addPartnerCustomer: (customer) => set((state) => ({
         partnerCustomers: [customer, ...state.partnerCustomers],
@@ -1834,6 +1865,13 @@ export const useAppStore = create<AppState>()(
       })),
       deletePartnerInvoice: (id) => set((state) => ({
         partnerInvoices: state.partnerInvoices.filter((item) => item.id !== id),
+      })),
+      updatePartnerBillingIntegration: (config) => set((state) => ({
+        partnerBillingIntegration: {
+          ...state.partnerBillingIntegration,
+          ...config,
+          updatedAt: new Date().toISOString(),
+        },
       })),
       updateWhiteLabelConfig: (config) => set((state) => ({
         whiteLabelConfig: { ...state.whiteLabelConfig, ...config, updatedAt: new Date().toISOString() },

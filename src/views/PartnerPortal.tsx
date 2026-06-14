@@ -4,11 +4,14 @@ import {
   CheckCircle2,
   Copy,
   CreditCard,
+  Download,
   Globe2,
   Handshake,
+  Link2,
   Palette,
   Plus,
   ReceiptText,
+  RefreshCw,
   ShieldCheck,
   Trash2,
   UserPlus,
@@ -16,6 +19,7 @@ import {
 } from 'lucide-react';
 import {
   useAppStore,
+  type PartnerBillingIntegration,
   type PartnerBillingPlan,
   type PartnerCustomer,
   type PartnerInvoice,
@@ -35,6 +39,7 @@ const PROJECT_STATUSES: PartnerProject['status'][] = ['draft', 'quoted', 'won', 
 const BILLING_CYCLES: PartnerBillingPlan['billingCycle'][] = ['monthly', 'quarterly', 'yearly', 'one_time'];
 const BILLING_PLAN_STATUSES: PartnerBillingPlan['status'][] = ['active', 'draft', 'archived'];
 const INVOICE_STATUSES: PartnerInvoice['status'][] = ['draft', 'open', 'paid', 'overdue', 'void'];
+const BILLING_INTEGRATION_PROVIDERS: PartnerBillingIntegration['provider'][] = ['manual', 'stripe', 'paddle', 'xero', 'quickbooks', 'kingdee', 'custom'];
 const DOMAIN_STATUSES: WhiteLabelConfig['domainStatus'][] = ['not_configured', 'pending_dns', 'active', 'error'];
 const CUSTOMER_ACCOUNT_ROLES = ['Customer', 'Operator', 'Viewer'] as const;
 
@@ -52,12 +57,18 @@ const money = (value?: number, currency = 'USD') => {
   }
 };
 
+const csvCell = (value: unknown) => {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
 export function PartnerPortal() {
   const {
     partnerCustomers,
     partnerProjects,
     partnerBillingPlans,
     partnerInvoices,
+    partnerBillingIntegration,
     whiteLabelConfig,
     sites,
     users,
@@ -74,6 +85,7 @@ export function PartnerPortal() {
     addPartnerInvoice,
     updatePartnerInvoice,
     deletePartnerInvoice,
+    updatePartnerBillingIntegration,
     updateWhiteLabelConfig,
     addUser,
     updateUser,
@@ -128,7 +140,7 @@ export function PartnerPortal() {
     description: '',
     quantity: '1',
     unitPrice: '',
-    tax: '0',
+    tax: '',
     notes: '',
   });
   const [accountDraft, setAccountDraft] = useState({
@@ -142,10 +154,15 @@ export function PartnerPortal() {
     status: 'approved' as User['status'],
   });
   const [brandDraft, setBrandDraft] = useState(whiteLabelConfig);
+  const [billingIntegrationDraft, setBillingIntegrationDraft] = useState(partnerBillingIntegration);
 
   useEffect(() => {
     setBrandDraft(whiteLabelConfig);
   }, [whiteLabelConfig]);
+
+  useEffect(() => {
+    setBillingIntegrationDraft(partnerBillingIntegration);
+  }, [partnerBillingIntegration]);
 
   useEffect(() => {
     const customer = partnerCustomers.find((item) => item.id === accountDraft.customerId) || partnerCustomers[0];
@@ -352,8 +369,10 @@ export function PartnerPortal() {
     if (!invoiceDraft.customerId || !description) return;
     const quantity = Number(invoiceDraft.quantity) || 1;
     const unitPrice = Number(invoiceDraft.unitPrice) || selectedPlan?.basePrice || 0;
-    const tax = Number(invoiceDraft.tax) || 0;
     const subtotal = quantity * unitPrice;
+    const tax = invoiceDraft.tax.trim()
+      ? Number(invoiceDraft.tax) || 0
+      : subtotal * ((Number(billingIntegrationDraft.defaultTaxRate) || 0) / 100);
     const total = subtotal + tax;
     const invoiceNo = invoiceDraft.invoiceNo.trim() || `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
     addPartnerInvoice({
@@ -388,10 +407,111 @@ export function PartnerPortal() {
       description: '',
       quantity: '1',
       unitPrice: '',
-      tax: '0',
+      tax: '',
       notes: '',
     }));
     notifySuccess('Invoice created successfully.');
+  };
+
+  const buildBillingSyncPayload = () => ({
+    provider: billingIntegrationDraft.provider,
+    exportedAt: new Date().toISOString(),
+    customers: partnerCustomers.map((customer) => ({
+      id: customer.id,
+      name: customer.name,
+      tenantId: customer.tenantId,
+      status: customer.status,
+      plan: customer.plan,
+      siteIds: customer.siteIds,
+    })),
+    plans: partnerBillingPlans,
+    invoices: partnerInvoices.map((invoice) => ({
+      ...invoice,
+      customer: customerById.get(invoice.customerId)?.name || '',
+      plan: partnerBillingPlans.find((plan) => plan.id === invoice.planId)?.name || '',
+    })),
+  });
+
+  const saveBillingIntegration = () => {
+    updatePartnerBillingIntegration({
+      ...billingIntegrationDraft,
+      defaultTaxRate: Number(billingIntegrationDraft.defaultTaxRate) || 0,
+      lastSyncStatus: billingIntegrationDraft.lastSyncStatus || 'idle',
+    });
+    notifySuccess('Billing integration saved successfully.');
+  };
+
+  const copyBillingPayload = async () => {
+    const payload = JSON.stringify(buildBillingSyncPayload(), null, 2);
+    try {
+      await navigator.clipboard.writeText(payload);
+      notifySuccess('Billing sync payload copied.');
+    } catch {
+      notify({ level: 'info', title: 'Billing payload', message: payload.slice(0, 240) });
+    }
+  };
+
+  const runBillingSyncCheck = () => {
+    const now = new Date().toISOString();
+    const enabled = Boolean(billingIntegrationDraft.enabled);
+    const hasEndpoint = billingIntegrationDraft.provider === 'manual' || Boolean(billingIntegrationDraft.apiBaseUrl?.trim());
+    const status: PartnerBillingIntegration['lastSyncStatus'] = enabled && hasEndpoint ? 'success' : 'failed';
+    const message = status === 'success'
+      ? `${billingIntegrationDraft.provider} connector configuration is ready.`
+      : 'Enable the connector and set an API Base URL, or keep provider as manual.';
+    const nextConfig = {
+      ...billingIntegrationDraft,
+      lastSyncStatus: status,
+      lastSyncAt: now,
+      lastSyncMessage: message,
+    };
+    setBillingIntegrationDraft(nextConfig);
+    updatePartnerBillingIntegration(nextConfig);
+    if (status === 'success') {
+      notifySuccess(message, 'Billing sync check');
+    } else {
+      notify({ level: 'warning', title: 'Billing sync check', message });
+    }
+  };
+
+  const exportPartnerInvoicesCsv = () => {
+    const rows = [
+      ['Invoice No', 'Customer', 'Plan', 'Status', 'Issue Date', 'Due Date', 'Paid At', 'Currency', 'Subtotal', 'Tax', 'Total', 'Notes'],
+      ...partnerInvoices.map((invoice) => [
+        invoice.invoiceNo,
+        customerById.get(invoice.customerId)?.name || '',
+        partnerBillingPlans.find((plan) => plan.id === invoice.planId)?.name || '',
+        invoice.status,
+        invoice.issueDate,
+        invoice.dueDate || '',
+        invoice.paidAt || '',
+        invoice.currency,
+        invoice.subtotal,
+        invoice.tax || 0,
+        invoice.total,
+        invoice.notes || '',
+      ]),
+    ];
+    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `partner-invoices-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    notifySuccess('Partner invoices exported.');
+  };
+
+  const getInvoicePaymentLink = (invoice: PartnerInvoice) => {
+    const template = billingIntegrationDraft.paymentLinkTemplate?.trim();
+    if (!template) return '';
+    return template
+      .replace(/\{invoiceNo\}/g, encodeURIComponent(invoice.invoiceNo))
+      .replace(/\{invoiceId\}/g, encodeURIComponent(invoice.id))
+      .replace(/\{customerId\}/g, encodeURIComponent(invoice.customerId))
+      .replace(/\{amount\}/g, encodeURIComponent(String(invoice.total)))
+      .replace(/\{currency\}/g, encodeURIComponent(invoice.currency));
   };
 
   const saveBranding = () => {
@@ -840,6 +960,82 @@ export function PartnerPortal() {
                 ))}
               </div>
 
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+                      <Link2 className="h-4 w-4 text-orange-500" />
+                      Payment / ERP Integration
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Configure a connector profile for payment links, invoice exports, or ERP synchronization. Actual provider webhooks can be attached behind this payload later.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={exportPartnerInvoicesCsv} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                      <Download className="h-4 w-4" />
+                      Export Invoices CSV
+                    </button>
+                    <button type="button" onClick={copyBillingPayload} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                      <Copy className="h-4 w-4" />
+                      Copy Sync Payload
+                    </button>
+                    <button type="button" onClick={runBillingSyncCheck} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                      <RefreshCw className="h-4 w-4" />
+                      Test Sync
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Provider
+                    <select value={billingIntegrationDraft.provider} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, provider: event.target.value as PartnerBillingIntegration['provider'] }))} className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm font-normal normal-case text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">
+                      {BILLING_INTEGRATION_PROVIDERS.map((provider) => <option key={provider} value={provider}>{provider}</option>)}
+                    </select>
+                  </label>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    API Base URL
+                    <input value={billingIntegrationDraft.apiBaseUrl || ''} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="https://api.provider.com" className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm font-normal normal-case text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                  </label>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    ERP Customer Field
+                    <input value={billingIntegrationDraft.erpCustomerField || ''} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, erpCustomerField: event.target.value }))} placeholder="tenantId" className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm font-normal normal-case text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                  </label>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Default Tax Rate %
+                    <input value={billingIntegrationDraft.defaultTaxRate || 0} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, defaultTaxRate: Number(event.target.value) || 0 }))} className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm font-normal normal-case text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                  </label>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 md:col-span-2">
+                    Payment Link Template
+                    <input value={billingIntegrationDraft.paymentLinkTemplate || ''} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, paymentLinkTemplate: event.target.value }))} placeholder="https://pay.example.com/{invoiceNo}?amount={amount}&currency={currency}" className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm font-normal normal-case text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                  </label>
+                  <div className="flex flex-wrap items-end gap-4">
+                    <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      <input type="checkbox" checked={billingIntegrationDraft.enabled} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500" />
+                      Enabled
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      <input type="checkbox" checked={billingIntegrationDraft.autoSync} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, autoSync: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500" />
+                      Auto Sync
+                    </label>
+                  </div>
+                  <div className="flex items-end gap-3">
+                    <button type="button" onClick={saveBillingIntegration} className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Save Integration
+                    </button>
+                    <div className="text-xs text-slate-500">
+                      <p>Status: <span className="font-semibold text-slate-700 dark:text-slate-300">{partnerBillingIntegration.lastSyncStatus || 'idle'}</span></p>
+                      <p>{partnerBillingIntegration.lastSyncAt ? new Date(partnerBillingIntegration.lastSyncAt).toLocaleString() : 'Not synced yet'}</p>
+                    </div>
+                  </div>
+                </div>
+                {partnerBillingIntegration.lastSyncMessage && (
+                  <p className="mt-3 rounded-md bg-slate-100 px-3 py-2 text-xs text-slate-600 dark:bg-slate-950 dark:text-slate-300">{partnerBillingIntegration.lastSyncMessage}</p>
+                )}
+              </div>
+
               <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
                 <section className="space-y-4">
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
@@ -942,7 +1138,7 @@ export function PartnerPortal() {
                       <input value={invoiceDraft.description} onChange={(event) => setInvoiceDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Line item description" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
                       <input value={invoiceDraft.quantity} onChange={(event) => setInvoiceDraft((current) => ({ ...current, quantity: event.target.value }))} placeholder="Quantity" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
                       <input value={invoiceDraft.unitPrice} onChange={(event) => setInvoiceDraft((current) => ({ ...current, unitPrice: event.target.value }))} placeholder="Unit price" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
-                      <input value={invoiceDraft.tax} onChange={(event) => setInvoiceDraft((current) => ({ ...current, tax: event.target.value }))} placeholder="Tax" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
+                      <input value={invoiceDraft.tax} onChange={(event) => setInvoiceDraft((current) => ({ ...current, tax: event.target.value }))} placeholder="Tax amount, blank uses default" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
                       <input value={invoiceDraft.currency} onChange={(event) => setInvoiceDraft((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} placeholder="Currency" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
                       <input value={invoiceDraft.notes} onChange={(event) => setInvoiceDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Notes" className="rounded-md border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:ring-slate-700" />
                       <button type="button" onClick={handleAddInvoice} className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500 md:col-span-3">
@@ -987,6 +1183,18 @@ export function PartnerPortal() {
                             <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{invoice.dueDate || '-'}</td>
                             <td className="px-4 py-3 text-right font-semibold text-slate-900 dark:text-white">{money(invoice.total, invoice.currency)}</td>
                             <td className="px-4 py-3 text-right">
+                              <button type="button" disabled={!getInvoicePaymentLink(invoice)} onClick={async () => {
+                                const paymentLink = getInvoicePaymentLink(invoice);
+                                if (!paymentLink) return;
+                                try {
+                                  await navigator.clipboard.writeText(paymentLink);
+                                  notifySuccess('Payment link copied.');
+                                } catch {
+                                  notify({ level: 'info', title: 'Payment link', message: paymentLink });
+                                }
+                              }} className="mr-1 rounded p-2 text-slate-400 hover:bg-slate-100 hover:text-orange-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-slate-800">
+                                <Link2 className="h-4 w-4" />
+                              </button>
                               <button type="button" onClick={async () => {
                                 if (await confirmDelete({ title: 'Delete invoice', itemName: invoice.invoiceNo, description: 'This invoice record will be permanently removed.' })) deletePartnerInvoice(invoice.id);
                               }} className="rounded p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
