@@ -12,6 +12,7 @@ export interface User {
   name: string;
   email: string;
   password?: string;
+  passwordHash?: string;
   role: string;
   appProfile?: AppProfile;
   featureAccess?: FeatureAccessMap;

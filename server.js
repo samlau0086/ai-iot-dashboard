@@ -65,6 +65,37 @@ const defaultAuthUsers = [
     status: 'approved',
   },
 ];
+
+const createPasswordHash = (password) => {
+  const salt = crypto.randomBytes(16).toString('base64url');
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('base64url');
+  return `scrypt$${salt}$${hash}`;
+};
+
+const verifyPassword = (password, user) => {
+  const passwordHash = String(user?.passwordHash || '');
+  if (passwordHash.startsWith('scrypt$')) {
+    const [, salt, expectedHash] = passwordHash.split('$');
+    if (!salt || !expectedHash) return false;
+    const actualHash = crypto.scryptSync(String(password), salt, 64).toString('base64url');
+    const expectedBuffer = Buffer.from(expectedHash);
+    const actualBuffer = Buffer.from(actualHash);
+    return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+  }
+  return Boolean(user?.password) && user.password === password;
+};
+
+const sanitizeUserForStorage = (user) => {
+  const nextUser = {...user};
+  if (typeof nextUser.password === 'string' && nextUser.password.length > 0) {
+    nextUser.passwordHash = createPasswordHash(nextUser.password);
+  }
+  delete nextUser.password;
+  return nextUser;
+};
+
+const sanitizeUsersForStorage = (users = []) => users.map(sanitizeUserForStorage);
+
 const isHex = (value, length = null) => {
   const text = String(value || '').trim();
   return /^[0-9a-f]+$/i.test(text) && (length === null || text.length === length);
@@ -4137,7 +4168,7 @@ app.post('/api/auth/register', async (req, res) => {
       id: createId('user'),
       name,
       email,
-      password,
+      passwordHash: createPasswordHash(password),
       role: 'Viewer',
       appProfile: payload.appProfile || 'simple',
       siteId: String(payload.siteId || 'factory-a').trim() || 'factory-a',
@@ -4146,7 +4177,7 @@ app.post('/api/auth/register', async (req, res) => {
     };
     const nextState = {
       ...state,
-      users: [...(Array.isArray(state.users) ? state.users : []), pendingUser],
+      users: [...sanitizeUsersForStorage(Array.isArray(state.users) ? state.users : []), pendingUser],
     };
     await setAppState('dashboard_state', nextState);
     res.status(201).json({ok: true, message: 'Registration submitted. Please wait for administrator approval.', user: publicAuthUser(pendingUser)});
@@ -4159,15 +4190,21 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
-    const users = await getAuthUsers();
+    const state = await getDashboardState();
+    const users = mergeDefaultAuthUsers(Array.isArray(state.users) ? state.users : []);
     const user = users.find((item) => String(item.email || '').toLowerCase() === email);
-    if (!user || user.password !== password) {
+    if (!user || !verifyPassword(password, user)) {
       res.status(401).json({ok: false, message: 'Invalid email or password.'});
       return;
     }
     if (user.status !== 'approved') {
       res.status(403).json({ok: false, message: 'Your account is waiting for approval.'});
       return;
+    }
+
+    if (!user.passwordHash && user.password && Array.isArray(state.users)) {
+      const nextUsers = sanitizeUsersForStorage(state.users);
+      await setAppState('dashboard_state', {...state, users: nextUsers});
     }
 
     res.status(200).json({
@@ -5071,6 +5108,9 @@ app.put('/api/state', async (req, res) => {
     if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'], 'save dashboard state'))) return;
     const incomingState = req.body || {};
     const currentState = await getDashboardState();
+    if (Array.isArray(incomingState.users)) {
+      incomingState.users = sanitizeUsersForStorage(incomingState.users);
+    }
     if (Array.isArray(incomingState.accessCredentials) && Array.isArray(currentState.accessCredentials)) {
       const currentById = new Map(currentState.accessCredentials.map((credential) => [credential.id, credential]));
       incomingState.accessCredentials = incomingState.accessCredentials.map((credential) => {

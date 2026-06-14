@@ -203,7 +203,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 设备数据范围 RBAC：可按用户限制可见 Site IDs / Device IDs，核心页面按权限过滤设备数据
 - [x] 更细粒度 RBAC：Ingest Token Scope、Token Site / Device 范围、Data Source Channel Site / Device 范围，以及 Token / Data Source / Access Control / Device Command 等敏感 API 的轻量 actor guard
 - [x] 服务端 Session Token 基础鉴权：登录由后端签发 HMAC session token，敏感 API 校验 token 后再解析用户角色
-- [ ] 更完整的安全增强：密码哈希、刷新 Token、操作审计、登录失败限流和服务端 Cookie Session
+- [x] 密码哈希基础实现：新注册和后端状态保存会把明文密码转换为 `passwordHash`，旧明文账号登录后兼容迁移
+- [ ] 更完整的安全增强：刷新 Token、操作审计、登录失败限流和服务端 Cookie Session
 
 ### 技术演进方向
 
