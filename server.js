@@ -1850,11 +1850,15 @@ const getDeviceCommandTopic = (device) => {
   return externalId ? `devices/${externalId}/command` : '';
 };
 
+const publicCommandParameters = (parameters = {}) => Object.fromEntries(
+  Object.entries(parameters || {}).filter(([key]) => !String(key).startsWith('__'))
+);
+
 const publicDeviceCommandPayload = (command) => ({
   command_id: command.id,
   device_id: command.deviceId,
   command: command.command,
-  parameters: command.parameters || {},
+  parameters: publicCommandParameters(command.parameters || {}),
   requested_by: command.requestedBy,
   source: command.source,
   timestamp: command.createdAt,
@@ -1876,8 +1880,9 @@ const buildDeviceCommandTemplateContext = (command, device) => ({
     requestedBy: command.requestedBy,
     source: command.source,
     timestamp: command.createdAt,
-    parameters: command.parameters || {},
-    parametersJson: JSON.stringify(command.parameters || {}),
+    parameters: publicCommandParameters(command.parameters || {}),
+    parametersJson: JSON.stringify(publicCommandParameters(command.parameters || {})),
+    rollback: command.parameters?.__rollback || null,
 });
 
 const renderDeviceCommandTemplate = (template, command, device) => {
@@ -5817,6 +5822,36 @@ app.post('/api/device-commands/:commandId/reject', async (req, res) => {
   }
 });
 
+app.post('/api/device-commands/:commandId/rollback', async (req, res) => {
+  try {
+    const actor = await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator'], 'rollback failed device control commands');
+    if (!actor) return;
+
+    const existingCommand = await findDeviceControlCommandById(req.params.commandId);
+    if (!existingCommand) {
+      res.status(404).json({error: 'command not found'});
+      return;
+    }
+    if (existingCommand.status !== 'failed') {
+      res.status(400).json({error: 'only failed commands can be marked rolled back', command: existingCommand});
+      return;
+    }
+
+    const command = await updateDeviceControlCommand(existingCommand.id, {
+      status: 'rolled_back',
+      result: `Rolled back by ${actor.name || actor.email || actor.id}. Local control state was restored from the saved snapshot.`,
+    });
+
+    await writeAuditLog(req, actor, 'device_command.rollback', 'device_command', existingCommand.id, 'success', {
+      deviceId: existingCommand.deviceId,
+      command: existingCommand.command,
+    });
+    res.status(200).json({command});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
 app.post('/api/device-commands', async (req, res) => {
   try {
     const payload = req.body || {};
@@ -5864,10 +5899,15 @@ app.post('/api/device-commands/batch', async (req, res) => {
     const uniqueDeviceIds = Array.from(new Set(deviceIds)).slice(0, 100);
     const commands = [];
     for (const deviceId of uniqueDeviceIds) {
+      const rollback = payload.rollbackByDevice && typeof payload.rollbackByDevice === 'object'
+        ? payload.rollbackByDevice[deviceId]
+        : null;
       const command = await createDeviceControlCommand({
         deviceId,
         command: commandName,
-        parameters: payload.parameters || {},
+        parameters: rollback
+          ? {...(payload.parameters || {}), __rollback: rollback}
+          : payload.parameters || {},
         requestedBy: actor.name || payload.requestedBy || 'Unknown user',
         requestedByRole: actor.role,
         source: 'control-center-batch',

@@ -18,7 +18,7 @@ type ControlCommand = {
   requestedBy: string;
   requestedByRole: string;
   source: string;
-  status: 'queued' | 'sent' | 'success' | 'failed' | 'rejected' | 'pending_approval';
+  status: 'queued' | 'sent' | 'success' | 'failed' | 'rejected' | 'pending_approval' | 'rolled_back';
   result?: string;
   createdAt: string;
   updatedAt: string;
@@ -128,6 +128,10 @@ export function ControlCenter() {
     }
     if (!definition) return;
     const parameters = buildControlParameters(definition, nextControlValues, parameterName);
+    const rollbackSnapshot = {
+      previousControlState: selectedDevice.config?.controlState || {},
+      attemptedPatch: buildControlStatePatch(definition, nextControlValues, parameters),
+    };
 
     setIsSubmitting(true);
     setMessage('');
@@ -139,7 +143,7 @@ export function ControlCenter() {
         body: JSON.stringify({
           deviceId: selectedDevice.id,
           command: selectedCommand,
-          parameters,
+          parameters: { ...parameters, __rollback: rollbackSnapshot },
           requestedBy: currentUser?.name || currentUser?.email || 'Unknown user',
           requestedByRole: currentUser?.role || 'Viewer',
         }),
@@ -177,6 +181,13 @@ export function ControlCenter() {
     if (!definition) return;
     const targetIds = Array.from(new Set([selectedDevice.id, ...batchDeviceIds]));
     const parameters = buildControlParameters(definition, controlValues, parameterName);
+    const rollbackByDevice = Object.fromEntries(targetIds.map((deviceId) => {
+      const device = scopedDevices.find((item) => item.id === deviceId);
+      return [deviceId, {
+        previousControlState: device?.config?.controlState || {},
+        attemptedPatch: buildControlStatePatch(definition, controlValues, parameters),
+      }];
+    }));
 
     setIsSubmitting(true);
     setMessage('');
@@ -189,6 +200,7 @@ export function ControlCenter() {
           deviceIds: targetIds,
           command: selectedCommand,
           parameters,
+          rollbackByDevice,
           requestedBy: currentUser?.name || currentUser?.email || 'Unknown user',
           requestedByRole: currentUser?.role || 'Viewer',
         }),
@@ -259,6 +271,45 @@ export function ControlCenter() {
       await loadCommands();
     } catch (error) {
       setMessage(`Failed to ${action} command.`);
+    }
+  };
+
+  const rollbackCommand = async (command: ControlCommand) => {
+    const rollback = command.parameters?.__rollback;
+    const previousControlState = rollback?.previousControlState;
+    if (!previousControlState || typeof previousControlState !== 'object') {
+      setMessage('No rollback snapshot is available for this command.');
+      return;
+    }
+
+    const confirmed = await confirmDelete({
+      title: 'Rollback failed command',
+      itemName: `${command.deviceName} / ${command.command}`,
+      description: 'This restores the local device control state snapshot saved before the failed command. It does not send a new command to the physical device.',
+      confirmLabel: 'Rollback',
+    });
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`/api/device-commands/${command.id}/rollback`, {
+        method: 'POST',
+        headers: apiJsonHeaders(currentUser),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setMessage(payload.error || 'Failed to mark command rolled back.');
+        return;
+      }
+      updateDevice(command.deviceId, {
+        config: {
+          ...(devices.find((device) => device.id === command.deviceId)?.config || {}),
+          controlState: previousControlState,
+        },
+      });
+      setMessage(`Command rolled back: ${payload.command?.id || command.id}.`);
+      await loadCommands();
+    } catch (error) {
+      setMessage('Failed to rollback command.');
     }
   };
 
@@ -574,7 +625,9 @@ export function ControlCenter() {
                         ? "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"
                         : command.status === 'pending_approval'
                           ? "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300"
-                          : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+                          : command.status === 'rolled_back'
+                            ? "bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300"
+                            : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
                     )}>
                       {command.status === 'rejected' || command.status === 'failed' || command.status === 'pending_approval' ? <AlertTriangle className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
                       {command.status}
@@ -597,6 +650,17 @@ export function ControlCenter() {
                         className="inline-flex h-8 items-center rounded border border-red-300 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-50 dark:border-red-500/40 dark:bg-slate-950 dark:text-red-300 dark:hover:bg-red-500/10"
                       >
                         Reject
+                      </button>
+                    </div>
+                  )}
+                  {command.status === 'failed' && command.parameters?.__rollback?.previousControlState && (
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={() => rollbackCommand(command)}
+                        className="inline-flex h-8 items-center rounded border border-sky-400 bg-white px-3 text-xs font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-500/40 dark:bg-slate-950 dark:text-sky-300 dark:hover:bg-sky-500/10"
+                      >
+                        Rollback
                       </button>
                     </div>
                   )}

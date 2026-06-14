@@ -124,7 +124,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Demo 角色禁止下发真实设备命令
 - [x] 二次确认
 - [x] 危险操作审批：非 Owner/Admin 发起高风险命令时进入 pending_approval，审批后才会下发
-- [ ] 失败回滚
+- [x] 失败回滚：设备 ACK failed 后可在 Control Log 恢复命令前的本地控制状态快照
 - [ ] 本地手动优先机制
 
 ### V5: Workflow Automation
@@ -447,6 +447,13 @@ curl -X POST "http://localhost:3006/api/device-commands/batch" \
 - Owner / Admin 发起的命令会直接按配置下发。
 - Engineer / Operator / Customer 发起的高风险命令会先保存为 `pending_approval`，不会触发 MQTT / HTTP / pending queue。
 - Owner / Admin 可在 Control Center 的 Control Log 中 Approve 或 Reject。Approve 后才会真正走 MQTT / HTTP / pending queue 下发。
+
+失败回滚：
+
+- Control Center 下发命令时会保存命令前的 `controlState` 快照，快照仅作为系统元数据保存，不会通过 MQTT / HTTP / pending queue 发送给设备。
+- 如果设备或网关通过 ACK 返回 `failed`，Control Log 中会显示 **Rollback**。
+- Rollback 会把 Dashboard 内的本地控制状态恢复到命令前快照，并把命令标记为 `rolled_back`。
+- Rollback 不会自动向物理设备发送反向控制命令；现场设备的真实状态仍应以最新 telemetry / ACK 为准。
 
 ### 查看操作审计日志
 
