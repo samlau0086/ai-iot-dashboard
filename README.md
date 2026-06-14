@@ -118,7 +118,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 模式切换
 - [x] 手动控制
 - [x] 控制连接器：支持 MQTT Command Topic、HTTP Command Endpoint，以及网关 pending queue fallback
-- [ ] 批量控制
+- [x] 批量控制：Control Center 支持选择同一 Site 内支持同一控制项的多台设备并批量下发
 - [x] 控制记录
 - [x] 权限控制
 - [x] Demo 角色禁止下发真实设备命令
@@ -425,6 +425,21 @@ Workflow 编辑页支持 **Run Alerting**。可为单个 workflow 启用运行�
 - `set_parameter`：下发任意参数名和值。
 
 控制命令提交前需要勾选二次确认。后端会通过 `POST /api/device-commands` 记录命令、设备、参数、操作者、角色、来源和状态，并可通过 `GET /api/device-commands` 查询控制日志。
+
+批量控制可使用控制中心界面的 **Batch Targets**，也可以直接调用：
+
+```bash
+curl -X POST "http://localhost:3006/api/device-commands/batch" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <session-token>" \
+  -d '{
+    "deviceIds": ["PUMP-001", "PUMP-002"],
+    "command": "set_speed",
+    "parameters": {"speed": 60}
+  }'
+```
+
+批量控制会为每台设备分别创建命令，并分别尝试 MQTT / HTTP / pending queue 下发，因此某一台设备失败不会阻塞其他设备。
 
 ### 查看操作审计日志
 

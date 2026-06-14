@@ -34,6 +34,7 @@ export function ControlCenter() {
   const [controlValues, setControlValues] = useState<Record<string, any>>({});
   const [parameterName, setParameterName] = useState('');
   const [confirmChecked, setConfirmChecked] = useState(false);
+  const [batchDeviceIds, setBatchDeviceIds] = useState<string[]>([]);
   const [commands, setCommands] = useState<ControlCommand[]>([]);
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -53,6 +54,14 @@ export function ControlCenter() {
   const commandOptions = getDeviceControlDefinitions(selectedDevice).filter((control) => (
     canIssueControlCommand(currentUser, selectedDevice?.id, control.id)
   ));
+  const batchEligibleDevices = useMemo(() => (
+    scopedDevices.filter((device) => (
+      device.id !== selectedDevice?.id
+      && getDeviceControlDefinitions(device).some((control) => control.id === selectedCommand)
+      && canIssueControlCommand(currentUser, device.id, selectedCommand)
+    ))
+  ), [currentUser, scopedDevices, selectedCommand, selectedDevice?.id]);
+  const batchEligibleDeviceIdsKey = batchEligibleDevices.map((device) => device.id).join('|');
 
   useEffect(() => {
     if (!siteOptions.length) return;
@@ -85,6 +94,14 @@ export function ControlCenter() {
       ...Object.fromEntries(options.map((option) => [option.id, selectedDevice.config?.controlState?.[option.id] ?? option.defaultValue ?? ''])),
     });
   }, [selectedDevice?.id, selectedCommand]);
+
+  useEffect(() => {
+    setBatchDeviceIds((current) => {
+      const allowedIds = new Set(batchEligibleDevices.map((device) => device.id));
+      const next = current.filter((deviceId) => allowedIds.has(deviceId));
+      return next.length === current.length ? current : next;
+    });
+  }, [batchEligibleDeviceIdsKey]);
 
   const loadCommands = async () => {
     try {
@@ -145,6 +162,62 @@ export function ControlCenter() {
       }
     } catch (error) {
       setMessage('Failed to submit control command.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const submitBatchCommand = async () => {
+    if (!selectedDevice || !canControl || !confirmChecked || batchDeviceIds.length === 0) return;
+    const definition = commandOptions.find((option) => option.id === selectedCommand);
+    if (!definition) return;
+    const targetIds = Array.from(new Set([selectedDevice.id, ...batchDeviceIds]));
+    const parameters = buildControlParameters(definition, controlValues, parameterName);
+
+    setIsSubmitting(true);
+    setMessage('');
+
+    try {
+      const response = await fetch('/api/device-commands/batch', {
+        method: 'POST',
+        headers: apiJsonHeaders(currentUser),
+        body: JSON.stringify({
+          deviceIds: targetIds,
+          command: selectedCommand,
+          parameters,
+          requestedBy: currentUser?.name || currentUser?.email || 'Unknown user',
+          requestedByRole: currentUser?.role || 'Viewer',
+        }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        setMessage(payload.error || 'Batch control command rejected.');
+      } else {
+        const statusSummary = (Array.isArray(payload.commands) ? payload.commands : []).reduce((acc: Record<string, number>, command: ControlCommand) => {
+          acc[command.status] = (acc[command.status] || 0) + 1;
+          return acc;
+        }, {});
+        targetIds.forEach((deviceId) => {
+          const device = scopedDevices.find((item) => item.id === deviceId);
+          if (!device) return;
+          updateDevice(device.id, {
+            config: {
+              ...(device.config || {}),
+              controlState: {
+                ...(device.config?.controlState || {}),
+                ...buildControlStatePatch(definition, controlValues, parameters),
+              },
+            },
+          });
+        });
+        setMessage(`Batch command submitted to ${targetIds.length} device(s): ${Object.entries(statusSummary).map(([status, count]) => `${status} ${count}`).join(', ') || 'accepted'}.`);
+        setBatchDeviceIds([]);
+        setConfirmChecked(false);
+        await loadCommands();
+      }
+    } catch (error) {
+      setMessage('Failed to submit batch control command.');
     } finally {
       setIsSubmitting(false);
     }
@@ -251,6 +324,56 @@ export function ControlCenter() {
                   </div>
                 )}
               </div>
+            </div>
+
+            <div className="rounded border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Batch Targets</label>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Selected device is always included. Add other devices that support this same command.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={batchEligibleDevices.length === 0}
+                  onClick={() => {
+                    setBatchDeviceIds((current) => (
+                      current.length === batchEligibleDevices.length ? [] : batchEligibleDevices.map((device) => device.id)
+                    ));
+                  }}
+                  className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  {batchDeviceIds.length === batchEligibleDevices.length && batchEligibleDevices.length > 0 ? 'Clear' : 'All'}
+                </button>
+              </div>
+              <div className="mt-3 max-h-32 space-y-2 overflow-y-auto">
+                {batchEligibleDevices.length > 0 ? batchEligibleDevices.map((device) => (
+                  <label key={device.id} className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={batchDeviceIds.includes(device.id)}
+                      onChange={(event) => {
+                        setBatchDeviceIds((current) => (
+                          event.target.checked
+                            ? [...current, device.id]
+                            : current.filter((id) => id !== device.id)
+                        ));
+                      }}
+                      className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                    />
+                    <span className="min-w-0 flex-1 truncate">{device.name}</span>
+                    <span className="font-mono text-[10px] text-slate-400">{device.type}</span>
+                  </label>
+                )) : (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">No other devices in this Site support this command.</p>
+                )}
+              </div>
+              {batchDeviceIds.length > 0 && (
+                <p className="mt-2 text-xs font-semibold text-orange-600 dark:text-orange-400">
+                  Batch will target {batchDeviceIds.length + 1} devices.
+                </p>
+              )}
             </div>
 
             {selectedOption?.valueType === 'select' && (
@@ -365,15 +488,26 @@ export function ControlCenter() {
             )}
 
             {selectedOption?.valueType !== 'toggle' && (
-              <button
-                type="button"
-                onClick={() => submitCommand()}
-                disabled={!selectedDevice || !canControl || !confirmChecked || isSubmitting}
-                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded bg-orange-600 px-4 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
-              >
-                <Play className="h-4 w-4" />
-                {isSubmitting ? 'Submitting...' : 'Submit Command'}
-              </button>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => submitCommand()}
+                  disabled={!selectedDevice || !canControl || !confirmChecked || isSubmitting}
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded bg-orange-600 px-4 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
+                >
+                  <Play className="h-4 w-4" />
+                  {isSubmitting ? 'Submitting...' : 'Submit Command'}
+                </button>
+                <button
+                  type="button"
+                  onClick={submitBatchCommand}
+                  disabled={!selectedDevice || !canControl || !confirmChecked || batchDeviceIds.length === 0 || isSubmitting}
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded border border-orange-500 bg-white px-4 text-sm font-semibold text-orange-700 hover:bg-orange-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400 dark:bg-slate-950 dark:text-orange-300 dark:hover:bg-orange-500/10 dark:disabled:border-slate-700 dark:disabled:text-slate-600"
+                >
+                  <Play className="h-4 w-4" />
+                  Batch Submit
+                </button>
+              </div>
             )}
 
             {message && (

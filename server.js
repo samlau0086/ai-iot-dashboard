@@ -5748,6 +5748,54 @@ app.post('/api/device-commands', async (req, res) => {
   }
 });
 
+app.post('/api/device-commands/batch', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const actor = await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator'], 'issue batch device control commands');
+    if (!actor) return;
+
+    const deviceIds = splitList(payload.deviceIds);
+    if (!deviceIds.length) {
+      res.status(400).json({error: 'deviceIds is required', commands: []});
+      return;
+    }
+
+    const commandName = String(payload.command || '').trim();
+    if (!commandName) {
+      res.status(400).json({error: 'command is required', commands: []});
+      return;
+    }
+
+    const uniqueDeviceIds = Array.from(new Set(deviceIds)).slice(0, 100);
+    const commands = [];
+    for (const deviceId of uniqueDeviceIds) {
+      const command = await createDeviceControlCommand({
+        deviceId,
+        command: commandName,
+        parameters: payload.parameters || {},
+        requestedBy: actor.name || payload.requestedBy || 'Unknown user',
+        requestedByRole: actor.role,
+        source: 'control-center-batch',
+      });
+      commands.push(command);
+    }
+
+    await writeAuditLog(req, actor, 'device_command.batch_create', 'device', uniqueDeviceIds.join(','), 'success', {
+      command: commandName,
+      deviceCount: uniqueDeviceIds.length,
+      statuses: commands.reduce((acc, command) => {
+        acc[command.status] = (acc[command.status] || 0) + 1;
+        return acc;
+      }, {}),
+      commandIds: commands.map((command) => command.id),
+    });
+
+    res.status(202).json({commands});
+  } catch (error) {
+    res.status(500).json({error: error.message, commands: []});
+  }
+});
+
 app.post('/api/notification-channels/test', async (req, res) => {
   try {
     if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer'], 'test notification channels'))) return;
