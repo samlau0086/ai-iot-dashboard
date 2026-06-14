@@ -7,7 +7,7 @@ import {
   MessageCircle, Mail, Ticket, Power, Globe,
   FileText, BrainCircuit, Activity, AlertTriangle,
   Clock, Zap, PowerOff, ArrowRight, Radio, Wifi, Bell, KeyRound, ListTree, RefreshCw, X,
-  Download, Upload, Package, Copy
+  Download, Upload, Package, Copy, Search, Star
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { WorkflowEditor } from './WorkflowEditor';
@@ -67,6 +67,9 @@ export function Workflows() {
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [importText, setImportText] = useState('');
   const [importError, setImportError] = useState('');
+  const [templateSearch, setTemplateSearch] = useState('');
+  const [templateCategory, setTemplateCategory] = useState('all');
+  const [selectedTemplateId, setSelectedTemplateId] = useState(WORKFLOW_TEMPLATES[0]?.id || '');
 
   const activeLogsWorkflow = workflows.find((workflow) => workflow.id === logsWorkflowId) || null;
   const filteredWorkflowLogs = useMemo(
@@ -317,6 +320,77 @@ export function Workflows() {
     notifySuccess('Workflow template added as draft.');
   };
 
+  const marketplaceTemplates = useMemo(() => WORKFLOW_TEMPLATES.map((template) => {
+    const triggerCount = template.workflow.nodes.filter((node) => node.type === 'trigger').length;
+    const conditionCount = template.workflow.nodes.filter((node) => node.type === 'condition').length;
+    const actionCount = template.workflow.nodes.filter((node) => node.type === 'action').length;
+    const category = template.tags.includes('control')
+      ? 'control'
+      : template.tags.includes('access') || template.tags.includes('nfc')
+        ? 'access'
+        : template.tags.includes('mqtt')
+          ? 'ingest'
+          : template.tags.includes('report') || template.tags.includes('schedule')
+            ? 'reporting'
+            : 'monitoring';
+    const difficulty = template.workflow.nodes.length >= 4 || conditionCount > 0
+      ? 'Advanced'
+      : template.workflow.nodes.length >= 3
+        ? 'Standard'
+        : 'Starter';
+    const industry = template.tags.includes('access')
+      ? 'Access Control'
+      : template.tags.includes('mqtt')
+        ? 'Industrial IoT'
+        : template.tags.includes('control')
+          ? 'Operations'
+          : template.tags.includes('report')
+            ? 'Management'
+            : 'Maintenance';
+    const featured = ['access-control', 'threshold-if-control', 'device-offline-notify'].includes(template.id);
+    return {
+      ...template,
+      category,
+      difficulty,
+      industry,
+      featured,
+      triggerCount,
+      conditionCount,
+      actionCount,
+    };
+  }), []);
+  const templateCategories = useMemo(() => [
+    { id: 'all', label: 'All' },
+    { id: 'monitoring', label: 'Monitoring' },
+    { id: 'control', label: 'Control' },
+    { id: 'access', label: 'Access' },
+    { id: 'ingest', label: 'MQTT / Ingest' },
+    { id: 'reporting', label: 'Reporting' },
+  ], []);
+  const filteredMarketplaceTemplates = useMemo(() => {
+    const search = templateSearch.trim().toLowerCase();
+    return marketplaceTemplates.filter((template) => (
+      (templateCategory === 'all' || template.category === templateCategory)
+      && (!search || [
+        template.name,
+        template.description,
+        template.industry,
+        template.difficulty,
+        ...template.tags,
+      ].join(' ').toLowerCase().includes(search))
+    ));
+  }, [marketplaceTemplates, templateCategory, templateSearch]);
+  const selectedMarketplaceTemplate = marketplaceTemplates.find((template) => template.id === selectedTemplateId)
+    || filteredMarketplaceTemplates[0]
+    || marketplaceTemplates[0];
+
+  useEffect(() => {
+    if (!filteredMarketplaceTemplates.length) return;
+    if (!filteredMarketplaceTemplates.some((template) => template.id === selectedTemplateId)) {
+      setSelectedTemplateId(filteredMarketplaceTemplates[0].id);
+    }
+  }, [filteredMarketplaceTemplates, selectedTemplateId]);
+
   if (editingId) {
     return <div className="h-full relative isolate"><WorkflowEditor workflowId={editingId} onBack={() => setEditingId(null)} /></div>;
   }
@@ -506,7 +580,7 @@ export function Workflows() {
             className="inline-flex items-center gap-x-2 rounded-md border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
           >
             <Package className="-ml-0.5 h-5 w-5 text-orange-500" aria-hidden="true" />
-            Template Library
+            Template Marketplace
           </button>
           <button
             onClick={() => setShowImportModal(true)}
@@ -823,15 +897,15 @@ export function Workflows() {
 
       {showTemplateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
+          <div className="flex max-h-[90vh] w-full max-w-7xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#1c2128]">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
               <div>
                 <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
                   <Package className="h-4 w-4 text-orange-500" />
-                  Workflow Template Library
+                  Workflow Template Marketplace
                 </h3>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Start from a preset workflow, then bind real devices, channels, credentials, and actions before enabling it.
+                  Browse industrial workflow starters, preview their nodes, then create a disabled draft and bind real devices before publishing.
                 </p>
               </div>
               <button
@@ -843,41 +917,179 @@ export function Workflows() {
               </button>
             </div>
 
-            <div className="grid gap-4 overflow-y-auto p-5 md:grid-cols-2">
-              {WORKFLOW_TEMPLATES.map((template) => (
-                <div
-                  key={template.id}
-                  className="flex min-h-[180px] flex-col rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/40"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-sm font-semibold text-slate-900 dark:text-white">{template.name}</h4>
-                      <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{template.description}</p>
-                    </div>
-                    <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
-                      {template.workflow.nodes.length} nodes
-                    </span>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {template.tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full bg-orange-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-700 dark:bg-orange-500/10 dark:text-orange-300"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => createFromTemplate(template)}
-                    className="mt-auto inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Use Template
-                  </button>
+            <div className="grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[360px_1fr]">
+              <aside className="min-h-0 overflow-y-auto border-b border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/20 lg:border-b-0 lg:border-r">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={templateSearch}
+                    onChange={(event) => setTemplateSearch(event.target.value)}
+                    placeholder="Search templates, tags, industry..."
+                    className="h-10 w-full rounded-md border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
+                  />
                 </div>
-              ))}
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {templateCategories.map((category) => (
+                    <button
+                      key={category.id}
+                      type="button"
+                      onClick={() => setTemplateCategory(category.id)}
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+                        templateCategory === category.id
+                          ? "border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-500/40 dark:bg-orange-500/10 dark:text-orange-300"
+                          : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800"
+                      )}
+                    >
+                      {category.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-4 space-y-3">
+                  {filteredMarketplaceTemplates.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => setSelectedTemplateId(template.id)}
+                      className={cn(
+                        "w-full rounded-xl border p-3 text-left transition-colors",
+                        selectedMarketplaceTemplate?.id === template.id
+                          ? "border-orange-300 bg-orange-50/70 dark:border-orange-500/40 dark:bg-orange-500/10"
+                          : "border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:bg-slate-800/80"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            {template.featured && <Star className="h-3.5 w-3.5 fill-orange-500 text-orange-500" />}
+                            <h4 className="truncate text-sm font-semibold text-slate-900 dark:text-white">{template.name}</h4>
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{template.description}</p>
+                        </div>
+                        <span className="shrink-0 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
+                          {template.difficulty}
+                        </span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {template.tags.slice(0, 4).map((tag) => (
+                          <span key={tag} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </button>
+                  ))}
+                  {filteredMarketplaceTemplates.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                      No templates match the current filters.
+                    </div>
+                  )}
+                </div>
+              </aside>
+
+              <main className="min-h-0 overflow-y-auto p-5">
+                {selectedMarketplaceTemplate && (
+                  <div className="space-y-5">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5 dark:border-slate-800 dark:bg-slate-900/40">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {selectedMarketplaceTemplate.featured && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-700 dark:bg-orange-500/10 dark:text-orange-300">
+                                <Star className="h-3 w-3 fill-orange-500 text-orange-500" />
+                                Featured
+                              </span>
+                            )}
+                            <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
+                              {selectedMarketplaceTemplate.industry}
+                            </span>
+                            <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
+                              {selectedMarketplaceTemplate.difficulty}
+                            </span>
+                          </div>
+                          <h4 className="mt-3 text-xl font-semibold text-slate-900 dark:text-white">{selectedMarketplaceTemplate.name}</h4>
+                          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500 dark:text-slate-400">{selectedMarketplaceTemplate.description}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => createFromTemplate(selectedMarketplaceTemplate)}
+                          className="inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-500"
+                        >
+                          <Plus className="h-4 w-4" />
+                          Create Draft
+                        </button>
+                      </div>
+
+                      <div className="mt-5 grid gap-3 sm:grid-cols-4">
+                        {[
+                          { label: 'Triggers', value: selectedMarketplaceTemplate.triggerCount },
+                          { label: 'Conditions', value: selectedMarketplaceTemplate.conditionCount },
+                          { label: 'Actions', value: selectedMarketplaceTemplate.actionCount },
+                          { label: 'Nodes', value: selectedMarketplaceTemplate.workflow.nodes.length },
+                        ].map((metric) => (
+                          <div key={metric.label} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950/60">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{metric.label}</div>
+                            <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{metric.value}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {selectedMarketplaceTemplate.tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="rounded-full bg-orange-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-700 dark:bg-orange-500/10 dark:text-orange-300"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900/40">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h5 className="text-sm font-semibold text-slate-900 dark:text-white">Workflow Preview</h5>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Review the generated trigger/action chain before creating a draft.</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                          Disabled draft after install
+                        </span>
+                      </div>
+                      <div className="mt-5 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                        <div className="flex min-w-max items-start gap-4">
+                          {selectedMarketplaceTemplate.workflow.nodes.filter((node) => node.type === 'trigger').map((node, index, triggers) => (
+                            <React.Fragment key={node.id}>
+                              {index > 0 && <div className="mt-12 text-[10px] font-semibold uppercase text-slate-400">OR</div>}
+                              {renderPreviewCard(node)}
+                              {index === triggers.length - 1 && <ArrowRight className="mt-12 h-4 w-4 text-slate-400" />}
+                            </React.Fragment>
+                          ))}
+                          {buildPreviewItems(selectedMarketplaceTemplate.workflow.nodes).map((item, index) => (
+                            <React.Fragment key={`${item.type}-${index}`}>
+                              {index > 0 && <ArrowRight className="mt-12 h-4 w-4 text-slate-400" />}
+                              {item.type === 'branchGroup'
+                                ? renderBranchPreview(item)
+                                : (
+                                  <div className="flex items-start gap-3">
+                                    {item.nodes.map((node, nodeIndex) => (
+                                      <React.Fragment key={node.id}>
+                                        {nodeIndex > 0 && <ArrowRight className="mt-12 h-4 w-4 text-slate-400" />}
+                                        {renderPreviewCard(node)}
+                                      </React.Fragment>
+                                    ))}
+                                  </div>
+                                )}
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </main>
             </div>
           </div>
         </div>

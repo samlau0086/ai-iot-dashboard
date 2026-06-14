@@ -143,7 +143,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Expression helper functions: now(), formatDate(), toNumber(), round(), contains(), default(), upper(), lower().
 - [x] Workflow import / export JSON.
 - [x] Workflow template library / preset workflows.
-- [ ] Workflow template marketplace.
+- [x] Workflow template marketplace：支持分类、搜索、推荐模板、节点预览、复杂度信息和一键创建草稿。
 - [x] Sub-workflow invocation with Run Workflow node, payload mapping, dry-run support, logs, and recursion protection.
 - [x] Advanced cron editor for Schedule Trigger with visual modes, generated cron, next-run preview, and validation.
 - [x] Node search and keyboard shortcuts.
