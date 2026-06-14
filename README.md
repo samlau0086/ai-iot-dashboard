@@ -44,7 +44,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 工作流条件节点已调整为 IF / ELIF / ELSE 分支语义；多个 Trigger 采用任一触发即可进入后续流程。
 - [x] AI Copilot 基础闭环已完成：支持基于当前 Site / 设备 / 告警 / 工作流 / 图表上下文进行自然语言查询、异常解释、建议动作、CSV 报表生成和工作流草稿生成。
 - [x] Partner / White Label 基础闭环已完成：支持客户管理、客户子账号、项目/报价记录、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
-- [ ] 下一阶段重点：Partner 计费、TimescaleDB hypertable/compression、更多现场协议连接器和外部队列 adapter。
+- [ ] 下一阶段重点：Partner 计费、TimescaleDB continuous aggregates、更多现场协议连接器和外部队列 adapter。
 
 ### V1: Energy Monitoring MVP
 
@@ -108,6 +108,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] SQL-like Query / Metric Builder：Analytics 支持安全查询构建器、聚合分组、SQL-like 预览和 CSV 导出
 - [x] Telemetry Rollups：写入原始 telemetry 时同步维护分钟/小时聚合表，支持按 Site、设备、metric、source 和时间范围查询 count/min/max/avg/latest，减少历史图表和报表扫描原始大表的压力
 - [x] Telemetry Retention Policy：支持原始 telemetry、分钟 rollup、小时 rollup 分别配置保留天数，并提供自动清理 worker、状态接口和手动清理接口
+- [x] TimescaleDB Optional Optimization：可选启用 TimescaleDB hypertable 和 compression policy；未安装扩展时自动降级为普通 PostgreSQL 表，并提供状态接口与手动配置接口
 
 ### V4: Control Center
 
@@ -404,6 +405,19 @@ TELEMETRY_RETENTION_INTERVAL_MS=3600000
 
 可以通过 `GET /api/telemetry/retention/status` 查看最近清理状态；Owner / Admin 可调用 `POST /api/telemetry/retention/run` 手动触发一次清理。`/health` 也会返回 retention 的简要状态。
 
+如果数据库已安装 TimescaleDB 扩展，可以启用可选的 hypertable / compression 优化：
+
+```env
+TIMESCALEDB_ENABLED=true
+TIMESCALEDB_COMPRESSION_ENABLED=true
+TIMESCALEDB_RAW_COMPRESSION_AFTER_DAYS=7
+TIMESCALEDB_ROLLUP_COMPRESSION_AFTER_DAYS=30
+```
+
+启用后，后端启动时会尝试创建 `timescaledb` extension，将 `telemetry_messages` 按 `received_at` 转为 hypertable，将 `telemetry_metric_rollups` 按 `bucket_start` 转为 hypertable，并为原始遥测和 rollup 设置压缩策略。若数据库没有安装 TimescaleDB，系统会记录 warning 并继续使用普通 PostgreSQL 表，不会阻断启动。
+
+可通过 `GET /api/database/timescale/status` 查看 TimescaleDB 状态；Owner / Admin 可调用 `POST /api/database/timescale/configure` 手动重新执行配置。`/health` 也会返回 TimescaleDB 的简要状态。
+
 ### 配置自动化工作流
 
 进入 **Workflows** 页面，点击 **Create Workflow** 创建流程。工作流由触发器、IF / ELIF / ELSE 条件分支和动作组成，可用于自动响应设备离线、指标超限、告警产生、计划任务、MQTT 消息或 AI 异常检测。一个工作流可以配置多个 Trigger，任意一个 Trigger 被触发后都会进入后续条件分支；IF / ELIF / ELSE 会按顺序匹配，系统只执行第一个匹配分支下的 actions。
@@ -628,6 +642,10 @@ AI_COPILOT_BASE_URL=         # OpenAI-compatible 或 custom provider 时可配�
 | `VPS_SSH_KEY` | SSH 私钥。 |
 | `VPS_DEPLOY_PATH` | PM2 应用部署目录，例如 `/var/www/ai-iot-dashboard`。 |
 | `DATABASE_URL` | PostgreSQL / pgvector 连接字符串，例如 `postgresql://user:password@host:5432/ai_iot_dashboard`。 |
+| `TIMESCALEDB_ENABLED` | 是否启用 TimescaleDB 可选优化，默认 `false`；需要数据库已安装 TimescaleDB 扩展。 |
+| `TIMESCALEDB_COMPRESSION_ENABLED` | 是否配置 TimescaleDB compression policy，默认 `true`。 |
+| `TIMESCALEDB_RAW_COMPRESSION_AFTER_DAYS` | 原始 telemetry 超过多少天后压缩，默认 `7`。 |
+| `TIMESCALEDB_ROLLUP_COMPRESSION_AFTER_DAYS` | rollup 数据超过多少天后压缩，默认 `30`。 |
 | `AUTH_SESSION_SECRET` | 后端 Session Token 签名密钥，生产环境必须设置为高强度随机字符串。 |
 | `AUTH_SESSION_TTL_SECONDS` | Access Session 有效期，默认 `43200` 秒。 |
 | `AUTH_REFRESH_TTL_SECONDS` | Refresh Session 有效期，默认 `1209600` 秒。 |

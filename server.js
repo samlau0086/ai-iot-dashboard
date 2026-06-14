@@ -54,6 +54,10 @@ const telemetryRawRetentionDays = Math.max(1, Number(process.env.TELEMETRY_RAW_R
 const telemetryMinuteRollupRetentionDays = Math.max(1, Number(process.env.TELEMETRY_MINUTE_ROLLUP_RETENTION_DAYS || 30));
 const telemetryHourRollupRetentionDays = Math.max(1, Number(process.env.TELEMETRY_HOUR_ROLLUP_RETENTION_DAYS || 730));
 const telemetryRetentionIntervalMs = Math.max(5 * 60 * 1000, Number(process.env.TELEMETRY_RETENTION_INTERVAL_MS || 60 * 60 * 1000));
+const timescaleEnabled = process.env.TIMESCALEDB_ENABLED === 'true';
+const timescaleCompressionEnabled = process.env.TIMESCALEDB_COMPRESSION_ENABLED !== 'false';
+const timescaleRawCompressionAfterDays = Math.max(1, Number(process.env.TIMESCALEDB_RAW_COMPRESSION_AFTER_DAYS || 7));
+const timescaleRollupCompressionAfterDays = Math.max(1, Number(process.env.TIMESCALEDB_ROLLUP_COMPRESSION_AFTER_DAYS || 30));
 const authFailedLoginWindowMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_WINDOW_MS || 10 * 60 * 1000));
 const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LOGIN_MAX_ATTEMPTS || 5));
 const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
@@ -522,6 +526,104 @@ const queryDb = async (sql, params = []) => {
   return db.query(sql, params);
 };
 
+const timescaleState = {
+  enabled: timescaleEnabled,
+  available: false,
+  telemetryHypertable: false,
+  rollupHypertable: false,
+  compressionEnabled: timescaleCompressionEnabled,
+  rawCompressionPolicy: false,
+  rollupCompressionPolicy: false,
+  lastRunAt: null,
+  lastError: '',
+  warnings: [],
+};
+
+const addTimescaleWarning = (message) => {
+  const text = String(message || '').trim();
+  if (!text) return;
+  timescaleState.warnings = [...timescaleState.warnings.filter((item) => item !== text), text].slice(-8);
+};
+
+const runOptionalTimescaleStep = async (label, fn) => {
+  try {
+    await fn();
+    return true;
+  } catch (error) {
+    const message = `${label}: ${error.message || error}`;
+    addTimescaleWarning(message);
+    console.warn(`TimescaleDB optional step skipped - ${message}`);
+    return false;
+  }
+};
+
+const getTimescaleStatus = async () => {
+  if (!db || !timescaleEnabled) return {...timescaleState, databaseBacked: Boolean(db)};
+  try {
+    const result = await queryDb(`
+      SELECT hypertable_name AS name
+      FROM timescaledb_information.hypertables
+      WHERE hypertable_name IN ('telemetry_messages', 'telemetry_metric_rollups')
+    `);
+    const names = new Set((result?.rows || []).map((row) => row.name));
+    return {
+      ...timescaleState,
+      databaseBacked: true,
+      telemetryHypertable: names.has('telemetry_messages') || timescaleState.telemetryHypertable,
+      rollupHypertable: names.has('telemetry_metric_rollups') || timescaleState.rollupHypertable,
+    };
+  } catch {
+    return {...timescaleState, databaseBacked: true};
+  }
+};
+
+const configureTimescaleTelemetry = async () => {
+  timescaleState.lastRunAt = new Date().toISOString();
+  if (!db || !timescaleEnabled) return;
+
+  const extensionReady = await runOptionalTimescaleStep('create timescaledb extension', async () => {
+    await queryDb('CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE');
+  });
+  if (!extensionReady) {
+    timescaleState.lastError = 'TimescaleDB extension is not available. PostgreSQL tables continue to work normally.';
+    return;
+  }
+
+  timescaleState.available = true;
+  timescaleState.lastError = '';
+
+  await runOptionalTimescaleStep('prepare telemetry_messages unique index', async () => {
+    await queryDb('ALTER TABLE telemetry_messages DROP CONSTRAINT IF EXISTS telemetry_messages_pkey');
+    await queryDb('CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_messages_id_received_unique ON telemetry_messages (id, received_at)');
+  });
+
+  timescaleState.telemetryHypertable = await runOptionalTimescaleStep('create telemetry_messages hypertable', async () => {
+    await queryDb("SELECT create_hypertable('telemetry_messages', 'received_at', if_not_exists => TRUE, migrate_data => TRUE)");
+  });
+
+  timescaleState.rollupHypertable = await runOptionalTimescaleStep('create telemetry_metric_rollups hypertable', async () => {
+    await queryDb("SELECT create_hypertable('telemetry_metric_rollups', 'bucket_start', if_not_exists => TRUE, migrate_data => TRUE)");
+  });
+
+  if (!timescaleCompressionEnabled) return;
+
+  timescaleState.rawCompressionPolicy = await runOptionalTimescaleStep('enable telemetry_messages compression policy', async () => {
+    await queryDb("ALTER TABLE telemetry_messages SET (timescaledb.compress, timescaledb.compress_segmentby = 'device_id,source', timescaledb.compress_orderby = 'received_at DESC')");
+    await queryDb(
+      "SELECT add_compression_policy('telemetry_messages', ($1::text || ' days')::interval, if_not_exists => TRUE)",
+      [timescaleRawCompressionAfterDays]
+    );
+  });
+
+  timescaleState.rollupCompressionPolicy = await runOptionalTimescaleStep('enable telemetry_metric_rollups compression policy', async () => {
+    await queryDb("ALTER TABLE telemetry_metric_rollups SET (timescaledb.compress, timescaledb.compress_segmentby = 'bucket_interval,device_id,metric,source', timescaledb.compress_orderby = 'bucket_start DESC')");
+    await queryDb(
+      "SELECT add_compression_policy('telemetry_metric_rollups', ($1::text || ' days')::interval, if_not_exists => TRUE)",
+      [timescaleRollupCompressionAfterDays]
+    );
+  });
+};
+
 const initDatabase = async () => {
   if (!db) {
     console.warn('DATABASE_URL is not set. Falling back to in-memory runtime data.');
@@ -670,6 +772,7 @@ const initDatabase = async () => {
   await queryDb('CREATE INDEX IF NOT EXISTS idx_access_events_created ON access_events (created_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC)');
   await queryDb('CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action, created_at DESC)');
+  await configureTimescaleTelemetry();
 
   const dataSourceState = await getAppState('data_source_channels');
   if (dataSourceState) {
@@ -5725,6 +5828,7 @@ app.use(express.static(distDir, {
 
 app.get('/health', async (_req, res) => {
   const queue = await workflowQueueStatus();
+  const timescale = await getTimescaleStatus();
   res.status(200).json({
     status: 'ok',
     workflowQueue: {
@@ -5738,6 +5842,13 @@ app.get('/health', async (_req, res) => {
       enabled: telemetryRetentionState.enabled,
       lastRunAt: telemetryRetentionState.lastRunAt,
       lastError: telemetryRetentionState.lastError,
+    },
+    timescale: {
+      enabled: timescale.enabled,
+      available: timescale.available,
+      telemetryHypertable: timescale.telemetryHypertable,
+      rollupHypertable: timescale.rollupHypertable,
+      lastError: timescale.lastError,
     },
   });
 });
@@ -6671,6 +6782,29 @@ app.post('/api/telemetry/retention/run', async (req, res) => {
     telemetryRetentionState.lastError = error.message || 'Telemetry retention cleanup failed.';
     await writeAuditLog(req, await getApiActor(req), 'telemetry.retention.run', 'telemetry', 'retention', 'failed', {error: error.message});
     res.status(500).json({error: error.message, ...getTelemetryRetentionStatus()});
+  }
+});
+
+app.get('/api/database/timescale/status', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Partner'], 'view TimescaleDB status'))) return;
+    res.status(200).json(await getTimescaleStatus());
+  } catch (error) {
+    res.status(500).json({error: error.message, ...timescaleState});
+  }
+});
+
+app.post('/api/database/timescale/configure', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin'], 'configure TimescaleDB'))) return;
+    await configureTimescaleTelemetry();
+    const status = await getTimescaleStatus();
+    await writeAuditLog(req, await getApiActor(req), 'database.timescale.configure', 'database', 'timescaledb', status.lastError ? 'failed' : 'success', status);
+    res.status(200).json(status);
+  } catch (error) {
+    timescaleState.lastError = error.message || 'TimescaleDB configuration failed.';
+    await writeAuditLog(req, await getApiActor(req), 'database.timescale.configure', 'database', 'timescaledb', 'failed', {error: error.message});
+    res.status(500).json({error: error.message, ...timescaleState});
   }
 });
 
