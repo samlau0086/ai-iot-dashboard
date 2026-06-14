@@ -162,7 +162,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 设备离线、指标阈值、告警、定时、AI、Webhook、MQTT 等触发类型占位
 - [x] 通知、工单、Webhook、报告、AI 分析等动作类型占位
 - [x] 后端工作流执行器
-- [ ] 真实通知渠道：Email、WhatsApp、Telegram、SMS、Webhook、Slack
+- [x] 真实通知渠道：Bark、Webhook、Slack、Telegram，以及通过 Provider Webhook 接入 Email、SMS、WhatsApp
 - [x] Workflow Run 历史
 - [ ] 自动报告
 - [ ] 设备控制动作接入
@@ -474,7 +474,7 @@ GET /api/audit-logs?limit=100&action=device_command.create&result=success
 
 Settings -> Audit Logs 页面支持按 action、result、actorId 和 limit 筛选记录，并可将当前加载结果导出为 CSV，字段包含时间、操作者、角色、IP、action、target、result 和 details JSON。
 
-Settings -> General 中的 **Security Alerts** 默认开启。登录失败达到锁定阈值、未审核账号尝试登录、弱密码注册被拦截时，系统会写入右上角 Notifications；如果启用了 **Push To Notification Channels**，还会推送到已启用的 Bark / Webhook 通知渠道。告警默认按事件类型、邮箱和 IP 冷却 `5` 分钟，可通过 `SECURITY_ALERT_COOLDOWN_MS` 调整。
+Settings -> General 中的 **Security Alerts** 默认开启。登录失败达到锁定阈值、未审核账号尝试登录、弱密码注册被拦截时，系统会写入右上角 Notifications；如果启用了 **Push To Notification Channels**，还会推送到已启用的 Bark / Webhook / Slack / Telegram / Email / SMS / WhatsApp 通知渠道。告警默认按事件类型、邮箱和 IP 冷却 `5` 分钟，可通过 `SECURITY_ALERT_COOLDOWN_MS` 调整。
 
 当前支持三种下行方式：
 
@@ -550,7 +550,7 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 
 ### 配置通知和用户
 
-进入 **Settings** 页面，可以配置公司名称、系统时区、Bark 推送地址、告警邮箱、Webhook 地址，并管理平台用户。
+进入 **Settings** 页面，可以配置公司名称、系统时区、通知渠道和平台用户。Notification Channels 支持同一种渠道添加多条：Bark 使用 Server URL + Device Key；Webhook 使用 URL、Method 和可选 Secret Header；Slack 使用 Incoming Webhook；Telegram 使用 Bot Token + Chat ID；Email、SMS、WhatsApp 通过 Provider Webhook 发送，适合对接 Resend、SendGrid、Twilio、阿里云短信、Meta Cloud API 或自建消息网关。
 
 ## 部署到 VPS
 

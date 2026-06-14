@@ -12,7 +12,7 @@ import { generateClaimCode, generateClaimToken } from '../lib/deviceProvisioning
 import { APP_PROFILE_OPTIONS, FEATURE_ACCESS_OPTIONS, getUserAppProfile, getUserFeatureAccess, type AppProfile, type FeatureNavKey } from '../lib/featureAccess';
 import { PASSWORD_POLICY_DESCRIPTION, validatePasswordPolicy } from '../lib/passwordPolicy';
 
-const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack'];
+const CHANNEL_TYPES: NotificationChannel['type'][] = ['email', 'webhook', 'bark', 'sms', 'telegram', 'slack', 'whatsapp'];
 const USER_ROLES = ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Demo', 'Partner', 'Customer'];
 const SITE_TYPES: SiteTenant['type'][] = ['factory', 'solar', 'cold_storage', 'pump_station', 'compressed_air', 'other'];
 const PROVISION_DEVICE_TYPES: DeviceType[] = ['gateway', 'dtu', 'rtu', 'lora_gateway', 'plc', 'io_module', 'relay_module', 'energy_meter', 'temperature_sensor', 'pressure_sensor', 'flow_meter', 'pump_controller', 'valve_controller', 'air_compressor', 'vfd', 'solar_inverter', 'battery_bms', 'ups', 'sensor'];
@@ -83,16 +83,19 @@ const escapeHtml = (value: string) => value
   .replace(/'/g, '&#039;');
 
 const DEFAULT_NOTIFICATION_CONFIG: Record<NotificationChannel['type'], Record<string, string>> = {
-  email: { recipients: '', subjectPrefix: '[IoT Alert]' },
+  email: { provider: 'custom', webhookUrl: '', recipients: '', subjectPrefix: '[IoT Alert]' },
   webhook: { url: '', method: 'POST', secretHeader: '' },
   bark: { serverUrl: 'https://api.day.app', deviceKey: '' },
-  sms: { provider: 'custom', phoneNumber: '', templateId: '' },
-  telegram: { botToken: '', chatId: '' },
-  slack: { webhookUrl: '', channel: '', username: 'AI IoT Dashboard' },
+  sms: { provider: 'custom', webhookUrl: '', phoneNumber: '', templateId: '' },
+  telegram: { botToken: '', chatId: '', textTemplate: '' },
+  slack: { webhookUrl: '', channel: '', username: 'AI IoT Dashboard', textTemplate: '' },
+  whatsapp: { provider: 'custom', webhookUrl: '', phoneNumber: '', templateId: '' },
 };
 
 const NOTIFICATION_FIELDS: Record<NotificationChannel['type'], { key: string; label: string; placeholder: string; secret?: boolean }[]> = {
   email: [
+    { key: 'provider', label: 'Provider', placeholder: 'custom / resend / sendgrid / smtp-bridge' },
+    { key: 'webhookUrl', label: 'Provider Webhook URL', placeholder: 'https://provider.example.com/email/send' },
     { key: 'recipients', label: 'Recipients', placeholder: 'ops@example.com, manager@example.com' },
     { key: 'subjectPrefix', label: 'Subject Prefix', placeholder: '[IoT Alert]' },
   ],
@@ -107,17 +110,26 @@ const NOTIFICATION_FIELDS: Record<NotificationChannel['type'], { key: string; la
   ],
   sms: [
     { key: 'provider', label: 'Provider', placeholder: 'twilio / aliyun / custom' },
+    { key: 'webhookUrl', label: 'Provider Webhook URL', placeholder: 'https://provider.example.com/sms/send' },
     { key: 'phoneNumber', label: 'Phone Number', placeholder: '+1 555 0100' },
     { key: 'templateId', label: 'Template ID', placeholder: 'Optional provider template' },
   ],
   telegram: [
     { key: 'botToken', label: 'Bot Token', placeholder: '123456:ABC...', secret: true },
     { key: 'chatId', label: 'Chat ID', placeholder: '-1001234567890' },
+    { key: 'textTemplate', label: 'Message Template', placeholder: '{{title}} - {{message}}' },
   ],
   slack: [
     { key: 'webhookUrl', label: 'Webhook URL', placeholder: 'https://hooks.slack.com/services/...' },
     { key: 'channel', label: 'Channel', placeholder: '#factory-alerts' },
     { key: 'username', label: 'Bot Name', placeholder: 'AI IoT Dashboard' },
+    { key: 'textTemplate', label: 'Message Template', placeholder: '{{title}} - {{message}}' },
+  ],
+  whatsapp: [
+    { key: 'provider', label: 'Provider', placeholder: 'twilio / meta-cloud-api / custom' },
+    { key: 'webhookUrl', label: 'Provider Webhook URL', placeholder: 'https://provider.example.com/whatsapp/send' },
+    { key: 'phoneNumber', label: 'Phone Number', placeholder: '+1 555 0100' },
+    { key: 'templateId', label: 'Template ID', placeholder: 'Optional provider template' },
   ],
 };
 
@@ -129,6 +141,7 @@ const notificationTargetFromConfig = (type: NotificationChannel['type'], config:
     case 'sms': return config.phoneNumber || '';
     case 'telegram': return config.chatId || '';
     case 'slack': return config.webhookUrl || config.channel || '';
+    case 'whatsapp': return config.phoneNumber || '';
     default: return '';
   }
 };
@@ -154,6 +167,9 @@ const notificationConfigFromChannel = (channel: NotificationChannel) => {
         break;
       case 'slack':
         config.webhookUrl = channel.target;
+        break;
+      case 'whatsapp':
+        config.phoneNumber = channel.target;
         break;
     }
   }

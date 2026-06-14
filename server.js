@@ -2120,6 +2120,59 @@ const normalizeNotificationConfig = (channel = {}) => channel.config && typeof c
   ? channel.config
   : {};
 
+const notificationText = (notification = {}) => ({
+  title: notification.title || 'AI IoT Dashboard',
+  message: notification.message || notification.body || 'Notification channel test message.',
+  level: notification.level || 'Info',
+  source: notification.source || 'system',
+  workflowName: notification.workflowName || '',
+  createdAt: notification.createdAt || new Date().toISOString(),
+});
+
+const renderNotificationTemplate = (template, notification = {}, channel = {}) => {
+  const text = notificationText(notification);
+  const values = {
+    title: text.title,
+    message: text.message,
+    level: text.level,
+    source: text.source,
+    workflowName: text.workflowName,
+    createdAt: text.createdAt,
+    channelName: channel.name || '',
+  };
+  return String(template || '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => values[key] ?? '');
+};
+
+const parseHeaderLine = (headerLine = '') => {
+  const index = String(headerLine).indexOf(':');
+  if (index <= 0) return {};
+  const key = headerLine.slice(0, index).trim();
+  const value = headerLine.slice(index + 1).trim();
+  return key ? {[key]: value} : {};
+};
+
+const postJsonNotification = async (url, body, options = {}) => {
+  if (!url) return {ok: false, message: `${options.label || 'Notification'} URL is required.`};
+  try {
+    const response = await fetch(url, {
+      method: options.method || 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(options.headers || {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    return {
+      ok: response.ok,
+      message: response.ok ? `${options.label || 'Notification'} sent.` : `${options.label || 'Notification'} failed: ${response.status}${text ? ` ${text.slice(0, 160)}` : ''}`,
+      status: response.status,
+    };
+  } catch (error) {
+    return {ok: false, message: `${options.label || 'Notification'} failed: ${error.message || 'Unable to reach provider.'}`};
+  }
+};
+
 const sendBarkNotification = async (channel, payload = {}) => {
   const config = normalizeNotificationConfig(channel);
   const title = payload.title || 'AI IoT Dashboard';
@@ -2158,27 +2211,98 @@ const sendBarkNotification = async (channel, payload = {}) => {
   }
 };
 
+const sendWebhookNotification = async (channel, notification) => {
+  const config = normalizeNotificationConfig(channel);
+  const url = config.url || channel.target;
+  const headers = parseHeaderLine(config.secretHeader);
+  return postJsonNotification(url, notification, {
+    label: 'Webhook notification',
+    method: config.method || 'POST',
+    headers,
+  });
+};
+
+const sendSlackNotification = async (channel, notification) => {
+  const config = normalizeNotificationConfig(channel);
+  const url = config.webhookUrl || channel.target;
+  const text = notificationText(notification);
+  const body = {
+    text: renderNotificationTemplate(config.textTemplate, notification, channel) || `*${text.title}*\n${text.message}`,
+    username: config.username || undefined,
+    channel: config.channel || undefined,
+  };
+  return postJsonNotification(url, body, {label: 'Slack notification'});
+};
+
+const sendTelegramNotification = async (channel, notification) => {
+  const config = normalizeNotificationConfig(channel);
+  const botToken = String(config.botToken || '').trim();
+  const chatId = String(config.chatId || channel.target || '').trim();
+  if (!botToken) return {ok: false, message: 'Telegram Bot Token is required.'};
+  if (!chatId) return {ok: false, message: 'Telegram Chat ID is required.'};
+  const text = notificationText(notification);
+  const body = {
+    chat_id: chatId,
+    text: renderNotificationTemplate(config.textTemplate, notification, channel) || `${text.title}\n${text.message}`,
+    disable_web_page_preview: true,
+  };
+  if (config.parseMode) body.parse_mode = config.parseMode;
+  return postJsonNotification(`https://api.telegram.org/bot${botToken}/sendMessage`, body, {label: 'Telegram notification'});
+};
+
+const sendProviderWebhookNotification = async (channel, notification, label) => {
+  const config = normalizeNotificationConfig(channel);
+  const url = config.webhookUrl || config.url;
+  const text = notificationText(notification);
+  const body = {
+    provider: config.provider || 'custom',
+    to: config.recipients || config.phoneNumber || config.to || channel.target || '',
+    templateId: config.templateId || '',
+    subject: renderNotificationTemplate(config.subjectTemplate || config.subjectPrefix, notification, channel) || text.title,
+    text: renderNotificationTemplate(config.textTemplate, notification, channel) || text.message,
+    notification,
+  };
+  return postJsonNotification(url, body, {label});
+};
+
+const createTestNotification = () => ({
+  title: 'AI IoT Dashboard',
+  message: 'Notification channel test message.',
+  level: 'Info',
+  source: 'settings:test',
+  createdAt: new Date().toISOString(),
+});
+
 const testNotificationChannel = async (channel) => {
   if (!channel?.enabled) return {ok: false, message: 'Channel is disabled.'};
+  const notification = createTestNotification();
 
   if (channel.type === 'bark') {
     return sendBarkNotification(channel);
   }
 
   if (channel.type === 'webhook') {
-    const config = normalizeNotificationConfig(channel);
-    const url = config.url || channel.target;
-    if (!url) return {ok: false, message: 'Webhook URL is required.'};
-    try {
-      const response = await fetch(url, {
-        method: config.method || 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({title: 'AI IoT Dashboard', message: 'Notification channel test message.'}),
-      });
-      return {ok: response.ok, message: response.ok ? 'Webhook test sent.' : `Webhook test failed: ${response.status}`};
-    } catch (error) {
-      return {ok: false, message: `Webhook test failed: ${error.message || 'Unable to reach webhook URL.'}`};
-    }
+    return sendWebhookNotification(channel, notification);
+  }
+
+  if (channel.type === 'slack') {
+    return sendSlackNotification(channel, notification);
+  }
+
+  if (channel.type === 'telegram') {
+    return sendTelegramNotification(channel, notification);
+  }
+
+  if (channel.type === 'email') {
+    return sendProviderWebhookNotification(channel, notification, 'Email provider notification');
+  }
+
+  if (channel.type === 'sms') {
+    return sendProviderWebhookNotification(channel, notification, 'SMS provider notification');
+  }
+
+  if (channel.type === 'whatsapp') {
+    return sendProviderWebhookNotification(channel, notification, 'WhatsApp provider notification');
   }
 
   return {ok: false, message: `${channel.type || 'Unknown'} test connector is not implemented yet.`};
@@ -2211,15 +2335,22 @@ const sendNotificationToChannel = async (channel, notification) => {
     });
   }
   if (channel.type === 'webhook') {
-    const config = normalizeNotificationConfig(channel);
-    const url = config.url || channel.target;
-    if (!url) return {ok: false, message: 'Webhook URL is required.'};
-    const response = await fetch(url, {
-      method: config.method || 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify(notification),
-    });
-    return {ok: response.ok, message: response.ok ? 'Webhook notification sent.' : `Webhook failed: ${response.status}`};
+    return sendWebhookNotification(channel, notification);
+  }
+  if (channel.type === 'slack') {
+    return sendSlackNotification(channel, notification);
+  }
+  if (channel.type === 'telegram') {
+    return sendTelegramNotification(channel, notification);
+  }
+  if (channel.type === 'email') {
+    return sendProviderWebhookNotification(channel, notification, 'Email provider notification');
+  }
+  if (channel.type === 'sms') {
+    return sendProviderWebhookNotification(channel, notification, 'SMS provider notification');
+  }
+  if (channel.type === 'whatsapp') {
+    return sendProviderWebhookNotification(channel, notification, 'WhatsApp provider notification');
   }
   return {ok: false, message: `${channel.type || 'Unknown'} connector is not implemented.`};
 };

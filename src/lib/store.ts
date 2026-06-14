@@ -161,7 +161,7 @@ export interface WhiteLabelConfig {
 
 export interface NotificationChannel {
   id: string;
-  type: 'bark' | 'email' | 'webhook' | 'sms' | 'telegram' | 'slack';
+  type: 'bark' | 'email' | 'webhook' | 'sms' | 'telegram' | 'slack' | 'whatsapp';
   name: string;
   target: string;
   config?: Record<string, string>;
@@ -1230,17 +1230,19 @@ const isNotificationChannelConfigured = (channel: NotificationChannel) => {
   const config = channel.config || {};
   switch (channel.type) {
     case 'email':
-      return Boolean(config.recipients || channel.target);
+      return Boolean((config.webhookUrl || config.url) && (config.recipients || channel.target));
     case 'webhook':
       return Boolean(config.url || channel.target);
     case 'bark':
       return Boolean(config.deviceKey || channel.target);
     case 'sms':
-      return Boolean(config.phoneNumber || channel.target);
+      return Boolean((config.webhookUrl || config.url) && (config.phoneNumber || channel.target));
     case 'telegram':
-      return Boolean((config.botToken && config.chatId) || channel.target);
+      return Boolean(config.botToken && (config.chatId || channel.target));
     case 'slack':
       return Boolean(config.webhookUrl || channel.target);
+    case 'whatsapp':
+      return Boolean((config.webhookUrl || config.url) && (config.phoneNumber || channel.target));
     default:
       return Boolean(channel.target.trim());
   }
