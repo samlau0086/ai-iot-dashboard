@@ -5284,6 +5284,112 @@ app.get('/api/telemetry', async (req, res) => {
   }
 });
 
+app.get('/api/telemetry/compare', async (req, res) => {
+  try {
+    const metric = typeof req.query.metric === 'string' ? req.query.metric.trim() : '';
+    const source = typeof req.query.source === 'string' ? req.query.source.trim() : '';
+    const from = typeof req.query.from === 'string' ? req.query.from.trim() : '';
+    const to = typeof req.query.to === 'string' ? req.query.to.trim() : '';
+    const deviceIds = splitList(req.query.deviceIds);
+    const rowLimit = Math.max(100, Math.min(Number(req.query.limit || 5000), 20000));
+
+    if (!metric) {
+      res.status(400).json({error: 'metric is required', rows: []});
+      return;
+    }
+
+    const aggregateRows = (items) => {
+      const grouped = new Map();
+      items.forEach((item) => {
+        const value = Number(item.value);
+        if (!item.deviceId || !Number.isFinite(value)) return;
+        const receivedAt = item.receivedAt || item.received_at || '';
+        const current = grouped.get(item.deviceId) || {
+          deviceId: item.deviceId,
+          count: 0,
+          min: value,
+          max: value,
+          total: 0,
+          latest: value,
+          latestAt: receivedAt,
+          firstAt: receivedAt,
+        };
+        current.count += 1;
+        current.min = Math.min(current.min, value);
+        current.max = Math.max(current.max, value);
+        current.total += value;
+        if (!current.firstAt || (receivedAt && receivedAt < current.firstAt)) current.firstAt = receivedAt;
+        if (!current.latestAt || (receivedAt && receivedAt >= current.latestAt)) {
+          current.latest = value;
+          current.latestAt = receivedAt;
+        }
+        grouped.set(item.deviceId, current);
+      });
+
+      return Array.from(grouped.values())
+        .map((item) => ({
+          deviceId: item.deviceId,
+          count: item.count,
+          min: item.min,
+          max: item.max,
+          avg: item.count ? item.total / item.count : 0,
+          latest: item.latest,
+          latestAt: item.latestAt,
+          firstAt: item.firstAt,
+        }))
+        .sort((first, second) => String(first.deviceId).localeCompare(String(second.deviceId)));
+    };
+
+    if (db) {
+      const where = [`metrics ? $1`, `(metrics ->> $1) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'`];
+      const values = [metric];
+      const addParam = (value) => {
+        values.push(value);
+        return `$${values.length}`;
+      };
+
+      if (from) where.push(`received_at >= ${addParam(from)}::timestamptz`);
+      if (to) where.push(`received_at <= ${addParam(to)}::timestamptz`);
+      if (source) where.push(`source ILIKE ${addParam(`%${source}%`)}`);
+      if (deviceIds.length) where.push(`device_id = ANY(${addParam(deviceIds)}::text[])`);
+
+      const limitParam = addParam(rowLimit);
+      const result = await queryDb(
+        `SELECT device_id AS "deviceId",
+                received_at AS "receivedAt",
+                (metrics ->> $1)::double precision AS value
+         FROM telemetry_messages
+         WHERE ${where.join(' AND ')}
+         ORDER BY received_at ASC
+         LIMIT ${limitParam}`,
+        values
+      );
+      res.status(200).json({metric, from, to, rows: aggregateRows(result.rows)});
+      return;
+    }
+
+    const deviceSet = new Set(deviceIds);
+    const rows = telemetryMessages
+      .filter((message) => !from || message.received_at >= from)
+      .filter((message) => !to || message.received_at <= to)
+      .filter((message) => !source || String(message.source || '').toLowerCase().includes(source.toLowerCase()))
+      .map((message) => {
+        const deviceId = String(message.device_id || message.deviceId || message.id || '');
+        return {
+          deviceId,
+          receivedAt: message.received_at || message.timestamp || '',
+          value: Number((message.metrics || {})[metric]),
+        };
+      })
+      .filter((item) => (!deviceSet.size || deviceSet.has(item.deviceId)) && Number.isFinite(item.value))
+      .slice(-rowLimit);
+
+    res.status(200).json({metric, from, to, rows: aggregateRows(rows)});
+  } catch (error) {
+    res.status(500).json({error: error.message, rows: []});
+  }
+});
+
 app.get('/api/device-commands', async (req, res) => {
   try {
     const deviceId = typeof req.query.deviceId === 'string' ? req.query.deviceId : '';

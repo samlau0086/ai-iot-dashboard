@@ -97,10 +97,10 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 用户级 Ingest Token 管理
 - [x] 工业协议接入规划：Modbus RTU、Modbus TCP、CAN、LoRa、4G、Ethernet、WiFi
 - [x] 原始数据查看与查询
-- [ ] 指标筛选
-- [ ] 时间范围查询
-- [ ] 设备对比
-- [ ] 数据导出
+- [x] 指标筛选
+- [x] 时间范围查询
+- [x] 设备对比
+- [x] 数据导出
 - [x] Device Metrics Mapping：raw telemetry fields 可映射到标准 metrics，并配置显示名、单位、精度和 Primary 标记
 - [x] Device Data Quality：统一判定 Live / Stale / Offline / Never Reported，并在设备列表、详情、总览和 SCADA 中避免把过期数据当实时数据展示
 - [x] Device Ingest Diagnostics：设备详情页可诊断 MQTT/HTTP 绑定、最近 raw telemetry、mapping 覆盖率，并生成测试请求；Raw Data 可显示匹配设备或未匹配原因

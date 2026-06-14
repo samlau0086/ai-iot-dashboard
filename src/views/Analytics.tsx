@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Calendar, Loader2, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, BarChart3, Calendar, Download, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useAppStore, type ChartConfig } from '../lib/store';
 import { translations } from '../lib/i18n';
 import { ChartRenderer } from '../components/ChartRenderer';
@@ -19,6 +19,17 @@ type TelemetryMessage = {
   timestamp?: string;
   metrics?: Record<string, unknown>;
   [key: string]: unknown;
+};
+
+type CompareRow = {
+  deviceId: string;
+  count: number;
+  min: number;
+  max: number;
+  avg: number;
+  latest: number;
+  latestAt?: string;
+  firstAt?: string;
 };
 
 const CHART_TYPES: Array<{ value: ChartConfig['type']; label: string }> = [
@@ -187,6 +198,15 @@ const getChartTimeRange = (chartConf: ChartConfig) => {
   return { from, to };
 };
 
+const formatDateTime = (value?: string) => {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+  return parsed.toLocaleString();
+};
+
+const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+
 function AnalyticsChartCard({
   chartConf,
   devices,
@@ -327,6 +347,14 @@ export function Analytics() {
   const [precisionTouched, setPrecisionTouched] = useState(false);
   const [rangeFrom, setRangeFrom] = useState(() => toDateTimeLocal(new Date(Date.now() - 24 * 60 * 60 * 1000)));
   const [rangeTo, setRangeTo] = useState(() => toDateTimeLocal(new Date()));
+  const [compareSiteId, setCompareSiteId] = useState(activeSiteId || 'All');
+  const [compareDeviceIds, setCompareDeviceIds] = useState<string[]>([]);
+  const [compareMetricKey, setCompareMetricKey] = useState('');
+  const [compareFrom, setCompareFrom] = useState(() => toDateTimeLocal(new Date(Date.now() - 24 * 60 * 60 * 1000)));
+  const [compareTo, setCompareTo] = useState(() => toDateTimeLocal(new Date()));
+  const [compareRows, setCompareRows] = useState<CompareRow[]>([]);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareError, setCompareError] = useState('');
 
   const siteOptions = useMemo(() => [
     ...(hasFullDataAccess(currentUser) ? [{ id: 'All', name: 'All Sites', tenantName: 'All Tenants', tags: [] as string[] }] : []),
@@ -356,12 +384,33 @@ export function Analytics() {
   const metricOptionMeta = useMemo(() => (
     Object.fromEntries(metricOptions.map((metric) => [metric, getMetricDefaultsForDevices(metric, builderDevices)]))
   ), [builderDevices, metricOptions]);
+  const compareScopedDevices = useMemo(() => getDevicesForSite(compareSiteId), [accessibleSites, compareSiteId, devices]);
+  const compareDevices = useMemo(() => (
+    compareDeviceIds.length
+      ? compareScopedDevices.filter((device) => compareDeviceIds.includes(device.id))
+      : compareScopedDevices
+  ), [compareDeviceIds, compareScopedDevices]);
+  const compareMetricOptions = useMemo(() => getMetricOptionsForDevices(compareDevices), [compareDevices]);
+  const compareMetricMeta = useMemo(() => (
+    Object.fromEntries(compareMetricOptions.map((metric) => [metric, getMetricDefaultsForDevices(metric, compareDevices)]))
+  ), [compareDevices, compareMetricOptions]);
+  const compareDeviceNameByIdentifier = useMemo(() => {
+    const map = new Map<string, string>();
+    compareScopedDevices.forEach((device) => {
+      map.set(device.id, device.name);
+      if (device.config?.externalDeviceId) map.set(device.config.externalDeviceId, device.name);
+    });
+    return map;
+  }, [compareScopedDevices]);
 
   useEffect(() => {
     if (!siteOptions.some((site) => site.id === selectedSiteId)) {
       setSelectedSiteId(defaultAnalyticsSiteId);
     }
-  }, [defaultAnalyticsSiteId, selectedSiteId, siteOptions]);
+    if (!siteOptions.some((site) => site.id === compareSiteId)) {
+      setCompareSiteId(defaultAnalyticsSiteId);
+    }
+  }, [compareSiteId, defaultAnalyticsSiteId, selectedSiteId, siteOptions]);
 
   useEffect(() => {
     setSelectedDeviceIds([]);
@@ -371,12 +420,27 @@ export function Analytics() {
   }, [selectedSiteId]);
 
   useEffect(() => {
+    setCompareDeviceIds([]);
+    setCompareMetricKey('');
+    setCompareRows([]);
+    setCompareError('');
+  }, [compareSiteId]);
+
+  useEffect(() => {
     if (metricOptions.length === 0) {
       if (metricKey) setMetricKey('');
       return;
     }
     if (!metricKey || !metricOptions.includes(metricKey)) setMetricKey(metricOptions[0]);
   }, [metricKey, metricOptions]);
+
+  useEffect(() => {
+    if (compareMetricOptions.length === 0) {
+      if (compareMetricKey) setCompareMetricKey('');
+      return;
+    }
+    if (!compareMetricKey || !compareMetricOptions.includes(compareMetricKey)) setCompareMetricKey(compareMetricOptions[0]);
+  }, [compareMetricKey, compareMetricOptions]);
 
   useEffect(() => {
     if (!metricKey) return;
@@ -428,6 +492,81 @@ export function Analytics() {
     closeAddModal();
   };
 
+  const compareMeta = compareMetricKey ? compareMetricMeta[compareMetricKey] : null;
+  const comparePrecision = normalizePrecision(compareMeta?.precision ?? 2);
+  const formatCompareValue = (value: number) => {
+    if (!Number.isFinite(value)) return '-';
+    const formatted = value.toFixed(comparePrecision);
+    return compareMeta?.unit ? `${formatted} ${compareMeta.unit}` : formatted;
+  };
+
+  const getCompareIdentifiers = () => Array.from(new Set(
+    compareDevices.flatMap((device) => [
+      device.id,
+      device.config?.externalDeviceId || '',
+    ]).filter(Boolean)
+  ));
+
+  const queryCompare = async () => {
+    const metric = compareMetricKey || compareMetricOptions[0] || '';
+    if (!metric) {
+      setCompareError('No metric is available for the selected devices.');
+      setCompareRows([]);
+      return;
+    }
+
+    const identifiers = getCompareIdentifiers();
+    if (identifiers.length === 0) {
+      setCompareError('No devices are available in the selected Site.');
+      setCompareRows([]);
+      return;
+    }
+
+    setCompareLoading(true);
+    setCompareError('');
+    try {
+      const params = new URLSearchParams({
+        metric,
+        from: toIsoOrEmpty(compareFrom),
+        to: toIsoOrEmpty(compareTo),
+        deviceIds: identifiers.join(','),
+      });
+      const response = await fetch(`/api/telemetry/compare?${params.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Failed to compare telemetry.');
+      setCompareRows(Array.isArray(payload.rows) ? payload.rows : []);
+    } catch (error) {
+      setCompareError(error instanceof Error ? error.message : 'Failed to compare telemetry.');
+      setCompareRows([]);
+    } finally {
+      setCompareLoading(false);
+    }
+  };
+
+  const exportCompareCsv = () => {
+    const headers = ['Device', 'Device ID', 'Metric', 'Count', 'Min', 'Average', 'Max', 'Latest', 'Latest At', 'First At'];
+    const lines = compareRows.map((row) => [
+      compareDeviceNameByIdentifier.get(row.deviceId) || row.deviceId,
+      row.deviceId,
+      compareMetricKey,
+      row.count,
+      row.min,
+      row.avg,
+      row.max,
+      row.latest,
+      row.latestAt || '',
+      row.firstAt || '',
+    ].map(csvCell).join(','));
+    const blob = new Blob([[headers.map(csvCell).join(','), ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `device-compare-${compareMetricKey || 'metric'}-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    notifySuccess('Device comparison CSV exported.');
+  };
+
   return (
     <div className="space-y-6">
       <div className="sm:flex sm:items-center sm:justify-between">
@@ -449,6 +588,162 @@ export function Analytics() {
           Add Chart
         </button>
       </div>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+              <BarChart3 className="h-4 w-4 text-orange-500" />
+              Device Comparison
+            </h2>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Compare one metric across devices from telemetry logs within a selected time range.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={exportCompareCsv}
+            disabled={compareRows.length === 0}
+            className="inline-flex items-center gap-2 rounded border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            <Download className="h-4 w-4" />
+            Export CSV
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.2fr_1fr_1fr_auto]">
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Site</label>
+            <select
+              value={compareSiteId}
+              onChange={(event) => setCompareSiteId(event.target.value)}
+              className="mt-1 block w-full rounded border-0 bg-slate-50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+            >
+              {siteOptions.map((site) => (
+                <option key={site.id} value={site.id}>{site.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Devices</label>
+            <div className="mt-1 max-h-28 overflow-y-auto rounded border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900">
+              {compareScopedDevices.length > 0 ? compareScopedDevices.map((device) => (
+                <label key={device.id} className="flex items-center gap-2 py-1 text-xs text-slate-600 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={compareDeviceIds.includes(device.id)}
+                    onChange={(event) => {
+                      setCompareDeviceIds((current) => (
+                        event.target.checked
+                          ? [...current, device.id]
+                          : current.filter((id) => id !== device.id)
+                      ));
+                      setCompareRows([]);
+                    }}
+                    className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                  />
+                  <span className="min-w-0 truncate">{device.name}</span>
+                  <span className="ml-auto shrink-0 font-mono text-[10px] text-slate-400">{device.config?.externalDeviceId || device.id}</span>
+                </label>
+              )) : (
+                <p className="py-2 text-xs text-slate-500 dark:text-slate-400">No devices in this Site.</p>
+              )}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Leave empty to compare all devices in this Site.</p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Metric</label>
+            <select
+              value={compareMetricKey || compareMetricOptions[0] || ''}
+              onChange={(event) => {
+                setCompareMetricKey(event.target.value);
+                setCompareRows([]);
+              }}
+              disabled={compareMetricOptions.length === 0}
+              className="mt-1 block w-full rounded border-0 bg-slate-50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+            >
+              {compareMetricOptions.length > 0 ? compareMetricOptions.map((metric) => {
+                const meta = compareMetricMeta[metric];
+                const label = meta?.label && meta.label !== metric ? `${meta.label} (${metric})` : metric;
+                return <option key={metric} value={metric}>{meta?.unit ? `${label} / ${meta.unit}` : label}</option>;
+              }) : (
+                <option value="">No metrics available</option>
+              )}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">From</label>
+              <input
+                type="datetime-local"
+                value={compareFrom}
+                onChange={(event) => setCompareFrom(event.target.value)}
+                className="mt-1 block w-full rounded border-0 bg-slate-50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">To</label>
+              <input
+                type="datetime-local"
+                value={compareTo}
+                onChange={(event) => setCompareTo(event.target.value)}
+                className="mt-1 block w-full rounded border-0 bg-slate-50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+              />
+            </div>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={queryCompare}
+              disabled={compareLoading || compareMetricOptions.length === 0}
+              className="inline-flex w-full items-center justify-center gap-2 rounded border border-orange-500 bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60 xl:w-auto"
+            >
+              {compareLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Compare
+            </button>
+          </div>
+        </div>
+
+        {compareError && (
+          <div className="mt-4 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-600 dark:text-rose-300">
+            {compareError}
+          </div>
+        )}
+
+        <div className="mt-4 overflow-x-auto rounded border border-slate-200 dark:border-slate-800">
+          <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
+            <thead className="bg-slate-50 dark:bg-slate-900/70">
+              <tr>
+                {['Device', 'Samples', 'Min', 'Average', 'Max', 'Latest', 'Latest At'].map((heading) => (
+                  <th key={heading} className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{heading}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white dark:divide-slate-800 dark:bg-[#1c2128]">
+              {compareRows.length > 0 ? compareRows.map((row) => (
+                <tr key={row.deviceId}>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-700 dark:text-slate-200">
+                    <div className="font-medium">{compareDeviceNameByIdentifier.get(row.deviceId) || row.deviceId}</div>
+                    <div className="font-mono text-[11px] text-slate-400">{row.deviceId}</div>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{row.count}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{formatCompareValue(row.min)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{formatCompareValue(row.avg)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{formatCompareValue(row.max)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">{formatCompareValue(row.latest)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-500 dark:text-slate-400">{formatDateTime(row.latestAt)}</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                    {compareLoading ? 'Loading comparison...' : 'Run Compare to view device metric statistics.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {charts.length === 0 ? (
         <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-12 text-center dark:border-slate-700 dark:bg-[#1c2128]">
