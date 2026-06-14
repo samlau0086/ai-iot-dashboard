@@ -22,6 +22,7 @@ import { notifySuccess } from '../lib/toast';
 import { cn } from '../lib/utils';
 import { runAiCopilot, type AiCopilotAction, type AiCopilotResponse } from '../lib/aiCopilot';
 import { getAccessibleDevices, getAccessibleSites } from '../lib/featureAccess';
+import { apiJsonHeaders } from '../lib/apiAuth';
 
 type ChatMessage = {
   id: string;
@@ -65,6 +66,78 @@ const quickPrompts = [
   { text: 'Generate a workflow for the highest risk device.', icon: Sparkles },
   { text: 'Generate an operations report for this site.', icon: FileText },
 ];
+
+const buildCopilotContextSummary = (context: {
+  devices: any[];
+  alerts: any[];
+  workflows: any[];
+  charts: any[];
+  sites: any[];
+  activeSiteId: string;
+}) => ({
+  activeSiteId: context.activeSiteId,
+  devices: context.devices.slice(0, 80).map((device) => ({
+    id: device.id,
+    externalDeviceId: device.config?.externalDeviceId,
+    name: device.name,
+    type: device.type,
+    status: device.status,
+    siteId: device.siteId,
+    lastSeen: device.lastSeen,
+    metrics: device.metrics,
+  })),
+  alerts: context.alerts.slice(0, 80).map((alert) => ({
+    id: alert.id,
+    deviceId: alert.deviceId,
+    level: alert.level,
+    status: alert.status,
+    message: alert.message,
+    timestamp: alert.timestamp,
+  })),
+  workflows: context.workflows.slice(0, 40).map((workflow) => ({
+    id: workflow.id,
+    name: workflow.name,
+    enabled: workflow.enabled,
+    nodeCount: workflow.nodes?.length || 0,
+  })),
+  charts: context.charts.slice(0, 40).map((chart) => ({
+    id: chart.id,
+    title: chart.title,
+    type: chart.type,
+  })),
+  sites: context.sites.map((site) => ({ id: site.id, name: site.name, tenantId: site.tenantId })),
+});
+
+const mergeExternalCopilotResponse = (
+  localResponse: AiCopilotResponse,
+  payload: any
+): AiCopilotResponse => {
+  if (!payload?.usedExternal || !payload.external) {
+    return {
+      ...localResponse,
+      sources: [
+        ...localResponse.sources,
+        payload?.reason ? `External AI fallback: ${payload.reason}` : 'External AI fallback: provider not configured',
+      ],
+    };
+  }
+
+  const external = payload.external;
+  const externalRecommendations = Array.isArray(external.recommendations)
+    ? external.recommendations.map((item: unknown) => String(item)).filter(Boolean)
+    : [];
+
+  return {
+    ...localResponse,
+    title: external.title || localResponse.title,
+    answer: external.answer || localResponse.answer,
+    recommendations: externalRecommendations.length ? externalRecommendations : localResponse.recommendations,
+    sources: [
+      ...localResponse.sources,
+      `External AI: ${payload.provider || 'provider'} / ${payload.model || 'model'}${payload.latencyMs ? ` (${payload.latencyMs} ms)` : ''}`,
+    ],
+  };
+};
 
 export function AIInsights() {
   const navigate = useNavigate();
@@ -125,6 +198,28 @@ export function AIInsights() {
     navigate('/workflows');
   };
 
+  const enhanceWithExternalAi = async (submitText: string, localResponse: AiCopilotResponse) => {
+    try {
+      const response = await fetch('/api/ai-copilot/chat', {
+        method: 'POST',
+        headers: apiJsonHeaders(currentUser),
+        body: JSON.stringify({
+          query: submitText,
+          localResponse,
+          contextSummary: buildCopilotContextSummary(context),
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `External AI failed: ${response.status}`);
+      return mergeExternalCopilotResponse(localResponse, payload);
+    } catch (error) {
+      return mergeExternalCopilotResponse(localResponse, {
+        usedExternal: false,
+        reason: error instanceof Error ? error.message : 'External AI request failed',
+      });
+    }
+  };
+
   const submitPrompt = (textOverride?: string) => {
     const submitText = (textOverride || query).trim();
     if (!submitText || running) return;
@@ -137,17 +232,20 @@ export function AIInsights() {
       content: submitText,
     };
 
-    const response = runAiCopilot(submitText, context);
-    const assistantMessage: ChatMessage = {
-      id: `assistant-${Date.now()}`,
-      role: 'assistant',
-      content: response.answer,
-      response,
-    };
+    setMessages((current) => [...current, userMessage]);
 
     window.setTimeout(() => {
-      setMessages((current) => [...current, userMessage, assistantMessage]);
-      setRunning(false);
+      const localResponse = runAiCopilot(submitText, context);
+      void enhanceWithExternalAi(submitText, localResponse).then((response) => {
+        const assistantMessage: ChatMessage = {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          content: response.answer,
+          response,
+        };
+        setMessages((current) => [...current, assistantMessage]);
+        setRunning(false);
+      });
     }, 250);
   };
 

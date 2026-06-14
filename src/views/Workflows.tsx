@@ -14,6 +14,7 @@ import { WorkflowEditor } from './WorkflowEditor';
 import { confirmDelete } from '../lib/confirm';
 import { UnderDevelopmentBadge } from '../components/UnderDevelopmentBadge';
 import { notifySuccess } from '../lib/toast';
+import { apiJsonHeaders } from '../lib/apiAuth';
 import {
   WORKFLOW_TEMPLATES,
   createWorkflowFromTemplate,
@@ -50,8 +51,27 @@ type WorkflowRunLog = {
   finishedAt: string;
 };
 
+type WorkflowQueueStatus = {
+  adapter: string;
+  configuredMode: string;
+  concurrency: number;
+  maxPending: number;
+  pending: number;
+  running: number;
+  enqueued: number;
+  completed: number;
+  failed: number;
+  rejected: number;
+  lastEnqueuedAt?: string | null;
+  lastStartedAt?: string | null;
+  lastCompletedAt?: string | null;
+  lastFailedAt?: string | null;
+  lastError?: string;
+  note?: string;
+};
+
 export function Workflows() {
-  const { language, workflows, addWorkflow, updateWorkflow, deleteWorkflow } = useAppStore();
+  const { language, workflows, addWorkflow, updateWorkflow, deleteWorkflow, currentUser } = useAppStore();
   const t = translations[language];
   const [searchParams, setSearchParams] = useSearchParams();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -70,6 +90,8 @@ export function Workflows() {
   const [templateSearch, setTemplateSearch] = useState('');
   const [templateCategory, setTemplateCategory] = useState('all');
   const [selectedTemplateId, setSelectedTemplateId] = useState(WORKFLOW_TEMPLATES[0]?.id || '');
+  const [workflowQueueStatus, setWorkflowQueueStatus] = useState<WorkflowQueueStatus | null>(null);
+  const [workflowQueueError, setWorkflowQueueError] = useState('');
 
   const activeLogsWorkflow = workflows.find((workflow) => workflow.id === logsWorkflowId) || null;
   const filteredWorkflowLogs = useMemo(
@@ -180,9 +202,29 @@ export function Workflows() {
     }
   };
 
+  const loadWorkflowQueueStatus = async () => {
+    try {
+      const response = await fetch('/api/workflow-queue/status', {
+        headers: apiJsonHeaders(currentUser),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Failed to load workflow queue status.');
+      setWorkflowQueueStatus(payload as WorkflowQueueStatus);
+      setWorkflowQueueError('');
+    } catch (error) {
+      setWorkflowQueueError(error instanceof Error ? error.message : 'Failed to load workflow queue status.');
+    }
+  };
+
   useEffect(() => {
     loadWorkflowRunMetrics();
   }, []);
+
+  useEffect(() => {
+    loadWorkflowQueueStatus();
+    const intervalId = window.setInterval(loadWorkflowQueueStatus, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     const workflowId = searchParams.get('workflowId');
@@ -597,6 +639,45 @@ export function Workflows() {
           >
             <Plus className="-ml-0.5 h-5 w-5" aria-hidden="true" />
             {t.workflows.addWorkflow}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-slate-800 dark:bg-[#1c2128]">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="inline-flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+            <Activity className="h-4 w-4 text-orange-500" />
+            Workflow Queue
+          </span>
+          <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500 dark:border-slate-700 dark:text-slate-400">
+            {workflowQueueStatus?.adapter || 'loading'}
+          </span>
+          {workflowQueueStatus?.configuredMode && workflowQueueStatus.configuredMode !== workflowQueueStatus.adapter && (
+            <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+              {workflowQueueStatus.configuredMode}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+          {workflowQueueError ? (
+            <span className="text-red-500">{workflowQueueError}</span>
+          ) : (
+            <>
+              <span>pending <strong className="text-slate-900 dark:text-white">{workflowQueueStatus?.pending ?? 0}</strong></span>
+              <span>running <strong className="text-slate-900 dark:text-white">{workflowQueueStatus?.running ?? 0}</strong></span>
+              <span>done <strong className="text-slate-900 dark:text-white">{workflowQueueStatus?.completed ?? 0}</strong></span>
+              <span>failed <strong className="text-slate-900 dark:text-white">{workflowQueueStatus?.failed ?? 0}</strong></span>
+              <span>rejected <strong className="text-slate-900 dark:text-white">{workflowQueueStatus?.rejected ?? 0}</strong></span>
+              <span>concurrency <strong className="text-slate-900 dark:text-white">{workflowQueueStatus?.concurrency ?? '-'}</strong></span>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={loadWorkflowQueueStatus}
+            className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
           </button>
         </div>
       </div>

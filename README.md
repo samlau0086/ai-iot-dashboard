@@ -44,7 +44,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 工作流条件节点已调整为 IF / ELIF / ELSE 分支语义；多个 Trigger 采用任一触发即可进入后续流程。
 - [x] AI Copilot 基础闭环已完成：支持基于当前 Site / 设备 / 告警 / 工作流 / 图表上下文进行自然语言查询、异常解释、建议动作、CSV 报表生成和工作流草稿生成。
 - [x] Partner / White Label 基础闭环已完成：支持客户管理、客户子账号、项目/报价记录、白标品牌配置、自定义域名状态和角色/Profile 权限矩阵说明。
-- [ ] 下一阶段重点：控制连接器、AI Copilot 外部大模型接入、Partner 计费与更细粒度 RBAC。
+- [ ] 下一阶段重点：Partner 计费、TimescaleDB/Redis 生产化、更多现场协议连接器和生产级队列。
 
 ### V1: Energy Monitoring MVP
 
@@ -148,7 +148,8 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Advanced cron editor for Schedule Trigger with visual modes, generated cron, next-run preview, and validation.
 - [x] Node search and keyboard shortcuts.
 - [ ] Canvas mini map, grouping, comments, and collapse/expand.
-- [ ] Redis/BullMQ production execution queue for multi-instance deployments.
+- [x] Workflow execution queue foundation: telemetry, schedule, and webhook triggers enqueue runs into an asynchronous worker with concurrency, backpressure, and status reporting.
+- [ ] Redis/BullMQ production adapter for multi-instance deployments.
 - [x] Workflow run metrics: total runs, success rate, failure count, average duration, last run, and per-workflow summaries.
 - [x] Workflow run detail diagnostics: click metrics into logs, status filters, node duration, failed-node highlight, and copy input/output/error.
 - [x] Workflow run alerting: per-workflow failure, consecutive failure, failure-rate, slow-run, timeout, cooldown, and notification-channel policies.
@@ -182,7 +183,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] RAG 知识库
 - [x] PostgreSQL + pgvector 存储入口
 - [x] Tool Calling 执行报告下载、打开设备、打开分析页、创建工作流草稿等动作
-- [ ] 外部大模型接入：Gemini / OpenAI / 私有模型
+- [x] 外部大模型接入：AI Copilot 可选接入 Gemini / OpenAI-compatible / 私有模型，失败时自动回退本地 Copilot
 
 ### V7: Partner / White Label
 
@@ -212,7 +213,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] 审计日志导出：Settings -> Audit Logs 可按当前筛选结果导出 CSV，便于交付排查和安全留档
 - [x] 异常登录告警：登录锁定、未审核账号登录、弱密码注册尝试会写入系统通知，并可推送到已启用的通知渠道
 - [x] Refresh Token / Session Renewal：登录下发短期 access session 和长期 refresh cookie，页面恢复时 access 过期会自动刷新会话
-- [ ] 更完整的安全增强：IP 黑名单、异地登录检测和 refresh token 服务端吊销列表
+- [x] 安全增强：支持 IP 黑名单、新登录 IP 告警，以及 Refresh Token 服务端吊销/轮换列表
 
 ### 技术演进方向
 
@@ -415,6 +416,18 @@ Workflow 编辑页支持 **Run Alerting**。可为单个 workflow 启用运行�
 - 已支持 IF / ELIF / ELSE 条件分支；Trigger 触发后会按顺序匹配分支，只执行第一个匹配分支下的 actions。
 - `webhook` 动作会由后端真实 POST 到目标 URL；`mqtt_publish`、`start_backup`、`stop_device`、`device_control` 会写入控制中心命令日志；`notification` 会写入系统通知并推送到已启用通知渠道；`report` 会生成后端持久化 CSV 报告，可在 Reports 页面查看和下载；`email`、`whatsapp`、`ticket`、`ai_analyze` 会先写入执行步骤，作为后续真实连接器的队列记录。
 - 执行历史可通过 `GET /api/workflow-runs` 查看，也可以用 `GET /api/workflow-runs?workflowId=wf-xxx&limit=50` 查看单个工作流。
+- 真实触发入口会先进入后端 Workflow Queue，再由后台 worker 按并发数执行，避免 MQTT/HTTP ingest 请求被长工作流阻塞。队列状态可通过 `GET /api/workflow-queue/status` 查看；`/health` 也会返回简要队列积压信息。
+
+Workflow Queue 默认使用内置内存队列，适合单实例 VPS 和演示环境：
+
+```env
+WORKFLOW_QUEUE_MODE=memory
+WORKFLOW_QUEUE_CONCURRENCY=2
+WORKFLOW_QUEUE_MAX_PENDING=1000
+WORKFLOW_QUEUE_POLL_MS=100
+```
+
+如果后续部署多实例，建议切换到 Redis/BullMQ adapter。当前版本已经预留 `WORKFLOW_QUEUE_MODE=redis|bullmq` 与 `REDIS_URL` 配置位；在未安装 Redis adapter 时会自动回退到内存队列，并在状态接口里显示 `memory-fallback`。
 
 ### 使用控制中心
 
@@ -476,7 +489,11 @@ GET /api/audit-logs?limit=100&action=device_command.create&result=success
 
 Settings -> Audit Logs 页面支持按 action、result、actorId 和 limit 筛选记录，并可将当前加载结果导出为 CSV，字段包含时间、操作者、角色、IP、action、target、result 和 details JSON。
 
-Settings -> General 中的 **Security Alerts** 默认开启。登录失败达到锁定阈值、未审核账号尝试登录、弱密码注册被拦截时，系统会写入右上角 Notifications；如果启用了 **Push To Notification Channels**，还会推送到已启用的 Bark / Webhook / Slack / Telegram / Email / SMS / WhatsApp 通知渠道。告警默认按事件类型、邮箱和 IP 冷却 `5` 分钟，可通过 `SECURITY_ALERT_COOLDOWN_MS` 调整。
+Settings -> General 中的 **Security Alerts** 默认开启。登录失败达到锁定阈值、未审核账号尝试登录、弱密码注册被拦截、新登录 IP 命中时，系统会写入右上角 Notifications；如果启用了 **Push To Notification Channels**，还会推送到已启用的 Bark / Webhook / Slack / Telegram / Email / SMS / WhatsApp 通知渠道。告警默认按事件类型、邮箱和 IP 冷却 `5` 分钟，可通过 `SECURITY_ALERT_COOLDOWN_MS` 调整。
+
+安全设置还支持 **IP Blacklist**。可以在后台 Settings -> General 直接填写逗号或换行分隔的规则，也可以在部署环境变量 `AUTH_IP_BLACKLIST` 中设置默认黑名单。规则支持精确 IP、`*` 和简单前缀，例如 `203.0.113.10`、`192.168.1.*`。命中黑名单的登录、注册、会话刷新和受保护 API 请求会被拒绝，并写入审计日志和安全通知。
+
+登录会话采用短期 access session + 长期 refresh cookie。刷新会话时后端会轮换 refresh token，并把旧 refresh token 的 `jti` 写入服务端吊销列表；登出时也会吊销当前 refresh token，避免旧 cookie 被重复使用。
 
 当前支持三种下行方式：
 
@@ -536,7 +553,16 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 - 根据最高风险设备生成 Workflow Draft，包含指标触发、AI 分析和系统通知节点；生成后仍需要人工检查、保存和发布。
 - 使用内置知识库解释 MQTT、HTTP Push、Workflow、Provisioning、SCADA 等系统机制。
 
-当前实现是基于平台上下文的本地 Copilot 引擎，不依赖外部模型服务；后续可以将回答生成层接入 Gemini、OpenAI 或私有大模型，同时保留现有的工具调用和数据上下文。
+当前实现默认使用基于平台上下文的本地 Copilot 引擎，不依赖外部模型服务。生产环境可通过后端环境变量启用外部模型回答增强：
+
+```env
+AI_COPILOT_PROVIDER=openai   # openai / gemini / custom / local
+AI_COPILOT_API_KEY=...
+AI_COPILOT_MODEL=gpt-4o-mini
+AI_COPILOT_BASE_URL=         # OpenAI-compatible 或 custom provider 时可配置
+```
+
+启用后，前端会先生成本地确定性分析，再调用 `/api/ai-copilot/chat` 将当前 Site、设备、告警、工作流、图表摘要交给外部模型生成更自然的回答。外部模型不可用、配置缺失或请求失败时，系统会自动回退到本地 Copilot，并在 Sources 中显示 fallback 原因。
 
 ### Partner / White Label
 
@@ -585,8 +611,14 @@ Modbus、CAN、PLC 等现场协议仍建议由边缘网关转换执行：Dashboa
 | `AUTH_REFRESH_COOKIE_NAME` | 服务端 HttpOnly Refresh Cookie 名称，默认 `ai_iot_refresh`。 |
 | `AUTH_PASSWORD_MIN_LENGTH` | 注册密码最小长度，默认 `10`，最低不小于 `8`。 |
 | `AUTH_PASSWORD_REQUIRED_CLASSES` | 注册密码需要满足的字符类别数量，默认 `3`，类别包括大写、小写、数字、符号。 |
+| `AUTH_IP_BLACKLIST` | 生产环境默认 IP 黑名单，支持逗号或换行分隔，规则可为精确 IP、`*` 或 `192.168.1.*` 这类简单前缀。 |
 | `SECURITY_ALERTS_ENABLED` | 是否启用安全告警，设置为 `false` 可全局关闭，默认开启。 |
 | `SECURITY_ALERT_COOLDOWN_MS` | 异常登录/弱密码等安全告警冷却时间，默认 `300000`。 |
+| `WORKFLOW_QUEUE_MODE` | 工作流执行队列模式，默认 `memory`；`redis` / `bullmq` 为生产 adapter 预留值，未安装 adapter 时会回退到内存队列。 |
+| `WORKFLOW_QUEUE_CONCURRENCY` | 工作流后台 worker 并发数，默认 `2`。 |
+| `WORKFLOW_QUEUE_MAX_PENDING` | 内存队列最大待执行任务数，默认 `1000`。 |
+| `WORKFLOW_QUEUE_POLL_MS` | 内存队列消费轮询间隔，默认 `100`。 |
+| `REDIS_URL` | Redis/BullMQ adapter 的连接字符串，后续多实例部署时使用。 |
 | `AUDIT_LOG_BUFFER_SIZE` | 未配置 PostgreSQL 时的内存审计日志保留条数，默认 `1000`。 |
 
 `VPS_DEPLOY_PATH` 指向的目录会由工作流自动执行 `mkdir -p` 创建，但 `VPS_USER` 必须有创建和写入权限。

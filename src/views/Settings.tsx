@@ -1315,7 +1315,7 @@ export function Settings() {
                 <label className="flex items-center justify-between gap-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900/60">
                   <span>
                     <span className="block font-medium text-slate-800 dark:text-slate-200">Push To Notification Channels</span>
-                    <span className="block text-xs text-slate-500 dark:text-slate-400">Also send enabled Bark/Webhook notification channels when a security alert fires.</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">Also send enabled notification channels when a security alert fires.</span>
                   </span>
                   <input
                     type="checkbox"
@@ -1323,6 +1323,32 @@ export function Settings() {
                     onChange={(event) => updateSecuritySettings({ securityAlertChannelsEnabled: event.target.checked })}
                     disabled={!securitySettings.securityAlertsEnabled}
                     className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 disabled:opacity-50"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900/60">
+                  <span>
+                    <span className="block font-medium text-slate-800 dark:text-slate-200">New Login IP Alerts</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">Alert when an approved user signs in from a different IP than their previous login.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={securitySettings.unusualLoginAlertsEnabled !== false}
+                    onChange={(event) => updateSecuritySettings({ unusualLoginAlertsEnabled: event.target.checked })}
+                    disabled={!securitySettings.securityAlertsEnabled}
+                    className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 disabled:opacity-50"
+                  />
+                </label>
+                <label className="block rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900/60">
+                  <span className="block font-medium text-slate-800 dark:text-slate-200">IP Blacklist</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    Comma or newline separated IP rules. Supports exact IP, `*`, and simple prefixes like `192.168.1.*`.
+                  </span>
+                  <textarea
+                    value={securitySettings.ipBlacklist || ''}
+                    onChange={(event) => updateSecuritySettings({ ipBlacklist: event.target.value })}
+                    rows={3}
+                    className="mt-2 block w-full rounded-md border-0 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-orange-500 dark:bg-slate-950 dark:text-white dark:ring-slate-700"
+                    placeholder={'203.0.113.10\n192.168.1.*'}
                   />
                 </label>
               </div>

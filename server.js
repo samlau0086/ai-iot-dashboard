@@ -30,6 +30,8 @@ const deviceControlCommands = [];
 const accessEvents = [];
 const systemNotifications = [];
 const auditLogs = [];
+let revokedRefreshTokens = [];
+let authLoginSecurityState = {};
 const realtimeClients = new Set();
 const maxTelemetryMessages = Number(process.env.IOT_TELEMETRY_BUFFER_SIZE || 500);
 const maxWorkflowRuns = Number(process.env.WORKFLOW_RUN_BUFFER_SIZE || 500);
@@ -37,6 +39,14 @@ const maxDeviceControlCommands = Number(process.env.DEVICE_CONTROL_BUFFER_SIZE |
 const maxAccessEvents = Number(process.env.ACCESS_EVENT_BUFFER_SIZE || 500);
 const maxSystemNotifications = Number(process.env.SYSTEM_NOTIFICATION_BUFFER_SIZE || 500);
 const maxAuditLogs = Number(process.env.AUDIT_LOG_BUFFER_SIZE || 1000);
+const aiCopilotProvider = String(process.env.AI_COPILOT_PROVIDER || '').trim().toLowerCase();
+const aiCopilotApiKey = String(process.env.AI_COPILOT_API_KEY || process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || '').trim();
+const aiCopilotModel = String(process.env.AI_COPILOT_MODEL || (aiCopilotProvider === 'gemini' ? 'gemini-1.5-flash' : 'gpt-4o-mini')).trim();
+const aiCopilotBaseUrl = String(process.env.AI_COPILOT_BASE_URL || '').trim().replace(/\/+$/, '');
+const workflowQueueMode = String(process.env.WORKFLOW_QUEUE_MODE || 'memory').trim().toLowerCase();
+const workflowQueueConcurrency = Math.max(1, Math.min(Number(process.env.WORKFLOW_QUEUE_CONCURRENCY || 2), 20));
+const workflowQueueMaxPending = Math.max(50, Number(process.env.WORKFLOW_QUEUE_MAX_PENDING || 1000));
+const workflowQueuePollMs = Math.max(25, Number(process.env.WORKFLOW_QUEUE_POLL_MS || 100));
 const authFailedLoginWindowMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_WINDOW_MS || 10 * 60 * 1000));
 const authFailedLoginMaxAttempts = Math.max(1, Number(process.env.AUTH_FAILED_LOGIN_MAX_ATTEMPTS || 5));
 const authFailedLoginLockMs = Math.max(60000, Number(process.env.AUTH_FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
@@ -49,7 +59,8 @@ const splitTopics = (value) => Array.isArray(value)
   : String(value || '').split(',').map((topic) => topic.trim()).filter(Boolean);
 const splitList = (value) => Array.isArray(value)
   ? value.map((item) => String(item).trim()).filter(Boolean)
-  : String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+  : String(value || '').split(/[,\n\r]+/).map((item) => item.trim()).filter(Boolean);
+const authIpBlacklist = splitList(process.env.AUTH_IP_BLACKLIST || '');
 const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 const authSessionSecret = process.env.AUTH_SESSION_SECRET || process.env.JWT_SECRET || 'dev-session-secret-change-me';
@@ -158,6 +169,48 @@ const getRequestIp = (req) => {
   return forwardedFor || req.ip || req.socket?.remoteAddress || 'unknown';
 };
 
+const normalizedIp = (value) => String(value || '').trim().replace(/^::ffff:/, '');
+
+const ipMatchesRule = (ip, rule) => {
+  const normalizedRule = normalizedIp(rule);
+  const normalizedRequestIp = normalizedIp(ip);
+  if (!normalizedRule) return false;
+  if (normalizedRule === '*' || normalizedRule === normalizedRequestIp) return true;
+  if (normalizedRule.endsWith('.*')) return normalizedRequestIp.startsWith(normalizedRule.slice(0, -1));
+  return false;
+};
+
+const getSecuritySettings = async () => {
+  const state = await getDashboardState();
+  return state.securitySettings || {};
+};
+
+const isRequestIpBlocked = async (req) => {
+  const ip = getRequestIp(req);
+  const settings = await getSecuritySettings();
+  const rules = [
+    ...authIpBlacklist,
+    ...splitList(settings.ipBlacklist || ''),
+  ];
+  return {
+    blocked: rules.some((rule) => ipMatchesRule(ip, rule)),
+    ip,
+  };
+};
+
+const rejectBlockedIp = async (req, res, actionLabel = 'this action') => {
+  const result = await isRequestIpBlocked(req);
+  if (!result.blocked) return false;
+  await writeAuditLog(req, {id: null, name: result.ip, role: null}, 'auth.ip_blocked', 'ip', result.ip, 'failed', {actionLabel});
+  await dispatchSecurityAlert('ip_blocked', {
+    ip: result.ip,
+    level: 'Critical',
+    message: `Blocked IP ${result.ip} attempted to perform ${actionLabel}.`,
+  });
+  res.status(403).json({ok: false, message: 'This IP address is blocked by security policy.'});
+  return true;
+};
+
 const getLoginRateLimitKey = (req, email) => `${getRequestIp(req)}:${String(email || '').toLowerCase()}`;
 
 const getLoginRateLimitState = (req, email) => {
@@ -190,6 +243,44 @@ const recordLoginFailure = (key) => {
 
 const clearLoginFailures = (key) => {
   authLoginFailures.delete(key);
+};
+
+const recordSuccessfulLoginSecurityState = async (req, user) => {
+  if (!user?.id) return;
+  const ip = getRequestIp(req);
+  const userAgent = req.get('user-agent') || '';
+  const state = db ? await getAppState('auth_login_security_state') : null;
+  const currentState = db
+    ? (state && typeof state === 'object' ? state : {})
+    : authLoginSecurityState;
+  const previous = currentState[user.id] || null;
+  const changedIp = previous?.lastIp && previous.lastIp !== ip;
+  const nextState = {
+    ...currentState,
+    [user.id]: {
+      lastIp: ip,
+      lastUserAgent: userAgent,
+      lastLoginAt: new Date().toISOString(),
+      previousIp: previous?.lastIp || '',
+    },
+  };
+  if (db) await setAppState('auth_login_security_state', nextState);
+  else authLoginSecurityState = nextState;
+
+  const settings = await getSecuritySettings();
+  if (changedIp && settings.unusualLoginAlertsEnabled !== false) {
+    await writeAuditLog(req, publicAuthUser(user), 'auth.login_unusual_ip', 'user', user.id, 'success', {
+      previousIp: previous.lastIp,
+      currentIp: ip,
+      previousLoginAt: previous.lastLoginAt,
+    });
+    await dispatchSecurityAlert('unusual_login', {
+      email: user.email,
+      ip,
+      previousIp: previous.lastIp,
+      message: `User ${user.email || user.name || user.id} signed in from a new IP ${ip}. Previous IP: ${previous.lastIp}.`,
+    });
+  }
 };
 
 const writeAuditLog = async (req, actor, action, targetType, targetId, result = 'success', details = {}) => {
@@ -768,6 +859,7 @@ const createAuthToken = (user, ttlSeconds, tokenType) => {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     sub: user.id,
+    jti: createId(tokenType === 'AI-IOT-REFRESH' ? 'refresh' : 'session'),
     iat: now,
     exp: now + ttlSeconds,
     type: tokenType,
@@ -835,7 +927,7 @@ const getRefreshTokenFromRequest = (req) => {
   return getCookieValue(req, authRefreshCookieName);
 };
 
-const verifyAuthToken = async (token, expectedType = 'AI-IOT-SESSION') => {
+const decodeAuthTokenPayload = (token, expectedType = 'AI-IOT-SESSION', allowExpired = false) => {
   if (!token) return null;
   const parts = String(token).split('.');
   if (parts.length !== 3) return null;
@@ -859,7 +951,60 @@ const verifyAuthToken = async (token, expectedType = 'AI-IOT-SESSION') => {
     decodedHeader = null;
   }
   if ((decodedPayload.type && decodedPayload.type !== expectedType) || (decodedHeader?.typ && decodedHeader.typ !== expectedType)) return null;
-  if (!decodedPayload?.sub || Number(decodedPayload.exp || 0) < Math.floor(Date.now() / 1000)) return null;
+  if (!decodedPayload?.sub || (!allowExpired && Number(decodedPayload.exp || 0) < Math.floor(Date.now() / 1000))) return null;
+  return decodedPayload;
+};
+
+const getRevokedRefreshTokens = async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const saved = db ? await getAppState('revoked_refresh_tokens') : revokedRefreshTokens;
+  const list = Array.isArray(saved) ? saved : [];
+  const active = list.filter((item) => Number(item.expiresAt || 0) > now);
+  if (active.length !== list.length) {
+    await saveRevokedRefreshTokens(active);
+  }
+  return active;
+};
+
+const saveRevokedRefreshTokens = async (tokens) => {
+  const nextTokens = Array.isArray(tokens) ? tokens.slice(-2000) : [];
+  if (db) {
+    await setAppState('revoked_refresh_tokens', nextTokens);
+  } else {
+    revokedRefreshTokens = nextTokens;
+  }
+  return nextTokens;
+};
+
+const isRefreshTokenRevoked = async (jti) => {
+  if (!jti) return false;
+  const revoked = await getRevokedRefreshTokens();
+  return revoked.some((item) => item.jti === jti);
+};
+
+const revokeRefreshToken = async (token, reason = 'revoked') => {
+  const payload = decodeAuthTokenPayload(token, 'AI-IOT-REFRESH', true);
+  if (!payload?.jti) return false;
+  const revoked = await getRevokedRefreshTokens();
+  if (!revoked.some((item) => item.jti === payload.jti)) {
+    await saveRevokedRefreshTokens([
+      ...revoked,
+      {
+        jti: payload.jti,
+        userId: payload.sub,
+        reason,
+        revokedAt: new Date().toISOString(),
+        expiresAt: Number(payload.exp || 0),
+      },
+    ]);
+  }
+  return true;
+};
+
+const verifyAuthToken = async (token, expectedType = 'AI-IOT-SESSION') => {
+  const decodedPayload = decodeAuthTokenPayload(token, expectedType);
+  if (!decodedPayload) return null;
+  if (expectedType === 'AI-IOT-REFRESH' && await isRefreshTokenRevoked(decodedPayload.jti)) return null;
 
   const users = await getAuthUsers();
   const user = users.find((item) => item.id === decodedPayload.sub && item.status === 'approved');
@@ -880,6 +1025,7 @@ const getApiActor = async (req) => {
 };
 
 const requireApiActorRole = async (req, res, allowedRoles, actionLabel = 'this action') => {
+  if (await rejectBlockedIp(req, res, actionLabel)) return null;
   const actor = await getApiActor(req);
   if (!actor.id || !actor.role) {
     res.status(401).json({error: `login required to perform ${actionLabel}`});
@@ -2482,6 +2628,132 @@ const createTestNotification = () => ({
   createdAt: new Date().toISOString(),
 });
 
+const buildAiCopilotPrompt = ({query = '', localResponse = {}, contextSummary = {}} = {}) => [
+  'You are an industrial IoT operations copilot.',
+  'Use the provided dashboard context and local deterministic analysis.',
+  'Return concise, operator-friendly guidance. Do not invent device data that is not present.',
+  'Respond as JSON with keys: title, answer, recommendations.',
+  '',
+  `User question: ${query}`,
+  '',
+  `Local analysis JSON: ${JSON.stringify(localResponse).slice(0, 12000)}`,
+  '',
+  `Context summary JSON: ${JSON.stringify(contextSummary).slice(0, 8000)}`,
+].join('\n');
+
+const parseAiCopilotText = (text) => {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return {};
+  const jsonCandidate = trimmed.match(/\{[\s\S]*\}/)?.[0] || trimmed;
+  try {
+    const parsed = JSON.parse(jsonCandidate);
+    return parsed && typeof parsed === 'object' ? parsed : {answer: trimmed};
+  } catch {
+    return {answer: trimmed};
+  }
+};
+
+const callOpenAiCompatibleCopilot = async (prompt) => {
+  const baseUrl = aiCopilotBaseUrl || 'https://api.openai.com/v1';
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${aiCopilotApiKey}`,
+    },
+    body: JSON.stringify({
+      model: aiCopilotModel,
+      messages: [
+        {role: 'system', content: 'You are a careful industrial IoT operations assistant.'},
+        {role: 'user', content: prompt},
+      ],
+      temperature: 0.2,
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error?.message || `OpenAI-compatible request failed: ${response.status}`);
+  return parseAiCopilotText(payload.choices?.[0]?.message?.content || '');
+};
+
+const callGeminiCopilot = async (prompt) => {
+  const baseUrl = aiCopilotBaseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+  const url = `${baseUrl}/models/${encodeURIComponent(aiCopilotModel)}:generateContent?key=${encodeURIComponent(aiCopilotApiKey)}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({
+      contents: [{role: 'user', parts: [{text: prompt}]}],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: 'application/json',
+      },
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error?.message || `Gemini request failed: ${response.status}`);
+  const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n') || '';
+  return parseAiCopilotText(text);
+};
+
+const callCustomCopilot = async ({query, localResponse, contextSummary, prompt}) => {
+  if (!aiCopilotBaseUrl) throw new Error('AI_COPILOT_BASE_URL is required for custom provider.');
+  const headers = {'content-type': 'application/json'};
+  if (aiCopilotApiKey) headers.authorization = `Bearer ${aiCopilotApiKey}`;
+  const response = await fetch(aiCopilotBaseUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: aiCopilotModel,
+      query,
+      prompt,
+      localResponse,
+      contextSummary,
+    }),
+  });
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = {answer: text};
+  }
+  if (!response.ok) throw new Error(payload.error || payload.message || `Custom AI request failed: ${response.status}`);
+  return payload;
+};
+
+const callExternalAiCopilot = async ({query, localResponse, contextSummary}) => {
+  if (!aiCopilotProvider || aiCopilotProvider === 'local' || aiCopilotProvider === 'disabled') {
+    return {usedExternal: false, reason: 'External AI provider is not configured.'};
+  }
+  if (!aiCopilotApiKey && aiCopilotProvider !== 'custom') {
+    return {usedExternal: false, reason: 'AI_COPILOT_API_KEY is not configured.'};
+  }
+
+  const prompt = buildAiCopilotPrompt({query, localResponse, contextSummary});
+  const startedAt = Date.now();
+  try {
+    const external = aiCopilotProvider === 'gemini'
+      ? await callGeminiCopilot(prompt)
+      : aiCopilotProvider === 'custom'
+        ? await callCustomCopilot({query, localResponse, contextSummary, prompt})
+        : await callOpenAiCompatibleCopilot(prompt);
+    return {
+      usedExternal: true,
+      provider: aiCopilotProvider,
+      model: aiCopilotModel,
+      latencyMs: Date.now() - startedAt,
+      external,
+    };
+  } catch (error) {
+    return {
+      usedExternal: false,
+      provider: aiCopilotProvider,
+      model: aiCopilotModel,
+      reason: error.message || 'External AI request failed.',
+    };
+  }
+};
+
 const testNotificationChannel = async (channel) => {
   if (!channel?.enabled) return {ok: false, message: 'Channel is disabled.'};
   const notification = createTestNotification();
@@ -2622,6 +2894,8 @@ const dispatchSecurityAlert = async (type, payload = {}) => {
     login_locked: 'Security alert: login temporarily locked',
     unapproved_login: 'Security alert: unapproved account login attempt',
     weak_password_register: 'Security alert: weak password registration attempt',
+    unusual_login: 'Security alert: new login IP detected',
+    ip_blocked: 'Security alert: blocked IP attempt',
   };
   const notification = await persistSystemNotification({
     title: titleByType[type] || 'Security alert',
@@ -4168,6 +4442,85 @@ const executeWorkflow = async (workflow, trigger, event, options = {}) => {
   }, workflow);
 };
 
+const workflowQueuePending = [];
+const workflowQueueRunning = new Map();
+const workflowQueueStats = {
+  mode: workflowQueueMode,
+  adapter: workflowQueueMode === 'redis' || workflowQueueMode === 'bullmq' ? 'memory-fallback' : 'memory',
+  enqueued: 0,
+  started: 0,
+  completed: 0,
+  failed: 0,
+  rejected: 0,
+  lastEnqueuedAt: null,
+  lastStartedAt: null,
+  lastCompletedAt: null,
+  lastFailedAt: null,
+  lastError: '',
+};
+
+const workflowQueueStatus = () => ({
+  ...workflowQueueStats,
+  configuredMode: workflowQueueMode,
+  concurrency: workflowQueueConcurrency,
+  maxPending: workflowQueueMaxPending,
+  pending: workflowQueuePending.length,
+  running: workflowQueueRunning.size,
+  note: workflowQueueStats.adapter === 'memory-fallback'
+    ? 'WORKFLOW_QUEUE_MODE requested Redis/BullMQ, but this build uses the in-process queue until the Redis adapter is installed.'
+    : 'In-process workflow queue is active.',
+});
+
+const enqueueWorkflowRun = async ({workflow, trigger, event, reason = 'event'} = {}) => {
+  if (!workflow || !trigger || !event) return {queued: false, reason: 'invalid_job'};
+  if (workflowQueuePending.length >= workflowQueueMaxPending) {
+    workflowQueueStats.rejected += 1;
+    workflowQueueStats.lastError = `Workflow queue is full (${workflowQueueMaxPending} pending jobs).`;
+    console.warn(workflowQueueStats.lastError);
+    return {queued: false, reason: 'queue_full'};
+  }
+
+  const job = {
+    id: createId('wfq'),
+    workflow,
+    trigger,
+    event: sanitizeWorkflowLogValue(event, {maxDepth: 8, maxArrayLength: 200, maxStringLength: 4000}),
+    reason,
+    enqueuedAt: new Date().toISOString(),
+  };
+  workflowQueuePending.push(job);
+  workflowQueueStats.enqueued += 1;
+  workflowQueueStats.lastEnqueuedAt = job.enqueuedAt;
+  drainWorkflowQueue();
+  return {queued: true, jobId: job.id};
+};
+
+const runWorkflowQueueJob = async (job) => {
+  workflowQueueRunning.set(job.id, job);
+  workflowQueueStats.started += 1;
+  workflowQueueStats.lastStartedAt = new Date().toISOString();
+  try {
+    await executeWorkflow(job.workflow, job.trigger, job.event, {queueJobId: job.id, queueReason: job.reason});
+    workflowQueueStats.completed += 1;
+    workflowQueueStats.lastCompletedAt = new Date().toISOString();
+  } catch (error) {
+    workflowQueueStats.failed += 1;
+    workflowQueueStats.lastFailedAt = new Date().toISOString();
+    workflowQueueStats.lastError = error.message || 'Workflow queue job failed.';
+    console.error('Workflow queue job failed:', error);
+  } finally {
+    workflowQueueRunning.delete(job.id);
+    setTimeout(drainWorkflowQueue, workflowQueuePollMs);
+  }
+};
+
+function drainWorkflowQueue() {
+  while (workflowQueueRunning.size < workflowQueueConcurrency && workflowQueuePending.length > 0) {
+    const job = workflowQueuePending.shift();
+    void runWorkflowQueueJob(job);
+  }
+}
+
 const testWorkflowNode = async ({workflow, nodeId, event = {}, context = {}}) => {
   if (!workflow || !Array.isArray(workflow.nodes)) {
     throw new Error('Workflow draft is required.');
@@ -4532,6 +4885,8 @@ const validateWorkflowDraft = async (workflow) => {
 const dispatchWorkflowEvent = async (event) => {
   const workflows = await getDashboardWorkflows();
   const enabledWorkflows = workflows.filter((workflow) => workflow?.enabled);
+  const queued = [];
+  const rejected = [];
 
   await Promise.all(enabledWorkflows.map(async (workflow) => {
     const executableWorkflow = getExecutableWorkflow(workflow);
@@ -4539,9 +4894,22 @@ const dispatchWorkflowEvent = async (event) => {
     const matchedTrigger = triggers.find((trigger) => triggerMatchesEvent(trigger, event));
 
     if (matchedTrigger && shouldExecuteWorkflowTrigger(executableWorkflow, matchedTrigger, event)) {
-      await executeWorkflow(executableWorkflow, matchedTrigger, event);
+      const result = await enqueueWorkflowRun({
+        workflow: executableWorkflow,
+        trigger: matchedTrigger,
+        event,
+        reason: event.type || 'event',
+      });
+      (result.queued ? queued : rejected).push({
+        workflowId: executableWorkflow.id,
+        workflowName: executableWorkflow.name,
+        triggerId: matchedTrigger.id,
+        ...result,
+      });
     }
   }));
+
+  return {queued, rejected};
 };
 
 const runScheduledWorkflows = async () => {
@@ -4572,7 +4940,12 @@ const runScheduledWorkflows = async () => {
     };
 
     if (shouldExecuteWorkflowTrigger(executableWorkflow, scheduleTrigger, scheduleEvent)) {
-      await executeWorkflow(executableWorkflow, scheduleTrigger, scheduleEvent);
+      await enqueueWorkflowRun({
+        workflow: executableWorkflow,
+        trigger: scheduleTrigger,
+        event: scheduleEvent,
+        reason: 'schedule',
+      });
     }
   }
 };
@@ -4938,11 +5311,22 @@ app.use(express.static(distDir, {
 }));
 
 app.get('/health', (_req, res) => {
-  res.status(200).json({status: 'ok'});
+  const queue = workflowQueueStatus();
+  res.status(200).json({
+    status: 'ok',
+    workflowQueue: {
+      adapter: queue.adapter,
+      pending: queue.pending,
+      running: queue.running,
+      failed: queue.failed,
+      rejected: queue.rejected,
+    },
+  });
 });
 
 app.post('/api/auth/register', async (req, res) => {
   try {
+    if (await rejectBlockedIp(req, res, 'register')) return;
     const payload = req.body || {};
     const email = String(payload.email || '').trim().toLowerCase();
     const name = String(payload.name || '').trim();
@@ -4995,6 +5379,7 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   try {
+    if (await rejectBlockedIp(req, res, 'login')) return;
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
     const rateLimit = getLoginRateLimitState(req, email);
@@ -5047,6 +5432,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     clearLoginFailures(rateLimit.key);
     await writeAuditLog(req, publicAuthUser(user), 'auth.login', 'user', user.id, 'success');
+    await recordSuccessfulLoginSecurityState(req, user);
     const sessionToken = createSessionToken(user);
     const refreshToken = createRefreshToken(user);
     setAuthCookies(req, res, sessionToken, refreshToken);
@@ -5065,6 +5451,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/auth/session', async (req, res) => {
   try {
+    if (await rejectBlockedIp(req, res, 'read session')) return;
     const user = await verifySessionToken(getSessionTokenFromRequest(req));
     if (!user) {
       res.status(401).json({ok: false, message: 'Session expired or invalid.'});
@@ -5078,7 +5465,9 @@ app.get('/api/auth/session', async (req, res) => {
 
 app.post('/api/auth/refresh', async (req, res) => {
   try {
-    const user = await verifyRefreshToken(getRefreshTokenFromRequest(req));
+    if (await rejectBlockedIp(req, res, 'refresh session')) return;
+    const currentRefreshToken = getRefreshTokenFromRequest(req);
+    const user = await verifyRefreshToken(currentRefreshToken);
     if (!user) {
       clearAuthCookies(req, res);
       await writeAuditLog(req, {id: null, name: '', role: null}, 'auth.refresh', 'session', 'refresh', 'failed', {reason: 'invalid_or_expired_refresh'});
@@ -5086,8 +5475,10 @@ app.post('/api/auth/refresh', async (req, res) => {
       return;
     }
 
+    await revokeRefreshToken(currentRefreshToken, 'rotated');
     const sessionToken = createSessionToken(user);
-    setAuthCookies(req, res, sessionToken);
+    const refreshToken = createRefreshToken(user);
+    setAuthCookies(req, res, sessionToken, refreshToken);
     await writeAuditLog(req, user, 'auth.refresh', 'user', user.id, 'success');
     res.status(200).json({
       ok: true,
@@ -5095,6 +5486,7 @@ app.post('/api/auth/refresh', async (req, res) => {
       user,
       sessionToken,
       expiresIn: authSessionTtlSeconds,
+      refreshExpiresIn: authRefreshTtlSeconds,
     });
   } catch (error) {
     clearAuthCookies(req, res);
@@ -5105,6 +5497,7 @@ app.post('/api/auth/refresh', async (req, res) => {
 app.post('/api/auth/logout', async (req, res) => {
   try {
     const actor = await getApiActor(req);
+    await revokeRefreshToken(getRefreshTokenFromRequest(req), 'logout');
     clearAuthCookies(req, res);
     if (actor?.id) {
       await writeAuditLog(req, actor, 'auth.logout', 'user', actor.id, 'success');
@@ -6433,6 +6826,26 @@ app.get('/api/audit-logs', async (req, res) => {
   }
 });
 
+app.post('/api/ai-copilot/chat', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Operator', 'Viewer', 'Partner', 'Customer'], 'use external AI Copilot'))) return;
+    const {query = '', localResponse = {}, contextSummary = {}} = req.body || {};
+    const result = await callExternalAiCopilot({query, localResponse, contextSummary});
+    if (aiCopilotProvider && !['local', 'disabled'].includes(aiCopilotProvider)) {
+      await writeAuditLog(req, await getApiActor(req), 'ai_copilot.external', 'ai_copilot', aiCopilotProvider, result.usedExternal ? 'success' : 'failed', {
+        provider: result.provider || aiCopilotProvider,
+        model: result.model || aiCopilotModel,
+        usedExternal: result.usedExternal,
+        reason: result.reason || '',
+        latencyMs: result.latencyMs,
+      });
+    }
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(200).json({usedExternal: false, reason: error.message || 'External AI Copilot failed.'});
+  }
+});
+
 app.get('/api/realtime/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -6585,11 +6998,25 @@ app.post('/api/workflow-webhooks/:workflowId/:token', async (req, res) => {
       const executableWorkflow = getExecutableWorkflow(targetWorkflow);
       const trigger = executableWorkflow.nodes.find((node) => node.type === 'trigger' && triggerMatchesEvent(node, event));
       if (trigger && shouldExecuteWorkflowTrigger(executableWorkflow, trigger, event)) {
-        await executeWorkflow(executableWorkflow, trigger, event);
+        await enqueueWorkflowRun({
+          workflow: executableWorkflow,
+          trigger,
+          event,
+          reason: 'webhook',
+        });
       }
     }
 
     res.status(202).json({accepted: true, workflowId});
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+app.get('/api/workflow-queue/status', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Engineer', 'Partner'], 'view workflow queue status'))) return;
+    res.status(200).json(workflowQueueStatus());
   } catch (error) {
     res.status(500).json({error: error.message});
   }

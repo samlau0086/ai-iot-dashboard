@@ -63,11 +63,15 @@ const DEFAULT_WHITE_LABEL_CONFIG: WhiteLabelConfig = {
 export interface SecuritySettings {
   securityAlertsEnabled: boolean;
   securityAlertChannelsEnabled: boolean;
+  unusualLoginAlertsEnabled: boolean;
+  ipBlacklist: string;
 }
 
 const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
   securityAlertsEnabled: true,
   securityAlertChannelsEnabled: true,
+  unusualLoginAlertsEnabled: true,
+  ipBlacklist: '',
 };
 
 const DEFAULT_PARTNER_CUSTOMERS: PartnerCustomer[] = [
