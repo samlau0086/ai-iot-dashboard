@@ -497,6 +497,7 @@ export function PartnerPortal() {
     updatePartnerBillingIntegration({
       ...billingIntegrationDraft,
       defaultTaxRate: Number(billingIntegrationDraft.defaultTaxRate) || 0,
+      autoInvoiceAgingIntervalHours: Math.max(1, Number(billingIntegrationDraft.autoInvoiceAgingIntervalHours) || 24),
       lastSyncStatus: billingIntegrationDraft.lastSyncStatus || 'idle',
     });
     notifySuccess('Billing integration saved successfully.');
@@ -1178,7 +1179,15 @@ export function PartnerPortal() {
                       <input type="checkbox" checked={billingIntegrationDraft.autoSync} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, autoSync: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500" />
                       Auto Sync
                     </label>
+                    <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      <input type="checkbox" checked={Boolean(billingIntegrationDraft.autoInvoiceAging)} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, autoInvoiceAging: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500" />
+                      Auto Overdue Check
+                    </label>
                   </div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Aging Interval Hours
+                    <input type="number" min={1} value={billingIntegrationDraft.autoInvoiceAgingIntervalHours || 24} onChange={(event) => setBillingIntegrationDraft((current) => ({ ...current, autoInvoiceAgingIntervalHours: Math.max(1, Number(event.target.value) || 24) }))} className="mt-1 block w-full rounded-md border-0 bg-white px-3 py-2 text-sm font-normal normal-case text-slate-900 ring-1 ring-slate-300 focus:ring-2 focus:ring-orange-500 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700" />
+                  </label>
                   <div className="flex items-end gap-3">
                     <button type="button" onClick={saveBillingIntegration} className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500">
                       <CheckCircle2 className="h-4 w-4" />
@@ -1187,6 +1196,7 @@ export function PartnerPortal() {
                     <div className="text-xs text-slate-500">
                       <p>Status: <span className="font-semibold text-slate-700 dark:text-slate-300">{partnerBillingIntegration.lastSyncStatus || 'idle'}</span></p>
                       <p>{partnerBillingIntegration.lastSyncAt ? new Date(partnerBillingIntegration.lastSyncAt).toLocaleString() : 'Not synced yet'}</p>
+                      {partnerBillingIntegration.lastAutoInvoiceAgingAt && <p>Last aging: {new Date(partnerBillingIntegration.lastAutoInvoiceAgingAt).toLocaleString()}</p>}
                     </div>
                   </div>
                 </div>

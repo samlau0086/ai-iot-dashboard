@@ -147,6 +147,8 @@ const DEFAULT_PARTNER_BILLING_INTEGRATION: PartnerBillingIntegration = {
   provider: 'manual',
   enabled: false,
   autoSync: false,
+  autoInvoiceAging: false,
+  autoInvoiceAgingIntervalHours: 24,
   apiBaseUrl: '',
   paymentLinkTemplate: '',
   erpCustomerField: 'tenantId',
@@ -250,6 +252,8 @@ export interface PartnerBillingIntegration {
   provider: 'manual' | 'stripe' | 'paddle' | 'xero' | 'quickbooks' | 'kingdee' | 'custom';
   enabled: boolean;
   autoSync: boolean;
+  autoInvoiceAging?: boolean;
+  autoInvoiceAgingIntervalHours?: number;
   apiBaseUrl?: string;
   webhookToken?: string;
   paymentLinkTemplate?: string;
@@ -258,6 +262,7 @@ export interface PartnerBillingIntegration {
   lastSyncStatus?: 'idle' | 'success' | 'failed';
   lastSyncAt?: string;
   lastSyncMessage?: string;
+  lastAutoInvoiceAgingAt?: string;
   updatedAt?: string;
 }
 

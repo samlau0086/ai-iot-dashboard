@@ -48,6 +48,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Partner Billing Webhook 已完成：外部支付/ERP 系统可 POST 回调到 `/api/partner-billing/webhook`，校验 token 后自动更新发票状态、审计日志、系统通知和实时事件。
 - [x] Partner Billing Webhook Logs / Replay 已完成：Billing 页面可查看、刷新、清空最近回调处理记录，并可对保留 payload 的日志进行 Replay，方便恢复未知发票、状态映射修正后的失败回调。
 - [x] Partner Billing Invoice Aging 已完成：Billing 页面支持一键 Overdue Check，后端会把已过 dueDate 且仍为 Open 的发票标记为 Overdue，并写入审计日志、系统通知和实时事件。
+- [x] Partner Billing Auto Aging 已完成：可在 Payment / ERP Integration 中开启 Auto Overdue Check，并配置检查间隔；服务端后台 worker 会按间隔自动执行逾期检测。
 - [ ] 下一阶段重点：TimescaleDB continuous aggregates、更多现场协议连接器、外部队列 adapter、具体支付平台专用 connector。
 
 ### V1: Energy Monitoring MVP
@@ -210,6 +211,7 @@ An AI-powered industrial operations platform that connects machines, meters and 
 - [x] Partner Billing Webhook：支持外部支付/ERP 回调更新发票状态，支持 token 校验、审计日志、系统通知和实时事件
 - [x] Partner Billing Webhook Logs / Replay：支持在 Billing 页面查看最近回调、处理结果、HTTP 状态、发票号、外部支付 ID、失败原因；支持清空日志和重放已保存 payload 的回调
 - [x] Partner Billing Invoice Aging：支持一键扫描发票 dueDate，把已逾期且未支付的 Open 发票标记为 Overdue，并同步更新 Billing 状态、审计日志和系统通知
+- [x] Partner Billing Auto Aging：支持开启 Auto Overdue Check、配置 Aging Interval Hours，并由服务端后台 worker 自动执行发票逾期检测
 - [x] 基础角色权限：Owner、Admin、Engineer、Operator、Viewer、Demo、Partner、Customer
 - [x] Demo 账户本地演示模式：允许体验界面和配置流程，但不持久化到后端、不影响设备
 - [x] 基础 RBAC 权限矩阵说明：角色、App Profile、站点绑定和客户账号使用方式
@@ -621,7 +623,7 @@ AI_COPILOT_BASE_URL=         # OpenAI-compatible 或 custom provider 时可配�
 - **Customers**：添加、编辑、删除客户，配置客户联系人、Tenant ID、套餐、状态和绑定的 Site IDs。
 - **Customer Accounts**：为客户直接创建登录子账号，设置角色、App Profile、站点范围和审核状态；旧用户如果绑定到客户 Site，也会自动出现在对应账号列表中。
 - **Projects & Quotes**：记录客户项目、报价编号、项目类型、交付状态、金额、负责人、关联站点和下一步跟进事项。
-- **Billing**：维护合作伙伴套餐、计费周期、包含站点/设备数量、超量价格，并为客户创建发票、跟踪 Open / Paid / Overdue 等状态和收入摘要；同时可配置 Payment / ERP Integration、导出发票 CSV、复制同步 payload，并用 Payment Link Template 为发票生成付款链接。外部支付/ERP 系统可通过 Billing Webhook 回调更新发票状态，Billing Webhook Logs 可用于排查回调处理结果，并支持 Replay 失败回调；Billing 页面还提供 **Run Overdue Check**，用于把已过 dueDate 且仍未支付的发票标记为 Overdue。
+- **Billing**：维护合作伙伴套餐、计费周期、包含站点/设备数量、超量价格，并为客户创建发票、跟踪 Open / Paid / Overdue 等状态和收入摘要；同时可配置 Payment / ERP Integration、导出发票 CSV、复制同步 payload，并用 Payment Link Template 为发票生成付款链接。外部支付/ERP 系统可通过 Billing Webhook 回调更新发票状态，Billing Webhook Logs 可用于排查回调处理结果，并支持 Replay 失败回调；Billing 页面还提供 **Run Overdue Check**，用于把已过 dueDate 且仍未支付的发票标记为 Overdue。需要自动运营时，可开启 **Auto Overdue Check** 并设置 Aging Interval Hours，服务端会按间隔自动执行。
 - **White Label**：配置产品名称、公司名称、Logo URL、主色、支持邮箱、自定义域名和域名状态。保存后侧边栏、移动端标题和登录页会使用新的系统标题和 Logo。
 - **RBAC Matrix**：查看不同角色与 App Profile 的推荐组合，例如 Partner 使用 Full Platform，Customer 使用 Simple Device App。
 

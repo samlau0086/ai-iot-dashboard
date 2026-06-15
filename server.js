@@ -1594,13 +1594,14 @@ const parsePartnerBillingDate = (value) => {
   return Number.isFinite(timestamp) ? timestamp : null;
 };
 
-const runPartnerInvoiceAging = async (req) => {
+const runPartnerInvoiceAging = async (req, options = {}) => {
   const state = await getDashboardState();
   const partnerInvoices = Array.isArray(state.partnerInvoices) ? state.partnerInvoices : [];
   const now = new Date();
   const nowIso = now.toISOString();
   const todayStartUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const overdueInvoices = [];
+  const actor = options.actor || await getApiActor(req);
 
   const nextInvoices = partnerInvoices.map((invoice) => {
     if (invoice.status !== 'open') return invoice;
@@ -1620,6 +1621,7 @@ const runPartnerInvoiceAging = async (req) => {
     ...(state.partnerBillingIntegration || {}),
     lastSyncStatus: 'success',
     lastSyncAt: nowIso,
+    ...(options.automatic ? {lastAutoInvoiceAgingAt: nowIso} : {}),
     lastSyncMessage: overdueInvoices.length
       ? `${overdueInvoices.length} invoice(s) marked overdue by invoice aging.`
       : 'Invoice aging completed. No overdue invoices found.',
@@ -1631,9 +1633,10 @@ const runPartnerInvoiceAging = async (req) => {
     partnerBillingIntegration: integration,
   });
 
-  await writeAuditLog(req, await getApiActor(req), 'partner_billing.invoice_aging.run', 'partner_invoice', 'overdue_check', 'success', {
+  await writeAuditLog(req, actor, 'partner_billing.invoice_aging.run', 'partner_invoice', 'overdue_check', 'success', {
     checked: partnerInvoices.length,
     overdueCount: overdueInvoices.length,
+    automatic: Boolean(options.automatic),
     invoiceNos: overdueInvoices.map((invoice) => invoice.invoiceNo),
   });
 
@@ -1661,6 +1664,36 @@ const runPartnerInvoiceAging = async (req) => {
     invoices: overdueInvoices,
     integration,
   };
+};
+
+let partnerInvoiceAgingSchedulerRunning = false;
+
+const runPartnerInvoiceAgingScheduler = async () => {
+  if (partnerInvoiceAgingSchedulerRunning) return;
+  partnerInvoiceAgingSchedulerRunning = true;
+  try {
+    const state = await getDashboardState();
+    const integration = state.partnerBillingIntegration || {};
+    if (!integration.autoInvoiceAging) return;
+
+    const intervalHours = Math.max(1, Number(integration.autoInvoiceAgingIntervalHours || 24));
+    const lastRunAt = parsePartnerBillingDate(integration.lastAutoInvoiceAgingAt);
+    const nextAllowedAt = lastRunAt ? lastRunAt + intervalHours * 60 * 60 * 1000 : 0;
+    if (lastRunAt && Date.now() < nextAllowedAt) return;
+
+    await runPartnerInvoiceAging(null, {
+      automatic: true,
+      actor: {
+        id: 'partner-billing-scheduler',
+        name: 'Partner Billing Scheduler',
+        role: 'System',
+      },
+    });
+  } catch (error) {
+    console.error('Partner invoice aging scheduler failed:', error);
+  } finally {
+    partnerInvoiceAgingSchedulerRunning = false;
+  }
 };
 
 const csvEscape = (value) => {
@@ -8604,6 +8637,10 @@ const startServer = async () => {
     startWorkflowQueueWorker();
     startTelemetryRetentionWorker();
     startMqttSubscribers();
+    runPartnerInvoiceAgingScheduler().catch((error) => console.error('Partner invoice aging scheduler failed:', error));
+    setInterval(() => {
+      runPartnerInvoiceAgingScheduler().catch((error) => console.error('Partner invoice aging scheduler failed:', error));
+    }, 30 * 60 * 1000);
     runScheduledWorkflows().catch((error) => console.error('Workflow scheduler failed:', error));
     setInterval(() => {
       runScheduledWorkflows().catch((error) => console.error('Workflow scheduler failed:', error));
