@@ -1334,7 +1334,17 @@ const summarizeBillingWebhookPayload = (payload = {}) => {
   }
 };
 
+const sanitizeBillingWebhookPayload = (payload = {}) => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const sanitized = {...payload};
+  for (const key of ['token', 'webhookToken', 'secret', 'signature']) {
+    if (Object.prototype.hasOwnProperty.call(sanitized, key)) sanitized[key] = '[redacted]';
+  }
+  return sanitized;
+};
+
 const recordPartnerBillingWebhookLog = async (req, details = {}) => {
+  const sanitizedPayload = details.payload ? sanitizeBillingWebhookPayload(details.payload) : null;
   const current = await getPartnerBillingWebhookLogs();
   const log = {
     id: createId('billing-webhook-log'),
@@ -1348,7 +1358,9 @@ const recordPartnerBillingWebhookLog = async (req, details = {}) => {
     externalPaymentId: details.externalPaymentId || details.event?.externalPaymentId || '',
     provider: details.provider || details.event?.provider || '',
     event: details.event || null,
-    payloadSummary: details.payload ? summarizeBillingWebhookPayload(details.payload) : '',
+    payload: sanitizedPayload,
+    payloadSummary: sanitizedPayload ? summarizeBillingWebhookPayload(sanitizedPayload) : '',
+    replayedFromLogId: details.replayedFromLogId || '',
     ip: req ? getRequestIp(req) : null,
     userAgent: req?.get?.('user-agent') || null,
     createdAt: new Date().toISOString(),
@@ -1462,6 +1474,192 @@ const extractBillingWebhookEvent = (payload = {}) => {
     provider: String(payload.provider || payload.source || '').trim(),
     amount: Number(firstPayloadValue({payload, object}, ['payload.amount', 'payload.total', 'object.amount_total', 'object.amount_paid', 'object.total'])),
     currency: String(firstPayloadValue({payload, object}, ['payload.currency', 'object.currency']) || '').toUpperCase(),
+  };
+};
+
+const processPartnerBillingWebhookPayload = async (req, payload = {}, options = {}) => {
+  const state = await getDashboardState();
+  const event = extractBillingWebhookEvent(payload);
+  if (!event.status) {
+    await recordPartnerBillingWebhookLog(req, {
+      result: 'failed',
+      httpStatus: 400,
+      message: 'Unsupported or missing invoice status.',
+      event,
+      payload,
+      replayedFromLogId: options.replayedFromLogId,
+    });
+    await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', event.invoiceNo || event.invoiceId || '', 'failed', {
+      reason: 'Unsupported or missing invoice status.',
+      event,
+      replayedFromLogId: options.replayedFromLogId,
+    });
+    return {httpStatus: 400, body: {ok: false, message: 'Unsupported or missing invoice status.', event}};
+  }
+
+  const partnerInvoices = Array.isArray(state.partnerInvoices) ? state.partnerInvoices : [];
+  const invoiceIndex = partnerInvoices.findIndex((invoice) => (
+    (event.invoiceNo && String(invoice.invoiceNo).toLowerCase() === event.invoiceNo.toLowerCase())
+    || (event.invoiceId && String(invoice.id) === event.invoiceId)
+    || (event.invoiceId && String(invoice.externalPaymentId || '') === event.invoiceId)
+  ));
+
+  if (invoiceIndex < 0) {
+    const integration = {
+      ...(state.partnerBillingIntegration || {}),
+      lastSyncStatus: 'failed',
+      lastSyncAt: new Date().toISOString(),
+      lastSyncMessage: `Billing webhook invoice not found: ${event.invoiceNo || event.invoiceId || 'unknown'}.`,
+    };
+    await setAppState('dashboard_state', {...state, partnerBillingIntegration: integration});
+    await recordPartnerBillingWebhookLog(req, {
+      result: 'failed',
+      httpStatus: 404,
+      message: 'Invoice not found.',
+      event,
+      payload,
+      replayedFromLogId: options.replayedFromLogId,
+    });
+    await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', event.invoiceNo || event.invoiceId || '', 'failed', {
+      reason: 'Invoice not found.',
+      event,
+      replayedFromLogId: options.replayedFromLogId,
+    });
+    return {httpStatus: 404, body: {ok: false, message: 'Invoice not found.', event}};
+  }
+
+  const now = new Date().toISOString();
+  const currentInvoice = partnerInvoices[invoiceIndex];
+  const nextInvoice = {
+    ...currentInvoice,
+    status: event.status,
+    paidAt: event.status === 'paid' ? (currentInvoice.paidAt || now) : currentInvoice.paidAt,
+    externalPaymentId: event.externalPaymentId || currentInvoice.externalPaymentId,
+    externalProvider: event.provider || payload.provider || state.partnerBillingIntegration?.provider || currentInvoice.externalProvider,
+    externalStatus: event.externalStatus || currentInvoice.externalStatus,
+    lastSyncedAt: now,
+    updatedAt: now,
+  };
+  const nextInvoices = [...partnerInvoices];
+  nextInvoices[invoiceIndex] = nextInvoice;
+
+  const integration = {
+    ...(state.partnerBillingIntegration || {}),
+    lastSyncStatus: 'success',
+    lastSyncAt: now,
+    lastSyncMessage: `Invoice ${nextInvoice.invoiceNo} updated to ${nextInvoice.status} by ${options.replayedFromLogId ? 'billing webhook replay' : 'billing webhook'}.`,
+  };
+  const nextState = {
+    ...state,
+    partnerInvoices: nextInvoices,
+    partnerBillingIntegration: integration,
+  };
+  await setAppState('dashboard_state', nextState);
+  await recordPartnerBillingWebhookLog(req, {
+    result: 'success',
+    httpStatus: 200,
+    message: `Invoice ${nextInvoice.invoiceNo} updated to ${nextInvoice.status}.`,
+    invoiceId: nextInvoice.id,
+    invoiceNo: nextInvoice.invoiceNo,
+    status: nextInvoice.status,
+    externalStatus: nextInvoice.externalStatus,
+    externalPaymentId: nextInvoice.externalPaymentId,
+    provider: nextInvoice.externalProvider,
+    event,
+    payload,
+    replayedFromLogId: options.replayedFromLogId,
+  });
+  await writeAuditLog(req, {id: options.replayedFromLogId ? 'billing-webhook-replay' : 'billing-webhook', name: options.replayedFromLogId ? 'Billing Webhook Replay' : 'Billing Webhook', role: options.replayedFromLogId ? 'Internal' : 'External'}, 'partner_billing.webhook', 'partner_invoice', nextInvoice.id, 'success', {
+    invoiceNo: nextInvoice.invoiceNo,
+    status: nextInvoice.status,
+    externalStatus: nextInvoice.externalStatus,
+    externalPaymentId: nextInvoice.externalPaymentId,
+    replayedFromLogId: options.replayedFromLogId,
+  });
+
+  const notification = await persistSystemNotification({
+    title: options.replayedFromLogId ? 'Partner invoice replayed' : 'Partner invoice updated',
+    message: `Invoice ${nextInvoice.invoiceNo} is now ${nextInvoice.status}.`,
+    level: nextInvoice.status === 'paid' ? 'Success' : 'Info',
+    source: 'partner-billing',
+    invoiceId: nextInvoice.id,
+    invoiceNo: nextInvoice.invoiceNo,
+  });
+  broadcastRealtimeEvent('partner_billing_invoice', {invoice: nextInvoice, notification});
+  return {httpStatus: 200, body: {ok: true, invoice: nextInvoice, event}};
+};
+
+const parsePartnerBillingDate = (value) => {
+  const timestamp = Date.parse(value || '');
+  return Number.isFinite(timestamp) ? timestamp : null;
+};
+
+const runPartnerInvoiceAging = async (req) => {
+  const state = await getDashboardState();
+  const partnerInvoices = Array.isArray(state.partnerInvoices) ? state.partnerInvoices : [];
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const todayStartUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const overdueInvoices = [];
+
+  const nextInvoices = partnerInvoices.map((invoice) => {
+    if (invoice.status !== 'open') return invoice;
+    const dueTimestamp = parsePartnerBillingDate(invoice.dueDate);
+    if (!dueTimestamp || dueTimestamp >= todayStartUtc) return invoice;
+    const nextInvoice = {
+      ...invoice,
+      status: 'overdue',
+      lastSyncedAt: nowIso,
+      updatedAt: nowIso,
+    };
+    overdueInvoices.push(nextInvoice);
+    return nextInvoice;
+  });
+
+  const integration = {
+    ...(state.partnerBillingIntegration || {}),
+    lastSyncStatus: 'success',
+    lastSyncAt: nowIso,
+    lastSyncMessage: overdueInvoices.length
+      ? `${overdueInvoices.length} invoice(s) marked overdue by invoice aging.`
+      : 'Invoice aging completed. No overdue invoices found.',
+  };
+
+  await setAppState('dashboard_state', {
+    ...state,
+    partnerInvoices: nextInvoices,
+    partnerBillingIntegration: integration,
+  });
+
+  await writeAuditLog(req, await getApiActor(req), 'partner_billing.invoice_aging.run', 'partner_invoice', 'overdue_check', 'success', {
+    checked: partnerInvoices.length,
+    overdueCount: overdueInvoices.length,
+    invoiceNos: overdueInvoices.map((invoice) => invoice.invoiceNo),
+  });
+
+  const notification = overdueInvoices.length > 0
+    ? await persistSystemNotification({
+      title: 'Partner invoices overdue',
+      message: `${overdueInvoices.length} invoice(s) are now overdue.`,
+      level: 'Info',
+      source: 'partner-billing',
+      overdueCount: overdueInvoices.length,
+    })
+    : null;
+
+  broadcastRealtimeEvent('partner_billing_invoice_aging', {
+    checked: partnerInvoices.length,
+    overdueCount: overdueInvoices.length,
+    invoices: overdueInvoices,
+    notification,
+  });
+
+  return {
+    ok: true,
+    checked: partnerInvoices.length,
+    overdueCount: overdueInvoices.length,
+    invoices: overdueInvoices,
+    integration,
   };
 };
 
@@ -7778,6 +7976,50 @@ app.delete('/api/partner-billing/webhook-logs', async (req, res) => {
   }
 });
 
+app.post('/api/partner-billing/webhook-logs/:logId/replay', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Partner'], 'replay partner billing webhook logs'))) return;
+    const logs = await getPartnerBillingWebhookLogs();
+    const sourceLog = logs.find((log) => log.id === req.params.logId);
+    if (!sourceLog) {
+      res.status(404).json({ok: false, message: 'Webhook log not found.'});
+      return;
+    }
+    if (!sourceLog.payload || typeof sourceLog.payload !== 'object') {
+      res.status(400).json({ok: false, message: 'This webhook log does not contain a replayable payload.'});
+      return;
+    }
+    const result = await processPartnerBillingWebhookPayload(req, sourceLog.payload, {replayedFromLogId: sourceLog.id});
+    await writeAuditLog(req, await getApiActor(req), 'partner_billing.webhook_logs.replay', 'partner_billing_webhook_log', sourceLog.id, result.body?.ok ? 'success' : 'failed', {
+      httpStatus: result.httpStatus,
+      message: result.body?.message,
+      invoiceNo: result.body?.invoice?.invoiceNo || result.body?.event?.invoiceNo,
+    });
+    res.status(result.httpStatus).json({...result.body, replayedFromLogId: sourceLog.id});
+  } catch (error) {
+    await recordPartnerBillingWebhookLog(req, {
+      result: 'failed',
+      httpStatus: 500,
+      message: `Replay failed: ${error.message}`,
+      replayedFromLogId: req.params.logId,
+    });
+    res.status(500).json({ok: false, error: error.message});
+  }
+});
+
+app.post('/api/partner-billing/invoices/aging/run', async (req, res) => {
+  try {
+    if (!(await requireApiActorRole(req, res, ['Owner', 'Admin', 'Partner'], 'run partner invoice aging'))) return;
+    const result = await runPartnerInvoiceAging(req);
+    res.status(200).json(result);
+  } catch (error) {
+    await writeAuditLog(req, await getApiActor(req), 'partner_billing.invoice_aging.run', 'partner_invoice', 'overdue_check', 'failed', {
+      error: error.message,
+    });
+    res.status(500).json({ok: false, error: error.message});
+  }
+});
+
 app.post('/api/partner-billing/webhook', async (req, res) => {
   const state = await getDashboardState();
   const tokenCheck = verifyBillingWebhookToken(req, state);
@@ -7796,111 +8038,8 @@ app.post('/api/partner-billing/webhook', async (req, res) => {
   }
 
   try {
-    const payload = req.body || {};
-    const event = extractBillingWebhookEvent(payload);
-    if (!event.status) {
-      await recordPartnerBillingWebhookLog(req, {
-        result: 'failed',
-        httpStatus: 400,
-        message: 'Unsupported or missing invoice status.',
-        event,
-        payload,
-      });
-      await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', event.invoiceNo || event.invoiceId || '', 'failed', {
-        reason: 'Unsupported or missing invoice status.',
-        event,
-      });
-      res.status(400).json({ok: false, message: 'Unsupported or missing invoice status.', event});
-      return;
-    }
-
-    const partnerInvoices = Array.isArray(state.partnerInvoices) ? state.partnerInvoices : [];
-    const invoiceIndex = partnerInvoices.findIndex((invoice) => (
-      (event.invoiceNo && String(invoice.invoiceNo).toLowerCase() === event.invoiceNo.toLowerCase())
-      || (event.invoiceId && String(invoice.id) === event.invoiceId)
-      || (event.invoiceId && String(invoice.externalPaymentId || '') === event.invoiceId)
-    ));
-
-    if (invoiceIndex < 0) {
-      const integration = {
-        ...(state.partnerBillingIntegration || {}),
-        lastSyncStatus: 'failed',
-        lastSyncAt: new Date().toISOString(),
-        lastSyncMessage: `Billing webhook invoice not found: ${event.invoiceNo || event.invoiceId || 'unknown'}.`,
-      };
-      await setAppState('dashboard_state', {...state, partnerBillingIntegration: integration});
-      await recordPartnerBillingWebhookLog(req, {
-        result: 'failed',
-        httpStatus: 404,
-        message: 'Invoice not found.',
-        event,
-        payload,
-      });
-      await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', event.invoiceNo || event.invoiceId || '', 'failed', {
-        reason: 'Invoice not found.',
-        event,
-      });
-      res.status(404).json({ok: false, message: 'Invoice not found.', event});
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const currentInvoice = partnerInvoices[invoiceIndex];
-    const nextInvoice = {
-      ...currentInvoice,
-      status: event.status,
-      paidAt: event.status === 'paid' ? (currentInvoice.paidAt || now) : currentInvoice.paidAt,
-      externalPaymentId: event.externalPaymentId || currentInvoice.externalPaymentId,
-      externalProvider: event.provider || payload.provider || state.partnerBillingIntegration?.provider || currentInvoice.externalProvider,
-      externalStatus: event.externalStatus || currentInvoice.externalStatus,
-      lastSyncedAt: now,
-      updatedAt: now,
-    };
-    const nextInvoices = [...partnerInvoices];
-    nextInvoices[invoiceIndex] = nextInvoice;
-
-    const integration = {
-      ...(state.partnerBillingIntegration || {}),
-      lastSyncStatus: 'success',
-      lastSyncAt: now,
-      lastSyncMessage: `Invoice ${nextInvoice.invoiceNo} updated to ${nextInvoice.status} by billing webhook.`,
-    };
-    const nextState = {
-      ...state,
-      partnerInvoices: nextInvoices,
-      partnerBillingIntegration: integration,
-    };
-    await setAppState('dashboard_state', nextState);
-    await recordPartnerBillingWebhookLog(req, {
-      result: 'success',
-      httpStatus: 200,
-      message: `Invoice ${nextInvoice.invoiceNo} updated to ${nextInvoice.status}.`,
-      invoiceId: nextInvoice.id,
-      invoiceNo: nextInvoice.invoiceNo,
-      status: nextInvoice.status,
-      externalStatus: nextInvoice.externalStatus,
-      externalPaymentId: nextInvoice.externalPaymentId,
-      provider: nextInvoice.externalProvider,
-      event,
-      payload,
-    });
-    await writeAuditLog(req, {id: 'billing-webhook', name: 'Billing Webhook', role: 'External'}, 'partner_billing.webhook', 'partner_invoice', nextInvoice.id, 'success', {
-      invoiceNo: nextInvoice.invoiceNo,
-      status: nextInvoice.status,
-      externalStatus: nextInvoice.externalStatus,
-      externalPaymentId: nextInvoice.externalPaymentId,
-    });
-
-    const notification = await persistSystemNotification({
-      title: 'Partner invoice updated',
-      message: `Invoice ${nextInvoice.invoiceNo} is now ${nextInvoice.status}.`,
-      level: nextInvoice.status === 'paid' ? 'Success' : 'Info',
-      source: 'partner-billing',
-      invoiceId: nextInvoice.id,
-      invoiceNo: nextInvoice.invoiceNo,
-    });
-    broadcastRealtimeEvent('partner_billing_invoice', {invoice: nextInvoice, notification});
-    res.status(200).json({ok: true, invoice: nextInvoice, event});
+    const result = await processPartnerBillingWebhookPayload(req, req.body || {});
+    res.status(result.httpStatus).json(result.body);
   } catch (error) {
     await recordPartnerBillingWebhookLog(req, {
       result: 'failed',

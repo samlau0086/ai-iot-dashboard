@@ -79,7 +79,9 @@ type BillingWebhookLog = {
   externalStatus?: string;
   externalPaymentId?: string;
   provider?: string;
+  payload?: Record<string, unknown>;
   payloadSummary?: string;
+  replayedFromLogId?: string;
   ip?: string;
   createdAt?: string;
 };
@@ -114,6 +116,7 @@ export function PartnerPortal() {
     updateUser,
     deleteUser,
     approveUser,
+    hydrateBackendState,
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<'customers' | 'accounts' | 'projects' | 'billing' | 'branding' | 'permissions'>('customers');
@@ -180,6 +183,7 @@ export function PartnerPortal() {
   const [billingIntegrationDraft, setBillingIntegrationDraft] = useState(partnerBillingIntegration);
   const [billingWebhookLogs, setBillingWebhookLogs] = useState<BillingWebhookLog[]>([]);
   const [billingWebhookLogsLoading, setBillingWebhookLogsLoading] = useState(false);
+  const [invoiceAgingLoading, setInvoiceAgingLoading] = useState(false);
 
   useEffect(() => {
     setBrandDraft(whiteLabelConfig);
@@ -236,6 +240,16 @@ export function PartnerPortal() {
   const paidInvoiceTotal = partnerInvoices
     .filter((invoice) => invoice.status === 'paid')
     .reduce((sum, invoice) => sum + (Number(invoice.total) || 0), 0);
+  const overdueInvoiceTotal = partnerInvoices
+    .filter((invoice) => invoice.status === 'overdue')
+    .reduce((sum, invoice) => sum + (Number(invoice.total) || 0), 0);
+  const dueSoonInvoices = partnerInvoices.filter((invoice) => {
+    if (invoice.status !== 'open') return false;
+    const dueTime = Date.parse(invoice.dueDate || '');
+    if (!Number.isFinite(dueTime)) return false;
+    const now = Date.now();
+    return dueTime >= now && dueTime <= now + 7 * 24 * 60 * 60 * 1000;
+  });
   const managedSiteIds = new Set(partnerCustomers.flatMap((customer) => customer.siteIds));
   const managedDevices = devices.filter((device) => managedSiteIds.has(device.siteId || '')).length;
   const customerAccounts = users.filter((user) => (
@@ -530,6 +544,50 @@ export function PartnerPortal() {
       notifySuccess('Billing webhook logs cleared.');
     } catch (error) {
       notify({ level: 'error', title: 'Billing webhook logs', message: error instanceof Error ? error.message : 'Failed to clear billing webhook logs.' });
+    }
+  };
+
+  const replayBillingWebhookLog = async (log: BillingWebhookLog) => {
+    if (!log.payload) {
+      notify({ level: 'info', title: 'Billing webhook replay', message: 'This log does not contain a replayable payload.' });
+      return;
+    }
+    if (!(await confirmDelete({
+      title: 'Replay billing webhook',
+      itemName: log.invoiceNo || log.id,
+      description: 'The stored payload will be processed again and may update the matching invoice status.',
+      confirmLabel: 'Replay',
+    }))) return;
+    try {
+      const response = await fetch(`/api/partner-billing/webhook-logs/${encodeURIComponent(log.id)}/replay`, {
+        method: 'POST',
+        headers: apiActorHeaders(currentUser),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) throw new Error(payload.error || payload.message || 'Failed to replay billing webhook.');
+      notifySuccess(`Invoice ${payload.invoice?.invoiceNo || log.invoiceNo || ''} replayed successfully.`, 'Billing webhook replay');
+      await loadBillingWebhookLogs();
+    } catch (error) {
+      notify({ level: 'error', title: 'Billing webhook replay', message: error instanceof Error ? error.message : 'Failed to replay billing webhook.' });
+      await loadBillingWebhookLogs();
+    }
+  };
+
+  const runInvoiceAging = async () => {
+    setInvoiceAgingLoading(true);
+    try {
+      const response = await fetch('/api/partner-billing/invoices/aging/run', {
+        method: 'POST',
+        headers: apiActorHeaders(currentUser),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) throw new Error(payload.error || payload.message || 'Failed to run invoice aging.');
+      await hydrateBackendState();
+      notifySuccess(`${payload.overdueCount || 0} invoice(s) marked overdue.`, 'Invoice aging');
+    } catch (error) {
+      notify({ level: 'error', title: 'Invoice aging', message: error instanceof Error ? error.message : 'Failed to run invoice aging.' });
+    } finally {
+      setInvoiceAgingLoading(false);
     }
   };
 
@@ -1028,11 +1086,13 @@ export function PartnerPortal() {
 
           {activeTab === 'billing' && (
             <div className="space-y-6">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
                 {[
                   ['Plans', partnerBillingPlans.length],
                   ['Invoices', partnerInvoices.length],
                   ['Open', money(openInvoiceTotal, 'USD')],
+                  ['Overdue', money(overdueInvoiceTotal, 'USD')],
+                  ['Due Soon', dueSoonInvoices.length],
                   ['Paid', money(paidInvoiceTotal, 'USD')],
                 ].map(([label, value]) => (
                   <div key={String(label)} className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
@@ -1065,6 +1125,10 @@ export function PartnerPortal() {
                     <button type="button" onClick={copyBillingWebhookUrl} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
                       <Link2 className="h-4 w-4" />
                       Copy Webhook URL
+                    </button>
+                    <button type="button" onClick={runInvoiceAging} disabled={invoiceAgingLoading} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                      <RefreshCw className={cn('h-4 w-4', invoiceAgingLoading && 'animate-spin')} />
+                      Run Overdue Check
                     </button>
                     <button type="button" onClick={runBillingSyncCheck} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
                       <RefreshCw className="h-4 w-4" />
@@ -1166,6 +1230,7 @@ export function PartnerPortal() {
                           <th className="px-4 py-3">Status</th>
                           <th className="px-4 py-3">Provider</th>
                           <th className="px-4 py-3">Message</th>
+                          <th className="px-4 py-3 text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -1191,6 +1256,18 @@ export function PartnerPortal() {
                             <td className="max-w-xl px-4 py-3 text-slate-600 dark:text-slate-300">
                               <div>{log.message || '-'}</div>
                               {log.externalPaymentId && <div className="mt-1 font-mono text-[10px] text-slate-500">{log.externalPaymentId}</div>}
+                              {log.replayedFromLogId && <div className="mt-1 text-[10px] text-slate-500">Replay of {log.replayedFromLogId}</div>}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <button
+                                type="button"
+                                disabled={!log.payload}
+                                onClick={() => replayBillingWebhookLog(log)}
+                                className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                                Replay
+                              </button>
                             </td>
                           </tr>
                         ))}
